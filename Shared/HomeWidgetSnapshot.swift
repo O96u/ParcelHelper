@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 // A small, credential-free snapshot shared by the containing app and WidgetKit.
 // The signing tool must grant BOTH binaries the same App Group entitlement.
@@ -30,77 +29,43 @@ enum HomeWidgetSharedStore {
     static let kind = "ParcelHelperHome"
     private static let filename = "parcelhelper-widget.json"
 
-    // LCSign and other signers can replace the App Groups entitlement while
-    // leaving the unsigned IPA's Info.plist untouched. Prefer the configured
-    // group only when it is really accessible; otherwise select from the
-    // groups granted by the running process's *actual* code signature.
-    // Both app and widget independently use this rule. Never hard-code
-    // another developer's certificate group ID into source.
+    // This ID must be present in both signed targets' App Groups entitlements.
+    // iOS does not provide the SecTask entitlement-inspection API to apps.
+    // Fail clearly instead of guessing another app's authorized group.
     static var configuredGroup: String {
         Bundle.main.object(forInfoDictionaryKey: "ParcelHelperWidgetGroup") as? String ?? ""
     }
 
-    static var signedGroups: [String] {
-        guard let task = SecTaskCreateFromSelf(nil),
-              let value = SecTaskCopyValueForEntitlement(
-                task, "com.apple.security.application-groups" as CFString, nil
-              ) as? [String] else { return [] }
-        return value.filter { $0.hasPrefix("group.") }.sorted()
-    }
-
-    private static func container(for group: String) -> URL? {
+    private static var groupURL: URL? {
+        let group = configuredGroup
         guard group.hasPrefix("group."), !group.contains("$(") else { return nil }
         return FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: group)
     }
 
-    // Prefer the exact configured group, then a shared-looking group, and
-    // finally any actually accessible signed group. This is useful when
-    // the signing tool rewrites entitlements, but does not grant permissions.
     static var activeGroup: String? {
-        if container(for: configuredGroup) != nil { return configuredGroup }
-        let groups = signedGroups.filter { container(for: $0) != nil }
-        return groups.first(where: { $0.localizedCaseInsensitiveContains("parcelhelper") }) ??
-            groups.first
-    }
-
-    private static var groupURL: URL? {
-        guard let group = activeGroup else { return nil }
-        return container(for: group)
+        groupURL == nil ? nil : configuredGroup
     }
 
     static var isAvailable: Bool { groupURL != nil }
 
-    // Distinguish an inaccessible container from a missing snapshot.
     static var hasSnapshot: Bool {
         guard let url = snapshotURL else { return false }
         return FileManager.default.fileExists(atPath: url.path)
     }
 
     static var canReadSnapshot: Bool {
-        guard let url = readableSnapshotURL, let data = try? Data(contentsOf: url)
+        guard let url = snapshotURL, let data = try? Data(contentsOf: url)
         else { return false }
         return (try? JSONDecoder().decode(HomeWidgetSnapshot.self, from: data)) != nil
     }
 
-    // Extension signed with a different, overlapping profile? Search its
-    // authorized containers for a snapshot before treating data as missing.
-    // The host app still writes to a single selected group, not all groups.
-    private static var readableSnapshotURL: URL? {
-        let candidates = [configuredGroup] + signedGroups.filter { $0 != configuredGroup }
-        for group in candidates {
-            guard let url = container(for: group)?.appendingPathComponent(filename),
-                  let data = try? Data(contentsOf: url),
-                  (try? JSONDecoder().decode(HomeWidgetSnapshot.self, from: data)) != nil
-            else { continue }
-            return url
-        }
-        return nil
-    }
+    private static var readableSnapshotURL: URL? { snapshotURL }
 
     private static var snapshotURL: URL? {
         groupURL?.appendingPathComponent(filename)
     }
+
     private static var operationsURL: URL? {
         (readableSnapshotURL?.deletingLastPathComponent() ?? groupURL)?
             .appendingPathComponent("parcelhelper-ops", isDirectory: true)
