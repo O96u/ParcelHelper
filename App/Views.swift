@@ -1448,6 +1448,8 @@ struct SettingsHome: View {
                     Divider().padding(.leading, 58)
                     nativeRow("实时活动（灵动岛）", "iphone.gen3", .blue) { LiveSettingsPage() }
                     Divider().padding(.leading, 58)
+                    nativeRow("小组件", "square.grid.2x2.fill", .blue) { HomeWidgetSettingsPage() }
+                    Divider().padding(.leading, 58)
                     nativeRow("刷新频率", "arrow.triangle.2.circlepath", .red) { RefreshSettingsPage() }
                 }
                 settingsGroup {
