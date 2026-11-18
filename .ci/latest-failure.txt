@@ -1,1 +1,9 @@
-No failure report has been saved by the updated workflow yet.
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44284895001
+Commit: 4b077146f38d63106b6a7c2f9ab1384d857d2181
+Ref: refs/heads/main
+Date: 2026-11-18T10:30:17Z
+
+Error excerpts:
+446:/Users/runner/work/ParcelHelper/ParcelHelper/App/ParcelShortcuts.swift:34:40: error: cannot convert value of type 'String' to expected argument type 'IntentDialog'
+448:/Users/runner/work/ParcelHelper/ParcelHelper/App/ParcelShortcuts.swift:69:40: error: cannot convert value of type 'String' to expected argument type 'IntentDialog'
+505:** BUILD FAILED **
