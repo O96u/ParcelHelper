@@ -260,5 +260,6 @@ struct PickupActivityWidget: Widget {
 @main struct ParcelWidgetBundle: WidgetBundle {
     var body: some Widget {
         PickupActivityWidget()
+        ParcelHomeWidget()
     }
 }
