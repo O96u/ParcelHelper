@@ -5,7 +5,7 @@ import WebKit
 // pddDiscoverOrders -> pddFetchPackage(goods_express.html) -> merge.
 // Only physical shipments with real tracking numbers or pickup codes are saved.
 
-private struct PddDetectedOrder: Codable {
+fileprivate struct PddDetectedOrder: Codable {
     var orderSn: String
     var trackingNumber: String
     var title: String
