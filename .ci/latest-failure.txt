@@ -1,8 +1,9 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44314808298
-Commit: 9124cff4ccb9851aee813f447a0f8c200d194310
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44317312570
+Commit: 5fbebcd9bb1daae45928c8a315e57b601d6c994c
 Ref: refs/heads/main
-Date: 2026-11-18T13:50:31Z
+Date: 2026-11-18T13:53:46Z
 
 Error excerpts:
-756:/Users/runner/work/ParcelHelper/ParcelHelper/App/Views.swift:1467:35: error: cannot find 'GitHubReleaseVersion' in scope
-804:** BUILD FAILED **
+759:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativeSettings.swift:633:22: error: contextual type for closure argument list expects 1 argument, which cannot be implicitly ignored
+763:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativeSettings.swift:633:73: error: cannot assign value of type 'Preferences' to type 'Bool'
+807:** BUILD FAILED **
