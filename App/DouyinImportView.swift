@@ -34,7 +34,7 @@ struct DouyinImportView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("导入快递单号") {
+            Section {
                 HStack(spacing: 10) {
                     TextField("请输入或粘贴运单号", text: $trackingNumber)
                         .textInputAutocapitalization(.characters)
@@ -57,6 +57,8 @@ struct DouyinImportView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!validTrackingNumber || importing)
+            } header: {
+                Text("导入快递单号")
             } footer: {
                 Text("至少输入 8 位字母、数字或短横线组成的运单号。相同运单号会合并，不会清除已取件记录；物流自动查询取决于已授权平台或快递查询服务。")
             }
