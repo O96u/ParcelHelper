@@ -1089,26 +1089,15 @@ struct StatsHome: View {
 
     private var parcels: [Parcel] { store.snapshot.parcels.filter { $0.type == "delivery" } }
     private var picked: [Parcel] { parcels.filter(\.isDone) }
+    private var signed: [Parcel] { parcels.filter(\.isSigned) }
     private var pending: Int { parcels.filter(\.isPending).count }
+    private var inTransit: Int { parcels.filter(\.isTransit).count }
     private var monthCount: Int {
         picked.filter {
             Calendar.current.isDate(
                 Date(timeIntervalSince1970: ($0.pickedAt ?? $0.createdAt) / 1000),
                 equalTo: Date(), toGranularity: .month)
         }.count
-    }
-    private var monthAverage: String {
-        let calendar = Calendar.current
-        guard let oldest = picked.map({
-            Date(timeIntervalSince1970: ($0.pickedAt ?? $0.createdAt) / 1000)
-        }).min() else { return "0.0" }
-        let first = calendar.date(from: calendar.dateComponents([.year, .month],
-                                                              from: oldest)) ?? oldest
-        let latest = calendar.date(from: calendar.dateComponents([.year, .month],
-                                                               from: Date())) ?? Date()
-        let monthSpan = (calendar.dateComponents([.month], from: first,
-                                                 to: latest).month ?? 0) + 1
-        return String(format: "%.1f", Double(picked.count) / Double(max(1, monthSpan)))
     }
     private var ranking: [(String, Int)] {
         Dictionary(grouping: picked) { p in
@@ -1198,15 +1187,24 @@ struct StatsHome: View {
                     GridItem(.flexible(), spacing: 9),
                     GridItem(.flexible(), spacing: 9)
                 ], spacing: 9) {
-                    metricTile("累计取件", value: "\(picked.count)",
-                               symbol: "checkmark.circle.fill", color: accent)
-                    metricTile("本月取件", value: "\(monthCount)",
+                    metricTile("全部包裹", value: "\(parcels.count)",
+                               symbol: "shippingbox.fill", color: accent)
+                    metricTile("已签收", value: "\(signed.count)",
+                               symbol: "checkmark.seal.fill", color: PH.green)
+                    metricTile("待取件", value: "\(pending)",
+                               symbol: "tray.and.arrow.down.fill", color: PH.orange)
+                    metricTile("运输中", value: "\(inTransit)",
+                               symbol: "truck.box.fill", color: accent)
+                    metricTile("累计已取", value: "\(picked.count)",
+                               symbol: "checkmark.circle.fill", color: PH.green)
+                    metricTile("本月已取", value: "\(monthCount)",
                                symbol: "calendar", color: PH.orange)
-                    metricTile("当前待取", value: "\(pending)",
-                               symbol: "clock.badge.checkmark", color: PH.green)
-                    metricTile("月均取件", value: monthAverage,
-                               symbol: "chart.line.uptrend.xyaxis", color: accent)
                 }
+
+                Text("“已签收”来自物流状态，与本人已取件分开统计；取件趋势仅统计已取件包裹。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 3)
 
                 DashboardSection("取件趋势", subtitle: "最近 5 个月")
                 trendPanel
@@ -1303,7 +1301,7 @@ struct StatsHome: View {
             if ranking.isEmpty {
                 DashboardEmpty(
                     title: "还没有驿站排行",
-                    subtitle: "完成取件后这里会自动统计常用驿站",
+                    subtitle: "实际取件后才会计入排行；物流签收不等于本人已取",
                     symbol: "mappin.and.ellipse"
                 )
             } else {
