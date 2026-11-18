@@ -13,8 +13,9 @@ permissions:
 
 jobs:
   build:
-    # Pin macOS instead of silently changing SDK/Xcode on macos-latest.
-    runs-on: macos-15
+    # Xcode 26's iOS 26 SDK enables the native Liquid Glass navigation bars
+    # on iOS 26. Xcode 16 builds retain the old visual style even on iOS 26.
+    runs-on: macos-26
     timeout-minutes: 40
     steps:
       - name: Checkout source
@@ -51,9 +52,25 @@ jobs:
           sips -g pixelWidth -g pixelHeight "$icon_dir/AppIcon-Dark.png"
           shasum -a 256 "$icon_dir/AppIcon.png" "$icon_dir/AppIcon-Dark.png"
 
-      - name: Show Xcode configuration
+      - name: Verify Xcode 26 Liquid Glass SDK
+        shell: bash
         run: |
+          set -euo pipefail
           xcodebuild -version
+          version="$(xcodebuild -version | awk '/^Xcode / {print $2}')"
+          major="${version%%.*}"
+          if [[ ! "$major" =~ ^[0-9]+$ ]] || (( major < 26 )); then
+            echo "::error::Liquid Glass requires Xcode 26 or newer; found Xcode $version"
+            exit 1
+          fi
+          sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
+          sdk_major="${sdk_version%%.*}"
+          if [[ ! "$sdk_major" =~ ^[0-9]+$ ]] || (( sdk_major < 26 )); then
+            echo "::error::Liquid Glass requires iOS 26 SDK or newer; found $sdk_version"
+            exit 1
+          fi
+          echo "Liquid Glass-ready toolchain: Xcode $version, iOS SDK $sdk_version"
+          echo "Xcode: $version · iOS SDK: $sdk_version" >> "$GITHUB_STEP_SUMMARY"
           xcodebuild -list -project ParcelHelper.xcodeproj
 
       - name: Build iOS app and Live Activity extension
