@@ -44,21 +44,30 @@ struct Parcel: Codable, Identifiable, Hashable {
     var closed: String? = nil
     var id: String { uuid }
     var title: String { [userTitle, itemTitle, trackCompany].compactMap { $0 }.first(where: { !$0.isEmpty }) ?? "快递包裹" }
-    /// Some carriers explicitly confirm recipient pickup in the newest
-    /// tracking event even when platform summary still says "in transit".
-    /// Never infer collection from a generic signed-by-station event.
+    /// Confirm a recipient's completed collection, not a station's signature
+    /// or a courier's pickup. The word order matters: delivery services use
+    /// both "取件完成" and "完成取件" (e.g. 菜鸟驿站完成取件).
+    static func confirmsRecipientPickup(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let exclusions = ["快递员已取件", "快递员完成取件", "揽收取件",
+                          "商家已取件", "商家完成取件", "驿站代签收",
+                          "代为签收", "待取件", "请取件", "未取件",
+                          "未完成取件", "尚未完成取件", "取件未完成",
+                          "取件失败", "未成功取件", "取件取消"]
+        guard !exclusions.contains(where: text.contains) else { return false }
+        let terms = ["您已取件", "您已取走", "用户已取", "用户取件成功",
+                     "取件成功", "取件完成", "完成取件", "已取走",
+                     "包裹已取走", "已被取走", "已领取", "已被领取",
+                     "本人签收", "收件人已取", "收件人取件", "已从驿站取出"]
+        return terms.contains(where: text.contains)
+    }
+
+    /// Prefer the most recent real tracking event to the platform's summary.
+    /// This also corrects the status of parcels stored before an app update.
     var latestPickupConfirmed: Bool {
         let latestNode = trackNodes.first?.text ?? ""
-        let summary = trackLatest ?? ""
-        let terms = ["您已取件", "您已取走", "用户已取", "用户取件成功",
-                     "取件成功", "取件完成", "已取走", "包裹已取走",
-                     "已被取走", "已领取", "已被领取", "本人签收",
-                     "收件人已取", "收件人取件", "已从驿站取出"]
-        let exclusions = ["快递员已取件", "揽收取件", "商家已取件", "驿站代签收",
-                          "代为签收", "待取件", "请取件", "未取件"]
-        let newest = !latestNode.isEmpty ? latestNode : summary
-        guard !exclusions.contains(where: newest.contains) else { return false }
-        return terms.contains(where: newest.contains)
+        let newest = !latestNode.isEmpty ? latestNode : (trackLatest ?? "")
+        return Self.confirmsRecipientPickup(newest)
     }
     var isDone: Bool { status == 2 || pickedByUser || latestPickupConfirmed }
     // The courier marked this package delivered, not necessarily picked up
