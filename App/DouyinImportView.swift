@@ -1,170 +1,102 @@
 import SwiftUI
 import UIKit
 
-/// Douyin does not offer this app a consumer-order OAuth grant.
-/// This flow is intentionally user-driven: official-site login, copying
-/// visible shipment details, and optional carrier tracking lookup.
+/// Consumer order authorization is not available yet. Import a Douyin
+/// shipment using a tracking number supplied by the user instead.
 struct DouyinImportView: View {
     @EnvironmentObject private var store: ParcelStore
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
 
-    @State private var sourceText = ""
-    @State private var edited: Parcel?
-    @State private var returningFromDouyin = false
-    @State private var askingToSave = false
-    @State private var syncing = false
+    @State private var trackingNumber = ""
+    @State private var importing = false
     @State private var notice: String?
-    @State private var invalidMessage: String?
-    @State private var merged = false
+    @State private var errorMessage: String?
 
-    private var duplicate: Bool {
-        guard let mail = edited?.mailNo, !mail.isEmpty else { return false }
-        return store.snapshot.parcels.contains {
-            ($0.mailNo ?? "").caseInsensitiveCompare(mail) == .orderedSame
-        }
+    private var normalizedTrackingNumber: String {
+        trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: " ", with: "")
+            .uppercased()
+    }
+
+    private var validTrackingNumber: Bool {
+        normalizedTrackingNumber.range(of: #"^[A-Z0-9-]{8,40}$"#,
+                                      options: .regularExpression) != nil
     }
 
     var body: some View {
         Form {
             Section("抖音商城") {
-                Text("打开抖音官网，登录后进入「商城 → 我的订单 → 查看物流」，复制物流内容。返回包裹助手后会识别刚复制的文字。")
+                Label("登录授权待定", systemImage: "person.crop.circle.badge.clock")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Text("暂不支持抖音商城账号登录或自动读取购物订单。你可以从抖音订单的「查看物流」中复制快递单号，在下方直接导入，无需在包裹助手重复登录抖音。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+            }
 
-                Button {
-                    returningFromDouyin = true
-                    if let url = URL(string: "https://www.douyin.com/") {
-                        UIApplication.shared.open(url)
+            Section("导入快递单号") {
+                HStack(spacing: 10) {
+                    TextField("请输入或粘贴运单号", text: $trackingNumber)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .keyboardType(.asciiCapable)
+                        .submitLabel(.done)
+                    Button("粘贴") {
+                        trackingNumber = UIPasteboard.general.string ?? ""
                     }
-                } label: {
-                    Label("打开抖音官方页面", systemImage: "arrow.up.forward.app.fill")
+                    .font(.subheadline)
+                    .disabled(importing)
+                }
+
+                if importing { ProgressView("正在查询物流…") }
+
+                Button(action: importTrackingNumber) {
+                    Label(importing ? "正在导入…" : "导入快递单号",
+                          systemImage: "shippingbox.and.arrow.backward")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-
-                Text("普通网页登录不等于第三方订单 API 授权，因此不能自动读取整个账户的购物订单。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("物流详情") {
-                TextEditor(text: $sourceText)
-                    .frame(minHeight: 145)
-                    .accessibilityLabel("抖音物流文字")
-                HStack {
-                    Button("粘贴剪贴板") {
-                        sourceText = UIPasteboard.general.string ?? ""
-                        recognize()
-                    }
-                    Spacer()
-                    Button("识别物流") { recognize() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-
-            if edited != nil {
-                Section("识别结果 · 可编辑") {
-                    TextField("商品名称", text: binding(\.userTitle, defaultValue: ""))
-                    TextField("物流单号", text: binding(\.mailNo, defaultValue: ""))
-                        .textInputAutocapitalization(.characters)
-                    TextField("快递公司", text: binding(\.trackCompany, defaultValue: ""))
-                    TextField("取件码", text: Binding(
-                        get: { edited?.code ?? "" },
-                        set: { edited?.code = $0 }))
-                    TextField("驿站/取件点", text: Binding(
-                        get: { edited?.courierStationName ?? "" },
-                        set: { edited?.courierStationName = $0 }))
-                    TextField("订单号（选填）", text: binding(\.orderId, defaultValue: ""))
-                    if duplicate {
-                        Label("相同运单号会合并更新，不重置已取件状态。",
-                              systemImage: "arrow.triangle.2.circlepath")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                    if syncing { ProgressView("正在查询当前运单的物流轨迹…") }
-                    Button(duplicate ? "确认合并并同步" : "保存并同步物流") {
-                        askingToSave = true
-                    }
-                    .disabled(syncing)
-                    .frame(maxWidth: .infinity)
-                    .buttonStyle(.borderedProminent)
-                }
+                .disabled(!validTrackingNumber || importing)
+            } footer: {
+                Text("至少输入 8 位字母、数字或短横线组成的运单号。相同运单号会合并，不会清除已取件记录；物流自动查询取决于已授权平台或快递查询服务。")
             }
         }
         .navigationTitle("抖音物流导入")
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, returningFromDouyin else { return }
-            returningFromDouyin = false
-            let clipboard = UIPasteboard.general.string ?? ""
-            if DouyinTextParser.parse(clipboard).isValid {
-                sourceText = clipboard
-                recognize()
-            }
-        }
-        .confirmationDialog("保存这条抖音物流记录？",
-                            isPresented: $askingToSave, titleVisibility: .visible) {
-            Button("保存") { saveAndSync() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("仅保存你已检查的资料；读取其他订单仍需你主动授权或复制。")
-        }
         .alert("导入结果", isPresented: Binding(
-            get: { notice != nil }, set: { if !$0 { notice = nil } }
+            get: { notice != nil },
+            set: { if !$0 { notice = nil } }
         )) {
             Button("完成") { dismiss() }
         } message: {
             Text(notice ?? "")
         }
-        .alert("无法识别", isPresented: Binding(
-            get: { invalidMessage != nil },
-            set: { if !$0 { invalidMessage = nil } }
+        .alert("无法导入", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
         )) {
-            Button("确定", role: .cancel) { invalidMessage = nil }
+            Button("确定", role: .cancel) { errorMessage = nil }
         } message: {
-            Text(invalidMessage ?? "")
+            Text(errorMessage ?? "")
         }
     }
 
-    private func binding(_ key: WritableKeyPath<Parcel, String?>,
-                         defaultValue: String) -> Binding<String> {
-        Binding(
-            get: { edited?[keyPath: key] ?? defaultValue },
-            set: { edited?[keyPath: key] = $0 }
-        )
-    }
-
-    private func recognize() {
-        let result = DouyinTextParser.parse(sourceText)
-        guard result.isValid else {
-            edited = nil
-            invalidMessage = "未发现明确的运单号或取件码。请复制「查看物流」页的文字，或粘贴后补全。"
+    private func importTrackingNumber() {
+        guard validTrackingNumber, !importing else {
+            errorMessage = "请输入有效的快递单号（8 至 40 位字母、数字或短横线）。"
             return
         }
-        edited = result.asParcel()
-    }
-
-    private func saveAndSync() {
-        guard var parcel = edited,
-              !(parcel.mailNo ?? "").isEmpty || !parcel.code.isEmpty else {
-            invalidMessage = "至少需要运单号或取件码。"
-            return
-        }
+        let mail = normalizedTrackingNumber
+        var parcel = Parcel()
+        parcel.mailNo = mail
+        parcel.userTitle = "抖音商城包裹"
         parcel.source = "douyin"
         parcel.srcApp = SourceApp(id: "douyin", name: "抖音商城")
-        merged = store.importDouyin(parcel)
+        let merged = store.importDouyin(parcel)
+        importing = true
 
-        guard let mail = parcel.mailNo, !mail.isEmpty else {
-            notice = "包裹已保存。没有运单号，无法自动查询物流轨迹。"
-            return
-        }
-        // Try previously authorized delivery-platform sessions first; if those
-        // have no route, NativeTracking may fall back to a configured carrier API.
-        syncing = true
         Task {
-            defer { syncing = false }
+            defer { importing = false }
             do {
                 let result = try await NativeTracking.lookup(mail)
                 if var saved = store.snapshot.parcels.first(where: {
@@ -177,9 +109,11 @@ struct DouyinImportView: View {
                     saved.trackUpdatedAt = Date().timeIntervalSince1970 * 1000
                     store.upsert(saved)
                 }
-                notice = "抖音包裹已保存，并已更新当前运单的物流轨迹。"
+                notice = (merged ? "已合并相同单号包裹，" : "已导入包裹，") +
+                         "物流轨迹查询完成。"
             } catch {
-                notice = "抖音包裹已保存，但查询当前运单失败：" + error.localizedDescription
+                notice = (merged ? "已合并相同单号包裹。" : "快递单号已保存。") +
+                         "暂未获取物流轨迹：" + error.localizedDescription
             }
         }
     }
