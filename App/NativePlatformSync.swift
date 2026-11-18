@@ -788,24 +788,46 @@ private enum SyncJSON {
 // Refresh only while the app is foregrounded. iOS doesn't guarantee
 // unattended background polling for an ordinary unsigned/sideloaded app.
 @MainActor enum NativeHomeRefresh {
-    private static var running = false
+    // SwiftUI's .refreshable task can be cancelled when its view disappears or
+    // is rebuilt. Keep one independent refresh worker alive and let callers
+    // await it, so navigating away does not cancel every URLSession request.
+    private static var activeRefresh: Task<[String], Never>?
     private static var lastStarted: TimeInterval =
         UserDefaults.standard.double(forKey: "native.home.lastAttempt")
 
     static func refresh(force: Bool = false) async -> [String] {
-        guard !running else { return force ? ["同步正在进行"] : [] }
+        if let activeRefresh {
+            return await activeRefresh.value
+        }
         let configured = UserDefaults.standard.object(forKey: "native.refresh.app") as? Int ?? 15
         let interval = TimeInterval(max(5, min(120, configured))) * 60
         let now = Date().timeIntervalSince1970
         guard force || now - lastStarted >= interval else { return [] }
+
         lastStarted = now
         UserDefaults.standard.set(now, forKey: "native.home.lastAttempt")
-        running = true
-        defer { running = false }
+        // An unstructured Task does not inherit the view task's cancellation.
+        let worker = Task { @MainActor () -> [String] in
+            let results = await performRefresh(force: force)
+            activeRefresh = nil
+            return results
+        }
+        activeRefresh = worker
+        return await worker.value
+    }
 
+    private static func isCancelledRequest(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
+    }
+
+    private static func performRefresh(force: Bool) async -> [String] {
         var results: [String] = []
+        var interrupted: [String] = []
+
         for id in NativeParcelSync.platforms {
-            // Skip platform sessions that were never authorized.
+            // Skip sessions that have not been authorized.
             if id == "mi" && !NativeMiExpress.hasSession { continue }
             if id == "cainiao" &&
                 (UserDefaults.standard.object(forKey: "native.platform.enabled.cainiao") as? Bool) == false {
@@ -814,25 +836,33 @@ private enum SyncJSON {
             if id == "fengchao" && !NativeFengchao.hasSession { continue }
             if id == "pdd" {
                 guard PddAccountProtection.webAccessAllowed else { continue }
-                let platformCookies = await WebCookieRequest.cookies(domain: "yangkeduo.com")
-                if PddSessionVault.token.isEmpty && platformCookies.isEmpty { continue }
+                let cookies = await WebCookieRequest.cookies(domain: "yangkeduo.com")
+                if PddSessionVault.token.isEmpty && cookies.isEmpty { continue }
             }
             if id == "cainiao" {
-                let platformCookies = await WebCookieRequest.cookies(domain: "taobao.com")
-                if platformCookies.isEmpty { continue }
+                let cookies = await WebCookieRequest.cookies(domain: "taobao.com")
+                if cookies.isEmpty { continue }
             }
             do {
                 let result = try await NativeParcelSync.run(id, force: force)
                 results.append(result.description)
             } catch {
-                if force { results.append("\(id)：\(error.localizedDescription)") }
+                if isCancelledRequest(error) {
+                    // A cancellation is not an auth error or an empty parcel
+                    // list. Do not show four misleading '已取消' entries.
+                    interrupted.append(id)
+                } else if force {
+                    results.append("\(id)：\(error.localizedDescription)")
+                }
             }
         }
-        // Persist the latest state and update ActivityKit. No Home Screen
-        // widget timeline is scheduled in this sideloaded configuration.
+
         ParcelStore.shared.persist()
         UserDefaults.standard.set(Date().timeIntervalSince1970,
                                   forKey: "native.home.lastRefresh")
+        if force && !interrupted.isEmpty {
+            results.append("部分平台的网络同步被中断（\(interrupted.joined(separator: "、"))），可稍后重试；已有包裹数据不会因此被删除")
+        }
         if force && results.isEmpty { return ["没有已授权且支持自动同步的平台"] }
         return results
     }
