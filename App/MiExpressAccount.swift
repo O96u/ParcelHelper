@@ -193,7 +193,9 @@ import Security
                 .first(where: { $0.name == "serviceToken" })?.value ?? ""
         }
         guard !token.isEmpty else {
-            throw NativeSyncError.noLogin("小米未返回 serviceToken，请检查官方账号验证")
+            throw NativeSyncError.noLogin(
+                "小米账号会话已读取，但 assistant 服务尚未签发 serviceToken（HTTP \\(http.statusCode)）。请确认账号已完成安全验证；若仍失败，可能是小米限制了第三方 WebView 的 STS 授权。"
+            )
         }
         KeychainData.store("token", token)
         KeychainData.store("user", str(result["cUserId"]).isEmpty ? user : str(result["cUserId"]))
@@ -378,8 +380,9 @@ private struct XiaomiWebLogin: UIViewRepresentable {
         config.websiteDataStore = .default()
         let view = WKWebView(frame: .zero, configuration: config)
         view.allowsBackForwardNavigationGestures = true
-        view.load(URLRequest(url: URL(string:
-            "https://account.xiaomi.com/pass/serviceLogin?sid=assistant&_appName=com.miui.personalassistant&_locale=zh_CN")!))
+        // serviceLogin is an STS endpoint; it can return raw JSON instead
+        // of an interactive form. Use Xiaomi's account site for sign-in.
+        view.load(URLRequest(url: URL(string: "https://id.mi.com/")!))
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {}
