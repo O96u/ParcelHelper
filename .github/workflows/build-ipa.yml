@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Include tags/history so release notes can compare changes
 
       - name: Determine next release version
         shell: bash
