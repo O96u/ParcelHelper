@@ -265,6 +265,7 @@ struct ParcelUpdatePage: View {
     @AppStorage(ParcelUpdateCenter.autoCheckKey) private var autoCheck = true
     @State private var fileToShare: ParcelUpdateShareFile?
     @State private var downloadError: String?
+    @State private var copiedLCSignSource = false
 
     private var installed: String { ParcelUpdateVersions.installed }
 
@@ -303,6 +304,22 @@ struct ParcelUpdatePage: View {
                 }
             } footer: {
                 Text("启用后在打开 App 或返回前台时检查，最多每 6 小时检查一次；iOS 不保证后台定时执行。")
+            }
+
+            Section {
+                Button {
+                    UIPasteboard.general.string = "https://github.com/O96u/ParcelHelper/releases"
+                    copiedLCSignSource = true
+                } label: {
+                    Label(copiedLCSignSource ? "已复制 LCSign 软件源地址" : "复制 LCSign 软件源地址",
+                          systemImage: copiedLCSignSource ? "checkmark.circle" : "doc.on.doc")
+                }
+                Text("在 LCSign 的「软件源」中添加刚复制的 GitHub Releases 地址。新版 LCSign 支持直接识别其中的 IPA、跟踪版本更新；在 LCSign 内选择更新并完成签名安装。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } header: {
+                Text("更省事的更新方式")
+            } footer: {
+                Text("只需在 LCSign 添加一次；LCSign 的版本追踪和安装仍取决于其软件源配置及证书。")
             }
 
             if let release = update.available {
