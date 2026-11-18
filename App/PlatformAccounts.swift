@@ -252,10 +252,10 @@ struct PlatformAccountsPage: View {
                     await refresh()
                 }
                 if await PlatformSession.isLoggedIn(platform) {
-                    if platform.id == "taobao" || platform.id == "jd" {
+                    if platform.id == "taobao" || platform.id == "jd" || platform.id == "pdd" {
                         let started = await NativeWebAutoSync.shared.request(platform.id, force: true)
                         notice = started
-                            ? platform.title + "：登录成功，已开始自动同步订单，无需手动打开订单列表"
+                            ? platform.title + "：登录成功，已开始读取官方购物订单"
                             : platform.title + "：已登录，但自动同步无法读取当前会话"
                     } else if NativeParcelSync.platforms.contains(platform.id) {
                         loginSyncBusy = true
@@ -425,10 +425,10 @@ struct PlatformAccountsPage: View {
                 lastGlobalSync = Date().timeIntervalSince1970
                 UserDefaults.standard.set(lastGlobalSync, forKey: "native.account.lastSync")
             }
-            for id in ["jd", "taobao"] where authenticated.contains(id) {
+            for id in ["jd", "taobao", "pdd"] where authenticated.contains(id) {
                 let queued = await NativeWebAutoSync.shared.request(id, force: true)
                 if queued {
-                    reports.append((id == "jd" ? "京东" : "淘宝") + "：已开始自动读取订单")
+                    reports.append((id == "jd" ? "京东" : (id == "pdd" ? "拼多多" : "淘宝")) + "：已开始读取购物订单")
                 }
             }
             if reports.isEmpty { reports.append("尚无可自动同步的已授权账号") }
@@ -572,12 +572,12 @@ private struct PlatformAccountDetail: View {
                 await refresh()
                 if authorized {
                     switch platform.id {
-                    case "taobao", "jd":
+                    case "taobao", "jd", "pdd":
                         let queued = await NativeWebAutoSync.shared.request(platform.id, force: true)
                         resultNotice = queued
-                            ? platform.title + "：登录成功，已启动自动订单同步"
+                            ? platform.title + "：登录成功，已启动购物订单同步"
                             : platform.title + "：已登录，但当前网页会话未能用于自动同步"
-                    case "pdd", "cainiao":
+                    case "cainiao":
                         isSyncing = true
                         do {
                             let summary = try await NativeParcelSync.run(platform.id, force: true)
@@ -716,13 +716,13 @@ private struct PlatformAccountDetail: View {
     }
     private func syncNow() {
         guard authorized && !isSyncing else { return }
-        if platform.id == "taobao" || platform.id == "jd" {
+        if platform.id == "taobao" || platform.id == "jd" || platform.id == "pdd" {
             isSyncing = true
             Task {
                 let queued = await NativeWebAutoSync.shared.request(platform.id, force: true)
                 isSyncing = false
                 resultNotice = queued
-                    ? platform.title + "：已开始自动同步订单，请稍后查看列表"
+                    ? platform.title + "：已开始读取购物订单，请稍后查看列表"
                     : platform.title + "：当前账号未检测到有效网页登录会话"
             }
             return
