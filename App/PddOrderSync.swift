@@ -89,7 +89,7 @@ struct PddOrdersAutoSyncReader: View {
             switch result {
             case .success(let orders, let discovered):
                 let changed = PddOrderSyncPage.save(orders)
-                let message = "拼多多购物订单：发现 \\(discovered) 笔，核验 \\(orders.count) 笔，新增或更新 \\(changed) 件。"
+                let message = "拼多多购物订单：发现 \(discovered) 笔，核验 \(orders.count) 笔，新增或更新 \(changed) 件。"
                 onComplete(message, true)
             case .failure(let reason):
                 onComplete("拼多多购物订单：" + reason, false)
