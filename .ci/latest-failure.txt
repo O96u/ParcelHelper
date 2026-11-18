@@ -1,9 +1,9 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44317312570
-Commit: 5fbebcd9bb1daae45928c8a315e57b601d6c994c
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44317517994
+Commit: 356c2f53dfca2aab6fded465d2ca919f1c6a9b82
 Ref: refs/heads/main
-Date: 2026-11-18T13:53:46Z
+Date: 2026-11-18T14:00:30Z
 
 Error excerpts:
-759:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativeSettings.swift:633:22: error: contextual type for closure argument list expects 1 argument, which cannot be implicitly ignored
-763:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativeSettings.swift:633:73: error: cannot assign value of type 'Preferences' to type 'Bool'
-807:** BUILD FAILED **
+718:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativeSettings.swift:633:22: error: contextual type for closure argument list expects 1 argument, which cannot be implicitly ignored
+722:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativeSettings.swift:633:73: error: cannot assign value of type 'Preferences' to type 'Bool'
+808:** BUILD FAILED **
