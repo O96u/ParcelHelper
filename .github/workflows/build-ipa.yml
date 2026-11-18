@@ -73,8 +73,10 @@ jobs:
           echo "Xcode: $version · iOS SDK: $sdk_version" >> "$GITHUB_STEP_SUMMARY"
           xcodebuild -list -project ParcelHelper.xcodeproj
 
-      - name: Build iOS app and Live Activity extension
+      - name: Build iOS app and WidgetKit extensions
         shell: bash
+        env:
+          PH_WIDGET_GROUP: ${{ vars.PH_WIDGET_GROUP }}
         run: |
           set -euo pipefail
           mkdir -p build
@@ -95,6 +97,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' \
+            PH_WIDGET_GROUP="${PH_WIDGET_GROUP:-group.com.muxui.ParcelHelper}" \
             build 2>&1 | tee build/xcodebuild.log
 
       - name: Validate bundles and pack IPA
