@@ -29,7 +29,7 @@ private enum PickupPalette {
 
 // Official publisher App icon assets are packaged into the Widget extension.
 // Unknown/unverified couriers intentionally use Apple's SF Symbol instead.
-private enum PickupCarrierArtwork {
+enum PickupCarrierArtwork {
     static func name(for company: String) -> String? {
         let v = company.lowercased()
         if v.contains("中通") || v.contains("zto") { return "carrier_zto" }
@@ -52,7 +52,7 @@ private enum PickupCarrierArtwork {
     }
 }
 
-private struct PickupCarrierMark: View {
+struct PickupCarrierMark: View {
     let company: String
     let accent: Color
 
