@@ -658,24 +658,39 @@ struct HomeWidgetSettingsPage: View {
     var body: some View {
         Form {
             Section("预览") {
-                Picker("尺寸", selection: $selectedSize) {
-                    Text("小号").tag("small")
-                    Text("中号").tag("medium")
-                    Text("大号").tag("large")
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                // Keep picker, preview, and explanation in a single Form row.
+                // Form's automatic inset separators were leaving a short line
+                // on the right; explicit dividers span the complete row.
+                VStack(spacing: 12) {
+                    Picker("尺寸", selection: $selectedSize) {
+                        Text("小号").tag("small")
+                        Text("中号").tag("medium")
+                        Text("大号").tag("large")
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    Divider()
+                        .frame(maxWidth: .infinity)
 
-                HStack {
-                    Spacer(minLength: 0)
-                    widgetPreview
-                        .frame(width: selectedSize == "small" ? 158 : 310,
-                               height: selectedSize == "large" ? 337 : 161)
-                    Spacer(minLength: 0)
+                    HStack {
+                        Spacer(minLength: 0)
+                        widgetPreview
+                            .frame(width: selectedSize == "small" ? 158 : 310,
+                                   height: selectedSize == "large" ? 337 : 161)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+
+                    Divider()
+                        .frame(maxWidth: .infinity)
+                    Text("这是当前 App 本地数据的预览。桌面组件按照相同的蓝色卡片布局绘制，但真实内容需要可用的 App Group 共享快照。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.vertical, 10)
-                Text("这是当前 App 本地数据的预览。桌面组件按照相同的蓝色卡片布局绘制，但真实内容需要可用的 App Group 共享快照。")
-                    .font(.footnote).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .listRowSeparator(.hidden)
             }
             Section("显示") {
                 Toggle("包含在途包裹", isOn: showTransit)
@@ -692,6 +707,19 @@ struct HomeWidgetSettingsPage: View {
                         .font(.caption)
                         .textSelection(.enabled)
                         .multilineTextAlignment(.trailing)
+                }
+                LabeledContent("当前可用共享组") {
+                    Text(HomeWidgetSharedStore.activeGroup ?? "无")
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.trailing)
+                }
+                if HomeWidgetSharedStore.configuredGroup !=
+                    (HomeWidgetSharedStore.activeGroup ?? "") &&
+                    HomeWidgetSharedStore.isAvailable {
+                    Text("已自动使用重签名后实际可访问的 App Group。Widget 扩展必须也有此组权限。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 if !HomeWidgetSharedStore.isAvailable {
                     Label("当前签名无法访问该共享组；仅重新写入数据无法修复，须重新签名主 App 与 Widget 扩展。",
