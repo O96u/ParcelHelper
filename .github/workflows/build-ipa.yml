@@ -13,6 +13,13 @@ on:
         required: false
         type: string
 
+# Keep only the newest build of the same branch. A new push (or manual
+# dispatch) cancels older queued/in-progress work instead of wasting macOS
+# runner time or creating stale numbered Releases.
+concurrency:
+  group: parcelhelper-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
