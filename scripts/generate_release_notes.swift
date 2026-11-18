@@ -9,10 +9,10 @@ let firstOfficial = version == "1.0.0" && previous.isEmpty
 let destination = URL(fileURLWithPath: "build/release-notes.md")
 let baseline = URL(fileURLWithPath: "docs/RELEASE_NOTES.md")
 
-func gitLog(since tag: String) -> [String] {
+func gitLog(since tag: String? = nil) -> [String] {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-    process.arguments = ["log", "--no-merges", "--format=%s", "\(tag)..HEAD"]
+    process.arguments = ["log", "--no-merges", "--format=%s", tag.map { "\($0)..HEAD" } ?? "HEAD"]
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = Pipe()
@@ -85,7 +85,7 @@ if firstOfficial {
     // The initial release is deliberately hand-authored, describing the baseline.
     releaseNotes = try String(contentsOf: baseline, encoding: .utf8)
 } else {
-    let messages = previous.isEmpty ? [] : gitLog(since: previous)
+    let messages = previous.isEmpty ? gitLog() : gitLog(since: previous)
     var entries: [Kind: [String]] = [:]
     for subject in messages {
         guard let (kind, detail) = categorized(subject) else { continue }
@@ -93,7 +93,7 @@ if firstOfficial {
             entries[kind, default: []].append(detail)
         }
     }
-    var sections: [String] = ["# ParcelHelper v\(version)"]
+    var sections: [String] = ["# ParcelHelper \(version)"]
     for kind in Kind.allCases {
         guard let items = entries[kind], !items.isEmpty else { continue }
         sections.append("## \(kind.rawValue)\n" + items.map { "- " + $0 }.joined(separator: "\n"))
@@ -107,4 +107,4 @@ if firstOfficial {
 try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
                                         withIntermediateDirectories: true)
 try releaseNotes.write(to: destination, atomically: true, encoding: .utf8)
-print("Generated release notes for v\(version) (only categories with changes)")
+print("Generated release notes for \(version) (only categories with changes)")
