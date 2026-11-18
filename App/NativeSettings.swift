@@ -708,19 +708,14 @@ struct HomeWidgetSettingsPage: View {
                         .textSelection(.enabled)
                         .multilineTextAlignment(.trailing)
                 }
-                LabeledContent("当前可用共享组") {
-                    Text(HomeWidgetSharedStore.activeGroup ?? "无")
+                LabeledContent("构建共享组访问") {
+                    Text(HomeWidgetSharedStore.activeGroup == nil ? "不可访问" : "可访问")
                         .font(.caption)
-                        .textSelection(.enabled)
-                        .multilineTextAlignment(.trailing)
+                        .foregroundStyle(HomeWidgetSharedStore.isAvailable ? .green : .orange)
                 }
-                if HomeWidgetSharedStore.configuredGroup !=
-                    (HomeWidgetSharedStore.activeGroup ?? "") &&
-                    HomeWidgetSharedStore.isAvailable {
-                    Text("已自动使用重签名后实际可访问的 App Group。Widget 扩展必须也有此组权限。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                Text("此处仅检查构建时指定的共享组，无法枚举第三方证书授权的其他 App Groups。请在 GitHub Actions 手动构建时填写 widget_group，或设置 PH_WIDGET_GROUP。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 if !HomeWidgetSharedStore.isAvailable {
                     Label("当前签名无法访问该共享组；仅重新写入数据无法修复，须重新签名主 App 与 Widget 扩展。",
                           systemImage: "exclamationmark.shield")
