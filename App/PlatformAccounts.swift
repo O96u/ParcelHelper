@@ -761,6 +761,7 @@ private struct PlatformWebLogin: UIViewRepresentable {
         config.websiteDataStore = .default()
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         context.coordinator.attach(to: view)
         view.allowsBackForwardNavigationGestures = true
         view.load(URLRequest(url: url))
@@ -774,9 +775,10 @@ private struct PlatformWebLogin: UIViewRepresentable {
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         coordinator.detach(from: uiView)
         uiView.navigationDelegate = nil
+        uiView.uiDelegate = nil
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKHTTPCookieStoreObserver {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKHTTPCookieStoreObserver {
         let platformID: String
         var onAuthenticated: () -> Void
         private var completed = false
@@ -799,6 +801,35 @@ private struct PlatformWebLogin: UIViewRepresentable {
 
         func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
             if didLoadPage { scheduleVerification() }
+        }
+
+        // Keep login in ParcelHelper: merchant pages frequently offer custom
+        // app schemes (pinduoduo://, taobao://, openapp.jdmobile://, etc.).
+        // Never hand those URLs to UIApplication or the system browser.
+        private func isWebNavigation(_ url: URL) -> Bool {
+            guard let scheme = url.scheme?.lowercased() else { return false }
+            return scheme == "https" || scheme == "http" || scheme == "about"
+        }
+
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let url = navigationAction.request.url else {
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(isWebNavigation(url) ? .allow : .cancel)
+        }
+
+        // target=_blank / window.open: display web-based login or verification
+        // in the same WebView rather than activating another app.
+        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                     for navigationAction: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard navigationAction.targetFrame == nil,
+                  let url = navigationAction.request.url,
+                  isWebNavigation(url) else { return nil }
+            webView.load(navigationAction.request)
+            return nil
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
