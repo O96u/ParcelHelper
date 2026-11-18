@@ -49,7 +49,7 @@ enum ParcelUpdateVersions {
 
     private static let checkKey = "native.update.checkedAt"
     static let autoCheckKey = "native.update.autoCheck"
-    private let interval: TimeInterval = 6 * 3600
+    private var didCheckOnLaunch = false
 
     private init() {
         let last = UserDefaults.standard.double(forKey: Self.checkKey)
@@ -62,20 +62,23 @@ enum ParcelUpdateVersions {
         return latest
     }
 
-    func checkOnForeground() async {
+    // Exactly one automatic network check per app process launch, not on
+    // every return from the background and not every time a settings page opens.
+    func checkOnLaunch() async {
+        guard !didCheckOnLaunch else { return }
+        didCheckOnLaunch = true
         guard UserDefaults.standard.object(forKey: Self.autoCheckKey) as? Bool ?? true else { return }
         await check(force: false)
     }
 
     func check(force: Bool = false) async {
         guard !checking else { return }
-        if !force, latest != nil, let lastChecked, Date().timeIntervalSince(lastChecked) < interval { return }
         checking = true
         defer { checking = false }
         errorMessage = nil
         do {
             var request = URLRequest(
-                url: URL(string: "https://api.github.com/repos/O96u/ParcelHelper/releases/latest")!,
+                url: URL(string: "https://api.github.com/repos/O96u/ParcelHelper/releases?per_page=50")!,
                 cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 18)
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             request.setValue("ParcelHelper/" + ParcelUpdateVersions.installed, forHTTPHeaderField: "User-Agent")
@@ -87,8 +90,17 @@ enum ParcelUpdateVersions {
                 throw UpdateError.message(http.statusCode == 403 || http.statusCode == 429
                     ? "GitHub 请求受限，请稍后再检查" : "查询失败：HTTP \(http.statusCode)")
             }
-            guard let release = Self.parse(data) else {
-                throw UpdateError.message("最新 Release 缺少有效版本信息")
+            guard data.count < 4_000_000,
+                  let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                  let release = list.compactMap(Self.parse)
+                    .filter({ $0.ipa != nil })
+                    .max(by: {
+                        let left = ParcelUpdateVersions.numbers($0.version) ?? []
+                        let right = ParcelUpdateVersions.numbers($1.version) ?? []
+                        return left.lexicographicallyPrecedes(right)
+                    })
+            else {
+                throw UpdateError.message("未找到包含 ParcelHelper.ipa 的正式版本")
             }
             latest = release
             let date = Date()
@@ -106,10 +118,8 @@ enum ParcelUpdateVersions {
         }
     }
 
-    private static func parse(_ data: Data) -> ParcelUpdateRelease? {
-        guard data.count < 1_000_000,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              json["draft"] as? Bool != true, json["prerelease"] as? Bool != true,
+    private static func parse(_ json: [String: Any]) -> ParcelUpdateRelease? {
+        guard json["draft"] as? Bool != true, json["prerelease"] as? Bool != true,
               let tag = json["tag_name"] as? String,
               let numbers = ParcelUpdateVersions.numbers(tag),
               let pageString = json["html_url"] as? String,
@@ -265,7 +275,6 @@ struct ParcelUpdatePage: View {
     @AppStorage(ParcelUpdateCenter.autoCheckKey) private var autoCheck = true
     @State private var fileToShare: ParcelUpdateShareFile?
     @State private var downloadError: String?
-    @State private var copiedLCSignSource = false
 
     private var installed: String { ParcelUpdateVersions.installed }
 
@@ -303,23 +312,7 @@ struct ParcelUpdatePage: View {
                     Text(message).font(.footnote).foregroundStyle(.orange)
                 }
             } footer: {
-                Text("启用后在打开 App 或返回前台时检查，最多每 6 小时检查一次；iOS 不保证后台定时执行。")
-            }
-
-            Section {
-                Button {
-                    UIPasteboard.general.string = "https://github.com/O96u/ParcelHelper/releases"
-                    copiedLCSignSource = true
-                } label: {
-                    Label(copiedLCSignSource ? "已复制 LCSign 软件源地址" : "复制 LCSign 软件源地址",
-                          systemImage: copiedLCSignSource ? "checkmark.circle" : "doc.on.doc")
-                }
-                Text("在 LCSign 的「软件源」中添加刚复制的 GitHub Releases 地址。新版 LCSign 支持直接识别其中的 IPA、跟踪版本更新；在 LCSign 内选择更新并完成签名安装。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            } header: {
-                Text("更省事的更新方式")
-            } footer: {
-                Text("只需在 LCSign 添加一次；LCSign 的版本追踪和安装仍取决于其软件源配置及证书。")
+                Text("启用后每次启动 App 自动检查一次，不会在切回前台时反复检查；也可手动检查。不会在后台运行。")
             }
 
             if let release = update.available {
@@ -391,7 +384,6 @@ struct ParcelUpdatePage: View {
         }
         .navigationTitle("软件更新")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await update.check(force: false) }
         .sheet(item: $fileToShare) { file in
             ParcelUpdateShareSheet(url: file.url)
         }
