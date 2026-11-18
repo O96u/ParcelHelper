@@ -36,9 +36,20 @@ jobs:
           echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
           echo "Building $version at $GITHUB_SHA (previous release: ${previous_tag:-none})"
 
-      - name: Generate dark appearance icon (Swift)
+      - name: Generate and validate dark Home Screen icon
+        shell: bash
         run: |
+          set -euo pipefail
           swift scripts/create_dark_icon.swift
+          icon_dir="Resources/Assets.xcassets/AppIcon.appiconset"
+          test -s "$icon_dir/AppIcon-Dark.png"
+          if cmp -s "$icon_dir/AppIcon.png" "$icon_dir/AppIcon-Dark.png"; then
+            echo "::error::Dark icon is identical to the regular icon"
+            exit 1
+          fi
+          jq -e 'any(.images[]; .filename == "AppIcon-Dark.png" and any(.appearances[]?; .appearance == "luminosity" and .value == "dark"))' "$icon_dir/Contents.json"
+          sips -g pixelWidth -g pixelHeight "$icon_dir/AppIcon-Dark.png"
+          shasum -a 256 "$icon_dir/AppIcon.png" "$icon_dir/AppIcon-Dark.png"
 
       - name: Show Xcode configuration
         run: |
@@ -80,6 +91,15 @@ jobs:
           test -d "$WIDGET_PATH"
           test -f "$WIDGET_PATH/Info.plist"
           test -f "$APP_PATH/Assets.car"
+          # Save compiled appearance metadata for diagnosing iOS Home Screen icons.
+          if command -v assetutil >/dev/null 2>&1; then
+            assetutil --info "$APP_PATH/Assets.car" > build/asset-renditions.json
+            if grep -Eiq 'dark' build/asset-renditions.json; then
+              echo "Compiled Assets.car contains a dark appearance rendition."
+            else
+              echo "::warning::No dark appearance name found in compiled asset metadata; inspect asset-renditions.json"
+            fi
+          fi
           for bundle in "$APP_PATH" "$WIDGET_PATH"; do
             for key in CFBundleShortVersionString CFBundleVersion; do
               test "$(/usr/libexec/PlistBuddy -c "Print :$key" "$bundle/Info.plist")" = "$([[ "$key" == CFBundleVersion ]] && echo "$BUILD_NUMBER" || echo "$APP_VERSION")"
@@ -198,5 +218,6 @@ jobs:
           path: |
             build/xcodebuild.log
             build/ParcelHelper.xcresult/
+            build/asset-renditions.json
           if-no-files-found: ignore
           retention-days: 14
