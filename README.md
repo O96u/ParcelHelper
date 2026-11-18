@@ -67,7 +67,13 @@
 
 「设置 → 软件更新」会显示**实际已安装版本**与 GitHub 最新 Release，展示该版本的更新内容。启用「自动检查更新」后，App 启动或返回前台时会按至少 6 小时的间隔检查一次；也可以手动点击「检查更新」。
 
-发现新版后可直接在 App 下载 `ParcelHelper.ipa`，看到进度，下载完成即弹出 iOS 系统分享面板，选择 **LCSign → 导入 / 签名 / 安装**。无需再复制 GitHub 下载链接。下载的是仓库官方 **未签名** IPA，App 不会自行签名或绕过 iOS 安装流程，LCSign 的选择、证书配置及安装确认仍须由用户操作。iOS 不保证锁屏后台检查，LCSign 是否支持第三方 App 直接调用自动安装尚未获得可靠的公开接口说明，因此没有提供未经验证的跳转 URL。
+**如果你使用新版 LCSign，推荐在 LCSign「软件源」里添加一次**：
+
+`https://github.com/O96u/ParcelHelper/releases`
+
+LCSign 官方作者确认新版可直接把 GitHub Releases 当作软件源，跟踪后续更新。ParcelHelper 的「软件更新」页提供「复制 LCSign 软件源地址」，一键复制后粘贴到 LCSign 即可；后续可以直接在 LCSign 中看到版本并选择签名安装。LCSign 使用 GitHub API 有请求额度限制，需要时可在 LCSign 配置自己的 GitHub Token。
+
+同时保留 App 内的备用更新方式：发现新版后直接下载 `ParcelHelper.ipa`，看到进度，下载完成即弹出 iOS 系统分享面板，选择 **LCSign → 导入 / 签名 / 安装**。无需再复制 GitHub 下载链接。下载的是仓库官方 **未签名** IPA，App 不会自行签名或绕过 iOS 安装流程，LCSign 的选择、证书配置及安装确认仍须由用户操作。iOS 不保证锁屏后台检查，LCSign 是否支持第三方 App 直接调用自动安装尚未获得可靠的公开接口说明，因此没有提供未经验证的跳转 URL。
 
 **覆盖安装请保留原有 Bundle Identifier、签名配置与 Widget 扩展设置**；更换标识或卸载 App 可能造成本地数据无法保留。自动更新只检查版本，不会偷偷替换应用，也不会修改平台登录 Cookie。
 
