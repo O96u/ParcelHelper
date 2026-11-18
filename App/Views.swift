@@ -1409,7 +1409,7 @@ struct StatsHome: View {
 
 struct SettingsHome: View {
     @EnvironmentObject private var store: ParcelStore
-    @State private var githubVersion: String?
+    @StateObject private var update = ParcelUpdateCenter.shared
     private var nickname: String {
         let value = store.snapshot.preferences.nickName.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "包裹助手" : value
@@ -1457,15 +1457,43 @@ struct SettingsHome: View {
                     Divider().padding(.leading, 58)
                     nativeRow("清除缓存", "trash.fill", .gray) { CacheSettingsPage() }
                 }
-                Text("版本 \(githubVersion ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"))")
+                settingsGroup {
+                    NavigationLink {
+                        ParcelUpdatePage()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(.white)
+                                .frame(width: 30, height: 30)
+                                .background(.green, in: RoundedRectangle(cornerRadius: 9))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("软件更新")
+                                    .font(.system(size: 15)).foregroundStyle(.primary)
+                                Text("当前版本 \(ParcelUpdateVersions.installed)")
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 4)
+                            if let release = update.available {
+                                Text("可更新 \(release.version)")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.blue)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12)).foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 16).frame(minHeight: 57)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text("版本 \(ParcelUpdateVersions.installed)")
                     .font(.system(size: 12)).foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity).padding(.top, 27)
             }.padding(.horizontal, 20).padding(.bottom, 130)
         }
         .background(PH.page)
-        .task {
-            githubVersion = await GitHubReleaseVersion.latest() 
-        }
+        .task { await update.checkOnForeground() }
     }
     private func settingsGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0, content: content)
