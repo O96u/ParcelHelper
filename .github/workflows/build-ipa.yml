@@ -163,7 +163,7 @@ jobs:
             echo
             echo "Error excerpts:"
             if [[ -f build/xcodebuild.log ]]; then
-              grep -nE 'error:|fatal error:|\\*\\* BUILD FAILED \\*\\*|error:|Error:|failed with exit code' build/xcodebuild.log | tail -n 100 || true
+              grep -nE 'error:|fatal error:|\*\* BUILD FAILED \*\*|Error:|failed with exit code' build/xcodebuild.log | tail -n 100 || true
             else
               echo "No xcodebuild.log: failure happened before/during another step."
             fi
@@ -177,7 +177,7 @@ jobs:
 
           remote="repos/$GITHUB_REPOSITORY/contents/.ci/latest-failure.txt"
           old_sha="$(gh api "$remote?ref=$branch" --jq .sha 2>/dev/null || true)"
-          payload="$(base64 < "$report" | tr -d '\\n')"
+          payload="$(base64 < "$report" | tr -d '\n')"
           if [[ -n "$old_sha" ]]; then
             jq -n --arg message "ci: save latest failure report" \
               --arg branch "$branch" --arg content "$payload" --arg sha "$old_sha" \
