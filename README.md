@@ -57,6 +57,7 @@
 **GitHub Actions 自动构建**
 
 - 每次向 `main` 推送代码（包括合并 PR）都会自动运行 `.github/workflows/build-ipa.yml`，构建 `ParcelHelper.ipa` 并在成功后发布到 [Releases](https://github.com/O96u/ParcelHelper/releases)。也可以从 Actions 手动运行工作流。
+- **只保留最新构建：** 相同分支的新提交或手动启动会自动取消此前尚在排队或构建中的 Actions 任务（`concurrency.cancel-in-progress: true`），以最新提交为准，避免重复占用 macOS 构建机。已完成的历史记录和已发布的 Release 不会自动删除。
 - CI 会在编译前生成深色图标，校验它不是普通图标的原样复制，检查资产目录已声明 `luminosity: dark`，并保留编译后的资产诊断数据。iOS 18 及以上需在主屏幕长按空白处选择「编辑 → 自定义 → 深色」或「自动」才能看到相应图标；仅打开 ParcelHelper 内的深色主题不改变主屏幕图标。
 - 不需要手动创建或推送 Git Tag。版本号由 Actions 自动生成，使用纯数字 `1.1.<运行序号>`（例如 `1.1.12`，无 `v` 前缀）；成功构建后会自动创建对应的 Git Tag 和 Release。失败的构建不会发布新 Release，但仍保留 Actions 日志。重新运行同一次构建会覆盖对应 Release 的 IPA。
 
@@ -76,6 +77,8 @@ LCSign 官方作者确认新版可直接把 GitHub Releases 当作软件源，�
 同时保留 App 内的备用更新方式：发现新版后直接下载 `ParcelHelper.ipa`，看到进度，下载完成即弹出 iOS 系统分享面板，选择 **LCSign → 导入 / 签名 / 安装**。无需再复制 GitHub 下载链接。下载的是仓库官方 **未签名** IPA，App 不会自行签名或绕过 iOS 安装流程，LCSign 的选择、证书配置及安装确认仍须由用户操作。iOS 不保证锁屏后台检查，LCSign 是否支持第三方 App 直接调用自动安装尚未获得可靠的公开接口说明，因此没有提供未经验证的跳转 URL。
 
 **覆盖安装请保留原有 Bundle Identifier、签名配置与 Widget 扩展设置**；更换标识或卸载 App 可能造成本地数据无法保留。自动更新只检查版本，不会偷偷替换应用，也不会修改平台登录 Cookie。
+
+**使用桌面小组件前，请先用自己的 App Group 构建 IPA。** 在 GitHub 仓库 [Actions → Build ParcelHelper IPA](https://github.com/O96u/ParcelHelper/actions/workflows/build-ipa.yml) 点击 **Run workflow**，在 `widget_group` 输入框填入**自己签名证书允许的** `group.xxx`（不要照抄别人的组名），然后构建并使用相同授权组签名主 App 和 Widget 扩展。若希望普通提交也使用这个组，可以在仓库 Actions Variables 中设置 `PH_WIDGET_GROUP`。不填写时使用的示例 `group.com.muxui.ParcelHelper` 不保证拥有权限。
 
 **主屏幕小组件签名说明：** 支持小、中、大三种桌面组件，以及在组件中标记已取；需要主 App 与嵌入式 Widget 扩展分别签名，并使用相同且被描述文件允许的 App Group。证书显示 App Groups 权限不等于已经完成共享设置，具体流程见 [小组件签名与验证](docs/widget-signing.md)。WidgetKit 读取 App 共享的本地快照，不保证锁屏或后台按固定频率联网更新。
 
