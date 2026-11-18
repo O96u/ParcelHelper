@@ -69,7 +69,7 @@ enum ParcelUpdateVersions {
 
     func check(force: Bool = false) async {
         guard !checking else { return }
-        if !force, let lastChecked, Date().timeIntervalSince(lastChecked) < interval { return }
+        if !force, latest != nil, let lastChecked, Date().timeIntervalSince(lastChecked) < interval { return }
         checking = true
         defer { checking = false }
         errorMessage = nil
