@@ -1,10 +1,10 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44297391169
-Commit: cc124c49009bc720dc5860c157df769870303e60
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44297509243
+Commit: 36a8a0de566ef5b7b6147fdb69f2953b8bc7beff
 Ref: refs/heads/main
-Date: 2026-11-18T11:45:55Z
+Date: 2026-11-18T11:46:50Z
 
 Error excerpts:
-671:/Users/runner/work/ParcelHelper/ParcelHelper/App/DouyinImportView.swift:37:20: error: missing argument label 'content:' in call
-673:/Users/runner/work/ParcelHelper/ParcelHelper/App/DouyinImportView.swift:37:21: error: cannot convert value of type 'String' to expected argument type '() -> Content'
-675:/Users/runner/work/ParcelHelper/ParcelHelper/App/DouyinImportView.swift:37:13: error: generic parameter 'Content' could not be inferred
-737:** BUILD FAILED **
+664:/Users/runner/work/ParcelHelper/ParcelHelper/App/DouyinImportView.swift:37:20: error: missing argument label 'content:' in call
+666:/Users/runner/work/ParcelHelper/ParcelHelper/App/DouyinImportView.swift:37:21: error: cannot convert value of type 'String' to expected argument type '() -> Content'
+668:/Users/runner/work/ParcelHelper/ParcelHelper/App/DouyinImportView.swift:37:13: error: generic parameter 'Content' could not be inferred
+736:** BUILD FAILED **
