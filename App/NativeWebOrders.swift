@@ -39,6 +39,8 @@ private struct WebShipment: Decodable {
     @discardableResult
     func request(_ platform: String, force: Bool = false) async -> Bool {
         guard platform == "jd" || platform == "taobao" || platform == "pdd" else { return false }
+        // Never open a hidden Pinduoduo H5 order page without explicit opt-in.
+        guard platform != "pdd" || PddAccountProtection.webAccessAllowed else { return false }
         if platform == "taobao",
            (UserDefaults.standard.object(forKey: "native.platform.enabled.taobao") as? Bool) == false {
             return false
@@ -72,6 +74,11 @@ private struct WebShipment: Decodable {
     private func startNext() {
         guard activePlatform == nil, !pending.isEmpty else { return }
         let platform = pending.removeFirst()
+        // Consent may have been revoked while this reader was queued.
+        if platform == "pdd" && !PddAccountProtection.webAccessAllowed {
+            startNext()
+            return
+        }
         sequence += 1
         isRunning = true
         activePlatform = platform
