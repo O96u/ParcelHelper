@@ -603,11 +603,14 @@ struct XiaomiAccountPage: View {
             guard webLogin else { return }
             // Same 2-second polling as ui/miLogin.tsx; direct STS token wins.
             while webLogin && !Task.isCancelled {
-                if !busy && await NativeMiExpress.acceptWebSessionToken() {
-                    authorized = true
-                    webLogin = false
-                    notice = "小米账号授权成功"
-                    break
+                if !busy {
+                    let accepted = await NativeMiExpress.acceptWebSessionToken()
+                    if accepted {
+                        authorized = true
+                        webLogin = false
+                        notice = "小米账号授权成功"
+                        break
+                    }
                 }
                 try? await Task.sleep(for: .seconds(2))
             }
