@@ -33,6 +33,13 @@ import Security
     }
 }
 
+// Explicit opt-in: the H5 login can invalidate the official Pinduoduo App session.
+// Merely hiding the official-app deep link cannot prevent server-side logout.
+@MainActor enum PddAccountProtection {
+    static let key = "native.pdd.webAccessAllowed"
+    static var webAccessAllowed: Bool { UserDefaults.standard.bool(forKey: key) }
+}
+
 private struct PlatformWebsite: Identifiable {
     let id: String
     let title: String
@@ -131,6 +138,7 @@ struct PlatformAccountsPage: View {
     @State private var lastGlobalSync = UserDefaults.standard.double(forKey: "native.account.lastSync")
     @State private var refreshVersion = 0
     @State private var loginSyncBusy = false
+    @State private var showPddLoginWarning = false
 
     private let blue = Color(red: 0.19, green: 0.49, blue: 0.96)
     private var majorPlatforms: [PlatformWebsite] {
@@ -156,6 +164,12 @@ struct PlatformAccountsPage: View {
                 .background(Color(uiColor: .secondarySystemGroupedBackground),
                             in: RoundedRectangle(cornerRadius: 27, style: .continuous))
                 .padding(.horizontal, 18)
+
+                Text("拼多多网页登录可能导致官方 App 退出。为保护官方 App，拼多多网页同步默认关闭，需主动确认才能启用。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 33)
+                    .padding(.top, 10)
 
                 Text("淘宝与菜鸟共用登录会话，可分别停用订单和取件码来源。")
                     .font(.system(size: 11))
@@ -252,7 +266,9 @@ struct PlatformAccountsPage: View {
                     await refresh()
                 }
                 if await PlatformSession.isLoggedIn(platform) {
-                    if platform.id == "taobao" || platform.id == "jd" || platform.id == "pdd" {
+                    if platform.id == "pdd" {
+                        notice = "拼多多网页会话已保存。为避免反复登录，未自动打开购物订单页；可在拼多多账号详情手动同步。网页登录仍可能使官方 App 退出。"
+                    } else if platform.id == "taobao" || platform.id == "jd" {
                         let started = await NativeWebAutoSync.shared.request(platform.id, force: true)
                         notice = started
                             ? platform.title + "：登录成功，已开始读取官方购物订单"
@@ -288,6 +304,18 @@ struct PlatformAccountsPage: View {
                         }
                 }
             }
+        }
+        .alert("拼多多网页登录可能让官方 App 退出", isPresented: $showPddLoginWarning) {
+            Button("仍要网页登录") {
+                UserDefaults.standard.set(true, forKey: PddAccountProtection.key)
+                if let pdd = PlatformCatalog.rows.first(where: { $0.id == "pdd" }) {
+                    finishedLogin = pdd
+                    loginTarget = pdd
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("拼多多可能在网页和官方 App 之间限制同一账号的登录会话。继续授权有可能让官方 App 下线，ParcelHelper 无法绕过服务端限制。取消则不会启动拼多多网页登录。")
         }
         .alert(
             "确认解除授权？",
@@ -371,6 +399,7 @@ struct PlatformAccountsPage: View {
         switch platform.id {
         case "fengchao": showFengchao = true
         case "mi": showXiaomi = true
+        case "pdd": showPddLoginWarning = true
         default:
             guard platform.login != nil else {
                 notice = "此平台暂不支持在线授权"
@@ -411,6 +440,7 @@ struct PlatformAccountsPage: View {
             var reports: [String] = []
             var successes = 0
             for id in NativeParcelSync.platforms {
+                if id == "pdd" && !PddAccountProtection.webAccessAllowed { continue }
                 guard let platform = PlatformCatalog.rows.first(where: { $0.id == id }),
                       isAuthorized(platform) else { continue }
                 do {
@@ -442,6 +472,8 @@ private struct PlatformAccountDetail: View {
     let platform: PlatformWebsite
     @State private var authorized = false
     @State private var loginPresented = false
+    @State private var showPddLoginWarning = false
+    @AppStorage(PddAccountProtection.key) private var pddWebAccessAllowed = false
     @State private var showRevokeConfirmation = false
     @State private var isSyncing = false
     @State private var webOrdersPresented = false
@@ -477,6 +509,14 @@ private struct PlatformAccountDetail: View {
                         .padding(.top, 10).padding(.horizontal, 15)
                 }
                 if platform.id == "pdd" {
+                    textHeader("官方 App 登录保护")
+                    card {
+                        Toggle("允许拼多多网页授权及同步", isOn: $pddWebAccessAllowed)
+                            .tint(blue)
+                        Text("默认关闭，以免影响官方拼多多 App 登录。开启后可能因平台服务端会话互斥使官方 App 退出。关闭只停止 ParcelHelper 的后续访问，不会恢复已失效的官方会话。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     textHeader("取件手机号")
                     card {
                         if pddPhoneLoading {
@@ -545,6 +585,7 @@ private struct PlatformAccountDetail: View {
                             Label("读取拼多多购物订单", systemImage: "list.bullet.rectangle")
                         }
                         .tint(blue)
+                        .disabled(!pddWebAccessAllowed)
                     }
                 }
                 if !lastError.isEmpty {
@@ -559,7 +600,7 @@ private struct PlatformAccountDetail: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(platform.title)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await refresh(); if platform.id == "pdd" && authorized { await loadPddMobiles() } }
+        .task { await refresh(); if platform.id == "pdd" && authorized && pddWebAccessAllowed { await loadPddMobiles() } }
         .onChange(of: tbEnabled) { _, _ in Task { await refresh() } }
         .onChange(of: cnEnabled) { _, _ in Task { await refresh() } }
         .sheet(isPresented: $loginPresented, onDismiss: {
@@ -572,7 +613,9 @@ private struct PlatformAccountDetail: View {
                 await refresh()
                 if authorized {
                     switch platform.id {
-                    case "taobao", "jd", "pdd":
+                    case "pdd":
+                        resultNotice = "拼多多网页授权完成。为避免重复打开网页登录页，没有立即读取订单；可在账号详情手动同步。官方 App 仍有可能被服务端挤下线。"
+                    case "taobao", "jd":
                         let queued = await NativeWebAutoSync.shared.request(platform.id, force: true)
                         resultNotice = queued
                             ? platform.title + "：登录成功，已启动购物订单同步"
@@ -628,6 +671,15 @@ private struct PlatformAccountDetail: View {
                 }
             }
         }
+        .alert("拼多多网页登录可能让官方 App 退出", isPresented: $showPddLoginWarning) {
+            Button("仍要网页登录") {
+                pddWebAccessAllowed = true
+                loginPresented = true
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("同一拼多多账号在网页登录后，官方 App 可能因服务器会话互斥被迫退出。继续授权无法保证两个客户端同时在线。")
+        }
         .alert("解除 " + platform.title + " 授权？",
                isPresented: $showRevokeConfirmation) {
             Button("解除授权", role: .destructive) {
@@ -665,6 +717,7 @@ private struct PlatformAccountDetail: View {
                 Spacer(minLength: 4)
                 Button {
                     if authorized { showRevokeConfirmation = true }
+                    else if platform.id == "pdd" { showPddLoginWarning = true }
                     else { loginPresented = true }
                 } label: {
                     Text(authorized ? "解除授权" : "授权")
@@ -704,7 +757,7 @@ private struct PlatformAccountDetail: View {
         lastError = UserDefaults.standard.string(forKey: "native.sync.result." + platform.id) ?? ""
     }
     private func loadPddMobiles() async {
-        guard authorized && !pddPhoneLoading else { return }
+        guard authorized && pddWebAccessAllowed && !pddPhoneLoading else { return }
         pddPhoneLoading = true
         defer { pddPhoneLoading = false }
         do {
@@ -716,6 +769,10 @@ private struct PlatformAccountDetail: View {
     }
     private func syncNow() {
         guard authorized && !isSyncing else { return }
+        if platform.id == "pdd" && !pddWebAccessAllowed {
+            resultNotice = "为保护拼多多官方 App 登录状态，已暂停网页同步。若接受可能挤号的风险，可在上方手动开启。"
+            return
+        }
         if platform.id == "taobao" || platform.id == "jd" || platform.id == "pdd" {
             isSyncing = true
             Task {
