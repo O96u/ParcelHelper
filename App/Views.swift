@@ -1468,114 +1468,77 @@ struct SettingsHome: View {
         NavigationLink(destination: destination) { settingsLabel(title, icon, color) }.buttonStyle(.plain)
     }
 }
-// One row reflects a saved station together with parcels currently associated
-// with it. Reuse the Pickup tab's explicit station / matcher rules.
-private struct StationListItem: Identifiable {
-    let station: Station
-    let pendingCount: Int
-    let parcelCount: Int
-    var id: String { station.id }
-}
-
+// Station management is a directory, not a parcel analytics dashboard.
 struct StationsHome: View {
     @EnvironmentObject private var store: ParcelStore
     @State private var creating = false
     @State private var searchText = ""
     @State private var deleting: Station?
 
-    private var items: [StationListItem] {
-        let stations = store.snapshot.stations
-        var totals: [String: Int] = [:]
-        var pending: [String: Int] = [:]
-        for parcel in store.snapshot.parcels where parcel.type == "delivery" {
-            let stationID: String?
-            if stations.contains(where: { $0.id == parcel.courierStationUuid }) {
-                stationID = parcel.courierStationUuid
-            } else {
-                let text = [parcel.address, parcel.courierStationName, parcel.smsContent]
-                    .joined(separator: " ")
-                stationID = StationMatcher.match(stations, text: text)?.id
-            }
-            guard let id = stationID else { continue }
-            totals[id, default: 0] += 1
-            if parcel.isPending { pending[id, default: 0] += 1 }
-        }
-        return stations.map {
-            StationListItem(station: $0,
-                            pendingCount: pending[$0.id, default: 0],
-                            parcelCount: totals[$0.id, default: 0])
-        }.sorted {
-            if $0.pendingCount != $1.pendingCount {
-                return $0.pendingCount > $1.pendingCount
-            }
-            if $0.parcelCount != $1.parcelCount {
-                return $0.parcelCount > $1.parcelCount
-            }
-            return $0.station.courierStationName.localizedStandardCompare(
-                $1.station.courierStationName) == .orderedAscending
+    private var stations: [Station] {
+        store.snapshot.stations.sorted {
+            $0.courierStationName.localizedStandardCompare($1.courierStationName) == .orderedAscending
         }
     }
 
-    private var filteredItems: [StationListItem] {
+    private var filteredStations: [Station] {
         let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !keyword.isEmpty else { return items }
-        return items.filter { item in
-            let station = item.station
-            return [station.courierStationName, station.address, station.phone,
-                    station.businessHours, station.notes].contains {
-                        $0.localizedCaseInsensitiveContains(keyword)
-                    } || station.keywords.contains {
-                        $0.localizedCaseInsensitiveContains(keyword)
-                    }
+        guard !keyword.isEmpty else { return stations }
+        return stations.filter { station in
+            [station.courierStationName, station.address, station.phone,
+             station.businessHours, station.notes].contains {
+                $0.localizedCaseInsensitiveContains(keyword)
+            } || station.keywords.contains {
+                $0.localizedCaseInsensitiveContains(keyword)
+            }
         }
     }
 
     var body: some View {
         List {
-            Section {
-                HStack(spacing: 18) {
-                    summaryMetric("已建档", count: items.count, icon: "building.2.fill", tint: accent)
-                    Spacer(minLength: 0)
-                    summaryMetric("待取包裹", count: items.reduce(0) { $0 + $1.pendingCount },
-                                  icon: "tray.and.arrow.down.fill", tint: PH.orange)
-                }
-                .padding(.vertical, 7)
-            }
-
-            if items.isEmpty {
+            if stations.isEmpty {
                 ContentUnavailableView("还没有驿站", systemImage: "building.2",
-                                       description: Text("识别到明确的取件站点后会自动建档，也可以点击右上角添加。"))
+                                       description: Text("识别到明确的取件站点会自动建档，或点击右上角添加。"))
                     .listRowBackground(Color.clear)
-            } else if filteredItems.isEmpty {
+            } else if filteredStations.isEmpty {
                 ContentUnavailableView.search(text: searchText)
                     .listRowBackground(Color.clear)
             } else {
-                let active = filteredItems.filter { $0.pendingCount > 0 }
-                let others = filteredItems.filter { $0.pendingCount == 0 }
-                if !active.isEmpty {
-                    Section("有待取包裹 · \(active.count)") {
-                        ForEach(active) { item in stationRow(item) }
+                Section {
+                    ForEach(filteredStations) { station in
+                        NavigationLink {
+                            StationEditor(station: station)
+                        } label: {
+                            stationRow(station)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) { deleting = station } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) { deleting = station } label: {
+                                Label("删除驿站", systemImage: "trash")
+                            }
+                        }
                     }
-                }
-                if !others.isEmpty {
-                    Section("其他驿站 · \(others.count)") {
-                        ForEach(others) { item in stationRow(item) }
-                    }
+                } header: {
+                    Text("驿站列表")
+                } footer: {
+                    Text("点开驿站可以修改名称、地址、联系电话、营业时间和匹配关键词。")
+                        .padding(.top, 8)
                 }
             }
-
-            Section {
-                Text("根据物流中明确的取件点自动建档。点进驿站可以补全地址、电话、营业时间和匹配关键词。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .listRowBackground(Color.clear)
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(PH.page)
         .navigationTitle("驿站管理")
-        .searchable(text: $searchText, prompt: "搜索驿站、地址、电话")
+        .searchable(text: $searchText, prompt: "搜索驿站、地址或电话")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { creating = true } label: { Image(systemName: "plus") }
@@ -1599,86 +1562,40 @@ struct StationsHome: View {
         }
     }
 
-    private func summaryMetric(_ title: String, count: Int, icon: String, tint: Color) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 38, height: 38)
-                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(count)")
-                    .font(.system(size: 21, weight: .bold, design: .rounded))
-                Text(title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
+    private func stationRow(_ station: Station) -> some View {
+        HStack(alignment: .top, spacing: 13) {
+            Image(systemName: "building.2.crop.circle.fill")
+                .font(.system(size: 28))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(accent, accent.opacity(0.12))
+                .frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(station.courierStationName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
 
-    private func stationRow(_ item: StationListItem) -> some View {
-        NavigationLink {
-            StationEditor(station: item.station)
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "building.2.fill")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(item.pendingCount > 0 ? accent : Color.secondary)
-                    .frame(width: 42, height: 42)
-                    .background(
-                        (item.pendingCount > 0 ? accent : Color.secondary).opacity(0.10),
-                        in: RoundedRectangle(cornerRadius: 13)
-                    )
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(item.station.courierStationName)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(2)
-                        Spacer(minLength: 2)
-                        if item.pendingCount > 0 {
-                            Text("\(item.pendingCount) 待取")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(PH.orange)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(PH.orange.opacity(0.12), in: Capsule())
-                                .fixedSize()
-                        }
-                    }
-                    Label(item.station.address.isEmpty ? "地址待补充" : item.station.address,
-                          systemImage: "mappin")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    HStack(spacing: 12) {
-                        Label("\(item.parcelCount) 件关联", systemImage: "shippingbox")
-                        if !item.station.businessHours.isEmpty {
-                            Label(item.station.businessHours, systemImage: "clock")
-                                .lineLimit(1)
-                        } else if !item.station.phone.isEmpty {
-                            Label(item.station.phone, systemImage: "phone")
-                                .lineLimit(1)
-                        }
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                Label(station.address.isEmpty ? "地址待补充" : station.address,
+                      systemImage: "mappin")
+                    .lineLimit(2)
+
+                if !station.phone.isEmpty {
+                    Label(station.phone, systemImage: "phone")
+                        .lineLimit(1)
+                }
+                if !station.businessHours.isEmpty {
+                    Label(station.businessHours, systemImage: "clock")
+                        .lineLimit(1)
                 }
             }
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive) { deleting = item.station } label: {
-                Label("删除", systemImage: "trash")
-            }
-        }
-        .contextMenu {
-            Button(role: .destructive) { deleting = item.station } label: {
-                Label("删除驿站", systemImage: "trash")
-            }
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(PH.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 struct StationEditor: View {
