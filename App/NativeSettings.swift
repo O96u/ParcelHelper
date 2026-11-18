@@ -619,6 +619,146 @@ struct LiveSettingsPage: View {
     }
 }
 
+// Actual package data preview; WidgetKit renders the same snapshot as the
+// main App, never a fabricated or internet-fetched sample.
+struct HomeWidgetSettingsPage: View {
+    @EnvironmentObject private var store: ParcelStore
+    @State private var selectedSize = "medium"
+
+    private var showTransit: Binding<Bool> {
+        Binding(
+            get: { store.snapshot.preferences.widgetShowTransit },
+            set: { value in
+                store.changePreferences { $0.widgetShowTransit = value }
+            }
+        )
+    }
+    private var pending: [Parcel] {
+        store.snapshot.parcels.filter { $0.type == "delivery" && $0.isPending }
+            .sorted { ($0.trackUpdatedAt ?? $0.createdAt) > ($1.trackUpdatedAt ?? $1.createdAt) }
+    }
+    private var transit: [Parcel] {
+        store.snapshot.parcels.filter { $0.type == "delivery" && $0.isTransit }
+            .sorted { ($0.trackUpdatedAt ?? $0.createdAt) > ($1.trackUpdatedAt ?? $1.createdAt) }
+    }
+    private var visible: [Parcel] {
+        let slots = selectedSize == "large" ? 10 : 4
+        let first = Array(pending.prefix(slots))
+        guard showTransit.wrappedValue else { return first }
+        return first + Array(transit.prefix(max(0, slots - first.count)))
+    }
+    private var title: String { selectedSize == "small" ? "小号" : selectedSize == "large" ? "大号" : "中号" }
+
+    var body: some View {
+        Form {
+            Section("预览") {
+                Picker("尺寸", selection: $selectedSize) {
+                    Text("小号").tag("small")
+                    Text("中号").tag("medium")
+                    Text("大号").tag("large")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                HStack {
+                    Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if selectedSize == "medium" {
+                            HStack(alignment: .top, spacing: 9) {
+                                VStack(spacing: 4) {
+                                    Image(systemName: "person.crop.circle.fill")
+                                        .font(.system(size: 28)).foregroundStyle(.secondary)
+                                    Text("待取件").font(.caption2)
+                                    Text("\(pending.count)").font(.system(size: 30, weight: .bold))
+                                    if showTransit.wrappedValue {
+                                        Text("在途 \(transit.count)")
+                                            .font(.system(size: 9)).foregroundStyle(.blue)
+                                    }
+                                }
+                                .frame(width: 53)
+                                previewRows
+                            }
+                        } else {
+                            HStack(spacing: 5) {
+                                Text("待取 \(pending.count) 件")
+                                    .font(.system(size: 13, weight: .bold))
+                                if showTransit.wrappedValue {
+                                    Text("· 在途 \(transit.count)")
+                                        .font(.system(size: 10)).foregroundStyle(.blue)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: "person.crop.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            previewRows
+                        }
+                        Spacer(minLength: 0)
+                        HStack {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                            Text("打开 App 后更新")
+                            Spacer(minLength: 0)
+                        }
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
+                    .padding(12)
+                    .frame(width: selectedSize == "small" ? 156 : 310,
+                           height: selectedSize == "large" ? 337 : 160, alignment: .topLeading)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 19))
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 12)
+                Text("这是当前本地数据的预览。桌面小组件实际由 iOS WidgetKit 绘制，尺寸及刷新时间以系统为准。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("显示") {
+                Toggle("包含在途包裹", isOn: showTransit)
+                Text("优先显示待取件：小号和中号最多四条，大号最多十条；有剩余位置才显示在途包裹。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("共享数据与签名") {
+                LabeledContent("App Groups", value: HomeWidgetSharedStore.isAvailable
+                    ? "当前签名可访问" : "当前签名未配置")
+                Button("重新写入小组件数据") { store.persist() }
+                Text("主 App 和 Widget 扩展必须使用相同且被签名描述文件允许的 App Group。成功安装后，在桌面长按空白处，选择「编辑 → 添加小组件 → 包裹助手」。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Text("桌面组件读取本地快照，不直接运行电商网页登录。iOS 负责安排更新时间，不能保证固定间隔后台联网。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("小组件")
+    }
+
+    private var previewRows: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if visible.isEmpty {
+                Label("暂无包裹", systemImage: "shippingbox")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(visible, id: \.uuid) { parcel in
+                    HStack(spacing: 5) {
+                        Image(systemName: "shippingbox.fill")
+                            .foregroundStyle(.white)
+                            .font(.system(size: 10))
+                            .frame(width: 21, height: 21)
+                            .background(.blue, in: RoundedRectangle(cornerRadius: 5))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(parcel.displayCode.isEmpty ? parcel.displayStatus : parcel.displayCode)
+                                .font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                            Text(parcel.itemTitle ?? parcel.trackCompany ?? parcel.stationText)
+                                .font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: parcel.isPending ? "circle" : "truck.box")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(height: selectedSize == "large" ? 28 : 26)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
 struct RefreshSettingsPage: View {
     @AppStorage("native.refresh.app") private var appMin = 15
 
@@ -632,7 +772,7 @@ struct RefreshSettingsPage: View {
             Section("刷新说明") {
                 Text("这里设置的是最短自动检查间隔，并不是每隔这些分钟就会在后台执行。iOS 挂起或关闭 App 后，不会定时持续联网查询。")
                 Text("在包裹页面下拉或在账号授权页点击「立即同步」，可以主动同步，通常不受上述自动检查间隔限制；平台安全限制及请求频率限制仍然适用。")
-                Text("目前没有可用的主屏幕小组件刷新任务。灵动岛实时活动会随本地数据变更更新，不依赖单独的小组件刷新间隔。")
+                Text("桌面小组件读取 App 保存到共享 App Group 的快照。WidgetKit 会安排时间线更新，但不会保证固定间隔联网；灵动岛实时活动单独更新。")
             }
         }.navigationTitle("刷新频率")
     }
@@ -647,7 +787,7 @@ struct FAQSettingsPage: View {
         ("刷新频率怎样生效？", "设置的刷新间隔适用于打开 App 或返回前台后的自动检查，也用于淘宝和京东的网页订单同步。它不是后台每隔固定时间运行的定时器；主动下拉刷新可另行触发查询。"),
         ("为什么有些订单或物流轨迹没有同步？", "需要先登录并授权对应平台。淘宝、京东部分订单通过网页读取，菜鸟和拼多多等读取平台接口；页面变化、登录失效、安全验证及每轮读取数量限制可能造成漏读。可在账号授权页主动同步并核对官方物流。"),
         ("包裹助手能在后台实时推送物流吗？", "当前只有 App 获取到新的物流状态后才会安排本地通知。锁屏或 App 被系统挂起时不能保证持续查询物流，也没有云端 APNs 实时推送。需要在「取件提醒」中开启通知并授权系统权限。"),
-        ("为什么没有主屏幕小组件？", "当前第三方重签名使用方式不提供可靠的主屏幕小组件刷新功能，设置中已移除相关刷新选项。灵动岛使用系统实时活动，是否显示仍取决于设备、iOS 和签名权限。"),
+        ("为什么找不到主屏幕小组件？", "新版提供小、中、大号 WidgetKit 小组件。如果安装后未出现，需检查主 App 与小组件扩展是否分别正确签名，且拥有共同的 App Group；证书列出 App Groups 不代表扩展一定签名成功。"),
         ("灵动岛为什么不显示？", "需要支持实时活动的 iPhone 和 iOS 系统，并在系统中允许该功能。使用第三方证书重新签名时，若缺少相关授权，也可能无法启动实时活动。"),
         ("快捷指令可以导入快递短信吗？", "支持「导入快递文字」和「识别剪贴板」两个 App 快捷指令动作。也可以直接复制短信并打开包裹助手识别。是否能在快捷指令中看到这些动作，仍取决于重签名后的 iOS 系统注册情况。"),
         ("能自动读取手机收到的短信吗？", "iOS 不允许普通 App 直接读取短信数据库。可以复制短信后打开 App，或在系统快捷指令自动化中自行设置短信触发器。"),
