@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import MapKit
+import WebKit
 
 // Colors and card spacing follow theme.ts in the original Scripting project.
 enum AppTheme {
@@ -1708,36 +1709,198 @@ struct CourierSettings: View {
     @State private var businessID = NativeTracking.get("businessID")
     @State private var key = NativeTracking.get("apiKey")
     @State private var configured = NativeTracking.isConfigured
+    @State private var officialLogin = false
     @State private var notice: String?
+
     var body: some View {
         Form {
-            Section("快递鸟 API · 物流查单") {
-                TextField("EBusinessID",text:$businessID)
+            Section {
+                Button {
+                    officialLogin = true
+                } label: {
+                    Label("登录 / 注册快递鸟", systemImage: "person.crop.circle.badge.checkmark")
+                }
+                .tint(accent)
+                Text("使用快递鸟官方网页完成手机号、验证码或滑块验证。登录成功后会尝试读取账号已创建的 API 密钥并保存到本机钥匙串；不收集账号密码。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } header: {
+                Text("官方账号授权")
+            }
+            Section("手动配置 API") {
+                TextField("EBusinessID", text: $businessID)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                SecureField("API Key",text:$key)
+                SecureField("API Key", text: $key)
                 Button("保存 API 配置") {
                     do {
-                        try NativeTracking.setCredential(businessID:businessID,apiKey:key)
-                        configured=true
-                        notice="密钥已安全保存到设备钥匙串"
-                    } catch {notice=error.localizedDescription}
+                        try NativeTracking.setCredential(businessID: businessID, apiKey: key)
+                        configured = true
+                        notice = "密钥已安全保存到设备钥匙串"
+                    } catch {
+                        notice = error.localizedDescription
+                    }
                 }
-                Button("清除 API 配置",role:.destructive) {
+                Button("清除 API 配置", role: .destructive) {
                     NativeTracking.clearCredential()
-                    businessID="";key="";configured=false
-                    notice="API 配置已清除"
+                    businessID = ""
+                    key = ""
+                    configured = false
+                    notice = "API 配置已清除"
                 }.disabled(!configured)
             }
             Section("状态") {
-                LabeledContent("查询服务",value:configured ? "已配置" : "尚未配置")
-                Text("查快递优先复用已授权平台的物流数据；必要时调用你自己的快递鸟查询接口。部分运单可能要求收件手机尾号。")
+                LabeledContent("查询服务", value: configured ? "已配置" : "尚未配置")
+                Text("登录或注册快递鸟本身不等于已开通查询 API；账号需要存在有效密钥。查询时优先复用已授权平台的物流数据，必要时使用快递鸟接口。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
         .navigationTitle("物流服务")
-        .alert("快递鸟",isPresented:Binding(get:{notice != nil},set:{if !$0 {notice=nil}})) {
-            Button("确定") {notice=nil}
-        } message:{Text(notice ?? "")}
+        .sheet(isPresented: $officialLogin) {
+            NavigationStack {
+                KdniaoOfficialLoginPage {
+                    businessID = NativeTracking.get("businessID")
+                    key = NativeTracking.get("apiKey")
+                    configured = NativeTracking.isConfigured
+                    officialLogin = false
+                    notice = "已从快递鸟账号取得 API 密钥并安全保存"
+                }
+            }
+        }
+        .alert("快递鸟", isPresented: Binding(
+            get: { notice != nil }, set: { if !$0 { notice = nil } }
+        )) {
+            Button("确定") { notice = nil }
+        } message: { Text(notice ?? "") }
+    }
+}
+
+private struct KdniaoOfficialLoginPage: View {
+    @Environment(\.dismiss) private var dismiss
+    let onConfigured: () -> Void
+    @State private var exchanging = false
+    @State private var status = "请在官方网页登录或注册，完成验证后将自动读取 API 密钥"
+
+    var body: some View {
+        VStack(spacing: 0) {
+            KdniaoOfficialLoginWeb { token in
+                guard !exchanging else { return }
+                exchanging = true
+                status = "网页登录成功，正在读取账号 API 密钥…"
+                Task { @MainActor in
+                    do {
+                        try await NativeTracking.configureFromOfficialLogin(token: token)
+                        onConfigured()
+                    } catch {
+                        status = error.localizedDescription
+                        exchanging = false
+                    }
+                }
+            }
+            Text(status)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+        }
+        .navigationTitle("登录快递鸟")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("返回") { dismiss() }
+            }
+        }
+    }
+}
+
+private struct KdniaoOfficialLoginWeb: UIViewRepresentable {
+    let onToken: (String) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onToken: onToken) }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        // Fresh session prevents an old login token from immediately
+        // short-circuiting the manual verification step.
+        config.websiteDataStore = .nonPersistent()
+        config.userContentController.add(context.coordinator, name: "kdniaoAuth")
+        let javascript = #"""
+        (function() {
+          function poll() {
+            try {
+              if (!/(^|\\.)kdniao\\.com$/i.test(location.hostname)) return;
+              var token = (localStorage.getItem('token') || '').trim();
+              if (!token) {
+                var raw = localStorage.getItem('app-sso');
+                if (raw) {
+                  var data = JSON.parse(raw);
+                  token = String((data.state && data.state.accessToken) ||
+                                  data.accessToken || '').trim();
+                }
+              }
+              if (token.length < 12 || window.__parcelKdnSent === token) return;
+              window.__parcelKdnSent = token;
+              window.webkit.messageHandlers.kdniaoAuth.postMessage(token);
+            } catch (e) {}
+          }
+          poll();
+          setInterval(poll, 1100);
+        })();
+        """#
+        config.userContentController.addUserScript(
+            WKUserScript(source: javascript, injectionTime: .atDocumentEnd,
+                         forMainFrameOnly: true)
+        )
+        let view = WKWebView(frame: .zero, configuration: config)
+        view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
+        view.allowsBackForwardNavigationGestures = true
+        view.load(URLRequest(url: URL(string: "https://m.kdniao.com/#/register")!))
+        return view
+    }
+
+    func updateUIView(_ view: WKWebView, context: Context) {
+        context.coordinator.onToken = onToken
+    }
+
+    static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
+        view.navigationDelegate = nil
+        view.uiDelegate = nil
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "kdniaoAuth")
+        view.stopLoading()
+    }
+
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
+        var onToken: (String) -> Void
+
+        init(onToken: @escaping (String) -> Void) { self.onToken = onToken }
+
+        func userContentController(_ userContentController: WKUserContentController,
+                                   didReceive message: WKScriptMessage) {
+            let host = message.frameInfo.securityOrigin.host.lowercased()
+            guard (host == "kdniao.com" || host.hasSuffix(".kdniao.com")),
+                  let token = message.body as? String,
+                  token.count >= 12, token.count < 4096 else { return }
+            onToken(token)
+        }
+
+        func webView(_ webView: WKWebView,
+                     decidePolicyFor action: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            let scheme = action.request.url?.scheme?.lowercased()
+            decisionHandler(
+                scheme == "https" || scheme == "http" || scheme == "about"
+                ? .allow : .cancel)
+        }
+
+        func webView(_ webView: WKWebView,
+                     createWebViewWith configuration: WKWebViewConfiguration,
+                     for action: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard action.targetFrame == nil,
+                  let scheme = action.request.url?.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http" else { return nil }
+            webView.load(action.request)
+            return nil
+        }
     }
 }
