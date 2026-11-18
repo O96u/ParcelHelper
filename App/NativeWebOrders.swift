@@ -31,27 +31,27 @@ private struct WebShipment: Decodable {
     private init() {}
 
     func refreshAvailable() async {
-        for platform in ["jd", "taobao"] {
+        for platform in ["jd", "taobao", "pdd"] {
             _ = await request(platform)
         }
     }
 
     @discardableResult
     func request(_ platform: String, force: Bool = false) async -> Bool {
-        guard platform == "jd" || platform == "taobao" else { return false }
+        guard platform == "jd" || platform == "taobao" || platform == "pdd" else { return false }
         if platform == "taobao",
            (UserDefaults.standard.object(forKey: "native.platform.enabled.taobao") as? Bool) == false {
             return false
         }
         let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        let marker = platform == "jd" ? "pt_key" : "unb"
-        let domain = platform == "jd" ? "jd.com" : "taobao.com"
+        let marker = platform == "jd" ? "pt_key" : (platform == "pdd" ? "PDDAccessToken" : "unb")
+        let domain = platform == "jd" ? "jd.com" : (platform == "pdd" ? "yangkeduo.com" : "taobao.com")
         let authorized = cookies.contains { cookie in
             (cookie.name == marker || (platform == "taobao" && cookie.name == "tracknick"))
                 && !cookie.value.isEmpty
                 && (cookie.domain == domain || cookie.domain.hasSuffix("." + domain))
                 && (cookie.expiresDate == nil || cookie.expiresDate! > Date())
-        }
+        } || (platform == "pdd" && !PddSessionVault.token.isEmpty)
         guard authorized else { return false }
         let key = "native.web.autosync.at." + platform
         let now = Date().timeIntervalSince1970
@@ -80,8 +80,24 @@ private struct WebShipment: Decodable {
         Task {
             try? await Task.sleep(nanoseconds: 60_000_000_000)
             guard activePlatform == platform && sequence == requestNumber else { return }
-            finish(platform, packages: [], failure: "网页同步超时，请稍后重试或打开官方订单页检查")
+            if platform == "pdd" {
+                finishPdd("拼多多购物订单：网页读取超时，请稍后重试", succeeded: false)
+            } else {
+                finish(platform, packages: [], failure: "网页同步超时，请稍后重试或打开官方订单页检查")
+            }
         }
+    }
+
+    func finishPdd(_ message: String, succeeded: Bool) {
+        guard activePlatform == "pdd" else { return }
+        if succeeded {
+            UserDefaults.standard.set(Date().timeIntervalSince1970,
+                                      forKey: "native.sync.success.pdd")
+        }
+        UserDefaults.standard.set(message, forKey: "native.sync.result.pdd")
+        activePlatform = nil
+        isRunning = false
+        DispatchQueue.main.async { [weak self] in self?.startNext() }
     }
 
     func finish(_ platform: String, packages: [NativeSyncParcel], failure: String?) {
@@ -109,11 +125,21 @@ struct NativeWebAutoSyncHost: View {
     var body: some View {
         Group {
             if let platform = sync.activePlatform {
-                NativeWebOrderReader(platform: platform) { _ in
-                    // Progress is available in the explicit manual sync screen.
-                } onComplete: { packages, error in
-                    Task { @MainActor in
-                        sync.finish(platform, packages: packages, failure: error)
+                Group {
+                    if platform == "pdd" {
+                        PddOrdersAutoSyncReader { message, succeeded in
+                            Task { @MainActor in
+                                sync.finishPdd(message, succeeded: succeeded)
+                            }
+                        }
+                    } else {
+                        NativeWebOrderReader(platform: platform) { _ in
+                            // Progress is available in the explicit manual sync screen.
+                        } onComplete: { packages, error in
+                            Task { @MainActor in
+                                sync.finish(platform, packages: packages, failure: error)
+                            }
+                        }
                     }
                 }
                 .id("\(platform)-\(sync.sequence)")
