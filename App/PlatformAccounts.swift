@@ -234,7 +234,9 @@ struct PlatformAccountsPage: View {
                             Text("快递鸟（查单兜底）")
                                 .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
                             Spacer()
-                            Text("未配置").font(.caption).foregroundStyle(.secondary)
+                            Text(NativeTracking.isConfigured ? "已配置" : "未配置")
+                                .font(.caption)
+                                .foregroundStyle(NativeTracking.isConfigured ? blue : .secondary)
 
                         }.padding(.horizontal, 19).frame(minHeight: 69)
                     }.buttonStyle(.plain)
