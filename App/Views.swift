@@ -1553,12 +1553,12 @@ struct StationsHome: View {
                 let active = filteredItems.filter { $0.pendingCount > 0 }
                 let others = filteredItems.filter { $0.pendingCount == 0 }
                 if !active.isEmpty {
-                    Section("有待取包裹 · \\(active.count)") {
+                    Section("有待取包裹 · \(active.count)") {
                         ForEach(active) { item in stationRow(item) }
                     }
                 }
                 if !others.isEmpty {
-                    Section("其他驿站 · \\(others.count)") {
+                    Section("其他驿站 · \(others.count)") {
                         ForEach(others) { item in stationRow(item) }
                     }
                 }
@@ -1607,7 +1607,7 @@ struct StationsHome: View {
                 .frame(width: 38, height: 38)
                 .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading, spacing: 3) {
-                Text("\\(count)")
+                Text("\(count)")
                     .font(.system(size: 21, weight: .bold, design: .rounded))
                 Text(title)
                     .font(.system(size: 12))
@@ -1638,7 +1638,7 @@ struct StationsHome: View {
                             .lineLimit(2)
                         Spacer(minLength: 2)
                         if item.pendingCount > 0 {
-                            Text("\\(item.pendingCount) 待取")
+                            Text("\(item.pendingCount) 待取")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(PH.orange)
                                 .padding(.horizontal, 8)
@@ -1653,7 +1653,7 @@ struct StationsHome: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                     HStack(spacing: 12) {
-                        Label("\\(item.parcelCount) 件关联", systemImage: "shippingbox")
+                        Label("\(item.parcelCount) 件关联", systemImage: "shippingbox")
                         if !item.station.businessHours.isEmpty {
                             Label(item.station.businessHours, systemImage: "clock")
                                 .lineLimit(1)
