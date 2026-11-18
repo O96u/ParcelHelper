@@ -33,7 +33,7 @@ jobs:
           version="1.1.${GITHUB_RUN_NUMBER}"
           build_number="${GITHUB_RUN_NUMBER}"
           previous_tag="$(git tag --merged HEAD --sort=-creatordate |
-            grep -E '^v?[0-9]+\\.[0-9]+\\.[0-9]+$' | head -n 1 || true)"
+            grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
           echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
@@ -115,13 +115,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release create "v$APP_VERSION" \
-            build/ParcelHelper.ipa \
-            build/ParcelHelper.ipa.sha256 \
-            --title "ParcelHelper v$APP_VERSION" \
-            --notes-file build/release-notes.md \
-            --target "$GITHUB_SHA" \
-            --latest
+          tag="$APP_VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "ParcelHelper $tag" --notes-file build/release-notes.md --latest
+            gh release upload "$tag" build/ParcelHelper.ipa build/ParcelHelper.ipa.sha256 --clobber
+          else
+            gh release create "$tag" \
+              build/ParcelHelper.ipa \
+              build/ParcelHelper.ipa.sha256 \
+              --title "ParcelHelper $tag" \
+              --notes-file build/release-notes.md \
+              --target "$GITHUB_SHA" \
+              --latest
+          fi
 
       - name: Summarize build errors
         if: failure()
@@ -131,7 +137,7 @@ jobs:
             {
               echo '## Xcode build errors'
               echo '\`\`\`text'
-              grep -nE 'error:|\\*\\* BUILD FAILED \\*\\*|fatal error:' build/xcodebuild.log | tail -n 60 || true
+              grep -nE 'error:|\*\* BUILD FAILED \*\*|fatal error:' build/xcodebuild.log | tail -n 60 || true
               echo '\`\`\`'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
