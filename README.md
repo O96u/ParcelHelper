@@ -55,9 +55,9 @@
 
 **GitHub Actions 自动构建**
 
-- `.github/workflows/build-ipa.yml` 在 `main` 分支更新时执行 `xcodebuild`，将未签名构建产物 `ParcelHelper.ipa` 上传为 Artifact 并发布到 [Releases](https://github.com/O96u/ParcelHelper/releases)。
+- 普通提交到 `main` **不会自动构建或发布 IPA**。只有推送形如 `v1.0.5` 的 Git Tag 时，`.github/workflows/build-ipa.yml` 才会执行 `xcodebuild`，生成 `ParcelHelper.ipa` 并发布到 [Releases](https://github.com/O96u/ParcelHelper/releases)；版本号直接取 Tag，不自动递增。
 - 文件名不含 `unsigned`，但仍须使用有效证书签名后才能安装到普通 iPhone。第三方重签名可能影响快捷指令、通知和实时活动扩展。
-- 正式版本从 **v1.0.0** 起编号；后续每版根据实际提交内容生成更新日志，按需使用「新增 / 修改 / 修复 / 优化 / 移除 / 文档 / 构建与发布」等栏目，不显示没有对应改动的空栏目。Release 版本号不代表 Apple 签名或功能兼容性保证。
+- 正式版本从 **v1.0.0** 起编号；后续每版根据实际提交内容生成更新日志，按需使用「新增 / 修改 / 修复 / 优化 / 移除 / 文档 / 构建与发布」等栏目，不显示没有对应改动的空栏目。Release 版本号不代表 Apple 签名或功能兼容性保证。发布时请确认 Tag 指向要发布的提交。
 
 [查看构建记录](https://github.com/O96u/ParcelHelper/actions)
 
