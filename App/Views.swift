@@ -1734,7 +1734,7 @@ private struct StationInlineCard: View {
         let phone = draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
         let digits = phone.filter(\.isNumber)
         if !phone.isEmpty && (digits.count < 7 || digits.count > 15 ||
-            phone.range(of: #"^[+0-9()\\- ]+$"#, options: .regularExpression) == nil) {
+            phone.range(of: #"^[+0-9() -]+$"#, options: .regularExpression) == nil) {
             problem = "请输入有效的联系电话"; return
         }
         let keys = keywordText.components(separatedBy: CharacterSet(charactersIn: ",，"))
@@ -1989,7 +1989,7 @@ private struct KdniaoOfficialLoginWeb: UIViewRepresentable {
         (function() {
           function poll() {
             try {
-              if (!/(^|\\.)kdniao\\.com$/i.test(location.hostname)) return;
+              if (!/(^|\.)kdniao\.com$/i.test(location.hostname)) return;
               var token = (localStorage.getItem('token') || '').trim();
               if (!token) {
                 var raw = localStorage.getItem('app-sso');
