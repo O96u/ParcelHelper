@@ -117,6 +117,8 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                 .tint(AppTheme.color(themeColor))
                 .preferredColorScheme(store.snapshot.preferences.appearanceMode == "dark" ? .dark : store.snapshot.preferences.appearanceMode == "light" ? .light : nil)
                 .task {
+                    // Reconcile any widget "marked picked" actions on launch.
+                    store.persist()
                     clipboardMonitor.checkOnForeground()
                     _ = await NativeHomeRefresh.refresh()
                     await NativeWebAutoSync.shared.refreshAvailable()
