@@ -630,7 +630,7 @@ struct HomeWidgetSettingsPage: View {
 
     private var showTransit: Binding<Bool> {
         Binding(get: { store.snapshot.preferences.widgetShowTransit },
-                set: { store.changePreferences { $0.widgetShowTransit = $0 } })
+                set: { value in store.changePreferences { $0.widgetShowTransit = value } })
     }
 
     private var pending: [Parcel] {
