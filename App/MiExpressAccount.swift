@@ -155,7 +155,10 @@ import Security
     }
     private static func isSuccess(_ response: [String: Any]) -> Bool {
         let status = json(response["status"])
-        return str(response["code"]) == "0" || str(status["code"]) == "0"
+        // If the top-level response has an explicit business code, it is
+        // authoritative. Do not treat status.code=0 as success when code=4001.
+        let code = str(response["code"])
+        return code.isEmpty ? str(status["code"]) == "0" : code == "0"
     }
 
     private final class DoNotFollowRedirect: NSObject, URLSessionTaskDelegate {
