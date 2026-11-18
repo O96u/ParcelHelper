@@ -1,6 +1,8 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44310009222
-Commit: 8babc4b0bf6be506d07704094816398221961540
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44314808298
+Commit: 9124cff4ccb9851aee813f447a0f8c200d194310
 Ref: refs/heads/main
-Date: 2026-11-18T13:23:22Z
+Date: 2026-11-18T13:50:31Z
 
 Error excerpts:
+756:/Users/runner/work/ParcelHelper/ParcelHelper/App/Views.swift:1467:35: error: cannot find 'GitHubReleaseVersion' in scope
+804:** BUILD FAILED **
