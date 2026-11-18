@@ -713,7 +713,14 @@ struct HomeWidgetSettingsPage: View {
                         .font(.caption)
                         .foregroundStyle(HomeWidgetSharedStore.isAvailable ? .green : .orange)
                 }
-                Text("此处仅检查构建时指定的共享组，无法枚举第三方证书授权的其他 App Groups。请在 GitHub Actions 手动构建时填写 widget_group，或设置 PH_WIDGET_GROUP。")
+                Text("需要使用桌面小组件？请在 GitHub 仓库的 Actions → Build ParcelHelper IPA → Run workflow 中，把你自己证书允许的 App Group 填入 widget_group 后再构建。主 App 和 Widget 扩展签名时必须保留同一个组。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Link(destination: URL(string: "https://github.com/O96u/ParcelHelper/actions/workflows/build-ipa.yml")!) {
+                    Label("前往 GitHub 自定义小组件构建", systemImage: "arrow.up.right.square")
+                        .font(.subheadline)
+                }
+                Text("本页仅验证构建时指定的共享组，不能读取第三方证书中全部 App Groups。以后经常构建，可在仓库变量 PH_WIDGET_GROUP 中设置默认值。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if !HomeWidgetSharedStore.isAvailable {
@@ -756,33 +763,64 @@ struct HomeWidgetSettingsPage: View {
     private var widgetPreview: some View {
         Group {
             if selectedSize == "medium" {
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Label("我的取件", systemImage: "shippingbox.fill")
-                            .font(.system(size: 10, weight: .medium))
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        Text("\(pending.count)")
-                            .font(.system(size: 32, weight: .bold, design: .rounded))
-                        Text("件待取")
-                            .font(.system(size: 10))
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "shippingbox.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                            .background(.white.opacity(0.17),
+                                        in: RoundedRectangle(cornerRadius: 9))
+                        Text("我的取件").font(.system(size: 11, weight: .semibold))
+                        Spacer(minLength: 2)
+                        Text("\(pending.count) 件待取")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
                         if showTransit.wrappedValue {
-                            Text("在途 \(transit.count) 件")
-                                .font(.system(size: 9))
+                            Text("· 在途 \(transit.count)")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white.opacity(0.86))
                         }
                     }
                     .foregroundStyle(.white)
-                    .padding(10)
-                    .frame(width: 105, height: 137, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .frame(height: visible.count >= 3 ? 43 : 49)
+                    .frame(maxWidth: .infinity)
                     .background(blueGradient,
                                 in: RoundedRectangle(cornerRadius: 14))
-                    VStack(alignment: .leading, spacing: 2) {
+                    if visible.count == 1, let parcel = visible.first {
+                        HStack(spacing: 9) {
+                            Image(systemName: "shippingbox.fill")
+                                .font(.system(size: 17))
+                                .foregroundStyle(.blue)
+                                .frame(width: 35, height: 35)
+                                .background(Color.blue.opacity(0.12),
+                                            in: RoundedRectangle(cornerRadius: 10))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(parcel.displayCode.isEmpty
+                                     ? parcel.displayStatus : parcel.displayCode)
+                                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                                    .lineLimit(1)
+                                Text(parcel.itemTitle ?? parcel.trackCompany ?? parcel.stationText)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                if !parcel.stationText.isEmpty {
+                                    Text(parcel.stationText).font(.system(size: 9))
+                                        .foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: parcel.isPending ? "circle" : "truck.box.fill")
+                                .font(.system(size: 23))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(minHeight: 54)
+                    } else {
                         previewRows
-                        Spacer(minLength: 0)
-                        syncFooter
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer(minLength: 0)
+                    syncFooter
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 VStack(alignment: .leading, spacing: selectedSize == "small" ? 5 : 8) {
                     HStack {
@@ -839,7 +877,8 @@ struct HomeWidgetSettingsPage: View {
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
-                    .frame(height: selectedSize == "small" ? 29 : 32)
+                    .frame(height: selectedSize == "small" ? 29 :
+                                   (selectedSize == "medium" ? 22 : 32))
                 }
             }
         }
