@@ -175,7 +175,7 @@ private enum SyncJSON {
             else { incoming = try await NativeMiExpress.packages() }
             let count = merge(incoming)
             let result = NativeSyncResult(
-                name: id == "pdd" ? "拼多多" : (id == "cainiao" ? "菜鸟" : (id == "fengchao" ? "丰巢" : "小米")),
+                name: id == "pdd" ? "拼多多驿站包裹" : (id == "cainiao" ? "菜鸟" : (id == "fengchao" ? "丰巢" : "小米")),
                 found: incoming.count, imported: count, errors: [])
             UserDefaults.standard.set(result.description, forKey: "native.sync.result." + id)
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success." + id)
