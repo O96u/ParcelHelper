@@ -1,6 +1,6 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44309928297
-Commit: 2bdd1eb35d3066f148e76a3743d2c6c6bab6c479
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44310009222
+Commit: 8babc4b0bf6be506d07704094816398221961540
 Ref: refs/heads/main
-Date: 2026-11-18T13:20:52Z
+Date: 2026-11-18T13:23:22Z
 
 Error excerpts:
