@@ -31,7 +31,8 @@ struct AddParcelFromTextIntent: AppIntent {
         parcel.source = "shortcuts"
         if !parsed.code.isEmpty { parcel.arrivedAt = Date().timeIntervalSince1970 * 1000 }
         let updated = ParcelStore.shared.upsertRecognizedText(parcel)
-        return .result(dialog: updated ? "已更新已存在的包裹。" : "已将包裹添加到包裹助手。")
+        if updated { return .result(dialog: "已更新已存在的包裹。") }
+        return .result(dialog: "已将包裹添加到包裹助手。")
     }
 }
 
@@ -66,7 +67,8 @@ struct AddParcelFromClipboardIntent: AppIntent {
         parcel.userTitle = "快捷指令导入"
         if !parsed.code.isEmpty { parcel.arrivedAt = Date().timeIntervalSince1970 * 1000 }
         let updated = ParcelStore.shared.upsertRecognizedText(parcel)
-        return .result(dialog: updated ? "已更新已有包裹。" : "已导入快递取件信息。")
+        if updated { return .result(dialog: "已更新已有包裹。") }
+        return .result(dialog: "已导入快递取件信息。")
     }
 }
 
