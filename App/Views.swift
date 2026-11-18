@@ -1542,6 +1542,7 @@ struct StationsHome: View {
                                     newStation = Station()
                                 },
                                 onDelete: { adding = false })
+                                .id(newStation.id)
                             if !filtered.isEmpty { Divider().padding(.leading, 72) }
                         }
                         ForEach(Array(filtered.enumerated()), id: \.element.id) { index, station in
