@@ -49,13 +49,14 @@
 
 **源代码构建（推荐）**
 
-1. 使用 macOS、Xcode 16 或更新版本打开 `ParcelHelper.xcodeproj`（最低部署目标 iOS 17）。
+1. 在 macOS 项目根目录先执行 `swift scripts/create_dark_icon.swift`，生成 `Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Dark.png`，再用 Xcode 16 或更新版本打开 `ParcelHelper.xcodeproj`（最低部署目标 iOS 17）。深色图标文件是构建生成物，不直接提交到 Git 仓库。
 2. 选择 `ParcelHelper` scheme 和设备，在 Xcode 中为主 App 与实时活动扩展分别配置适合自己账号的签名、Bundle Identifier 和所需能力。
 3. Build / Run 或使用 Xcode Archive 导出可签名版本。
 
 **GitHub Actions 自动构建**
 
 - 每次向 `main` 推送代码（包括合并 PR）都会自动运行 `.github/workflows/build-ipa.yml`，构建 `ParcelHelper.ipa` 并在成功后发布到 [Releases](https://github.com/O96u/ParcelHelper/releases)。也可以从 Actions 手动运行工作流。
+- CI 会在编译前生成深色图标，校验它不是普通图标的原样复制，检查资产目录已声明 `luminosity: dark`，并保留编译后的资产诊断数据。iOS 18 及以上需在主屏幕长按空白处选择「编辑 → 自定义 → 深色」或「自动」才能看到相应图标；仅打开 ParcelHelper 内的深色主题不改变主屏幕图标。
 - 不需要手动创建或推送 Git Tag。版本号由 Actions 自动生成，使用纯数字 `1.1.<运行序号>`（例如 `1.1.12`，无 `v` 前缀）；成功构建后会自动创建对应的 Git Tag 和 Release。失败的构建不会发布新 Release，但仍保留 Actions 日志。重新运行同一次构建会覆盖对应 Release 的 IPA。
 
 - 文件名不含 `unsigned`，但仍须使用有效证书签名后才能安装到普通 iPhone。第三方重签名可能影响快捷指令、通知和实时活动扩展。
