@@ -87,10 +87,9 @@ enum HomeWidgetSharedStore {
     // authorized containers for a snapshot before treating data as missing.
     // The host app still writes to a single selected group, not all groups.
     private static var readableSnapshotURL: URL? {
-        let candidates = [configuredGroup] + signedGroups
-        for group in Array(NSOrderedSet(array: candidates)) {
-            guard let group = group as? String,
-                  let url = container(for: group)?.appendingPathComponent(filename),
+        let candidates = [configuredGroup] + signedGroups.filter { $0 != configuredGroup }
+        for group in candidates {
+            guard let url = container(for: group)?.appendingPathComponent(filename),
                   let data = try? Data(contentsOf: url),
                   (try? JSONDecoder().decode(HomeWidgetSnapshot.self, from: data)) != nil
             else { continue }
@@ -103,7 +102,8 @@ enum HomeWidgetSharedStore {
         groupURL?.appendingPathComponent(filename)
     }
     private static var operationsURL: URL? {
-        groupURL?.appendingPathComponent("parcelhelper-ops", isDirectory: true)
+        (readableSnapshotURL?.deletingLastPathComponent() ?? groupURL)?
+            .appendingPathComponent("parcelhelper-ops", isDirectory: true)
     }
 
     static func read() -> HomeWidgetSnapshot {
