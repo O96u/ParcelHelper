@@ -325,21 +325,31 @@ struct PickupHome: View {
                 }
 
                 if showTaobaoIdentity || showCainiaoIdentity || showPddIdentity {
-                    VStack(alignment: .leading, spacing: 7) {
+                    VStack(alignment: .leading, spacing: 10) {
                         DashboardSection("身份码", subtitle: "到站后快速出示")
-                        HStack(spacing: 10) {
+                        HStack(spacing: 9) {
                             if showTaobaoIdentity { identityButton("淘宝", platform: "taobao") }
                             if showCainiaoIdentity { identityButton("菜鸟", platform: "cainiao") }
                             if showPddIdentity { identityButton("拼多多", platform: "pdd") }
-                            Spacer(minLength: 0)
-                            Image(systemName: "qrcode.viewfinder")
-                                .font(.system(size: 23))
-                                .foregroundStyle(accent.opacity(0.8))
                         }
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity)
-                        .background(PH.card, in: RoundedRectangle(cornerRadius: 19))
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.shield")
+                                .foregroundStyle(accent)
+                            Text("实时身份码来自已登录的平台")
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 4)
+                            NavigationLink {
+                                IdentitySettingsPage()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text("管理")
+                                    Image(systemName: "chevron.right")
+                                }
+                                .fontWeight(.medium)
+                            }
+                        }
+                        .font(.system(size: 11))
+                        .padding(.horizontal, 5)
                     }
                 }
 
@@ -425,18 +435,26 @@ struct PickupHome: View {
         NavigationLink {
             IdentityDetailPage(title: name, platform: platform)
         } label: {
-            VStack(spacing: 5) {
+            VStack(spacing: 7) {
                 Image("brand_" + platform)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
-                    .frame(width: 39, height: 39)
-                    .clipShape(RoundedRectangle(cornerRadius: 11))
+                    .frame(width: 47, height: 47)
+                    .clipShape(RoundedRectangle(cornerRadius: 13))
                 Text(name)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(platform == "cainiao" ? "实名身份码" : "动态取件码")
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
-            .frame(width: 59)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(PH.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
     }
