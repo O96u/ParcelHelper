@@ -1493,7 +1493,7 @@ struct SettingsHome: View {
             }.padding(.horizontal, 20).padding(.bottom, 130)
         }
         .background(PH.page)
-        .task { await update.checkOnForeground() }
+
     }
     private func settingsGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0, content: content)
