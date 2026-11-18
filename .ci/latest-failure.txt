@@ -1,7 +1,7 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44321056800
-Commit: 2fbfb055dbd0734ed75debaf95730b5b1a91043e
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44321093097
+Commit: c93f23aa461e53b61ada7ccee7b97ea549de0cd9
 Ref: refs/heads/main
-Date: 2026-11-18T14:10:00Z
+Date: 2026-11-18T14:10:13Z
 
 Error excerpts:
 377:/Users/runner/work/ParcelHelper/ParcelHelper/Shared/HomeWidgetSnapshot.swift:44:26: error: cannot find 'SecTaskCreateFromSelf' in scope
