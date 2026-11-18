@@ -54,6 +54,54 @@ struct NativeTrackLookup {
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(item as CFDictionary,nil)
     }
+
+    // The bundled Scripting project's kdniao.ts obtains a short-lived login
+    // token from the user's official WebView session and exchanges it for
+    // EBusinessID / AppKey. Persist only the resulting credentials in Keychain.
+    static func configureFromOfficialLogin(token: String) async throws {
+        let accessToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard accessToken.count >= 12 && accessToken.count < 4096 else {
+            throw NativeSyncError.noLogin("快递鸟官方网页登录尚未完成")
+        }
+        var request = URLRequest(
+            url: URL(string: "https://coporate.kdniao.com/user-api/user/queryApiSecretKey")!,
+            timeoutInterval: 20)
+        request.httpMethod = "POST"
+        request.setValue(accessToken, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json;charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://biz.kdniao.com", forHTTPHeaderField: "Origin")
+        request.setValue("https://biz.kdniao.com/", forHTTPHeaderField: "Referer")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "pageIndex": 1, "pageSize": 10
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            throw NativeSyncError.unavailable("快递鸟密钥接口连接失败，请稍后重试")
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) else {
+            throw NativeSyncError.badResponse("快递鸟返回了无法解析的密钥数据")
+        }
+        let root = json as? [String: Any] ?? [:]
+        let entries = (root["data"] as? [[String: Any]]) ?? (json as? [[String: Any]]) ?? []
+        func value(_ object: [String: Any], _ key: String) -> String {
+            if let text = object[key] as? String { return text }
+            if let number = object[key] as? NSNumber { return number.stringValue }
+            return ""
+        }
+        guard let first = entries.first(where: {
+            !value($0, "secretId").isEmpty || !value($0, "appKey").isEmpty
+        }) else {
+            throw NativeSyncError.unavailable(
+                "快递鸟账号尚无 API 密钥，请先到官方后台创建，然后重新登录或手动填写")
+        }
+        let business = value(first, "userId").isEmpty
+            ? value(first, "eBusinessId") : value(first, "userId")
+        let secret = value(first, "secretId").isEmpty
+            ? value(first, "appKey") : value(first, "secretId")
+        try setCredential(businessID: business, apiKey: secret)
+    }
+
     static var isConfigured:Bool { !get("businessID").isEmpty && !get("apiKey").isEmpty }
     static func setCredential(businessID:String, apiKey:String) throws {
         let id = businessID.trimmingCharacters(in:.whitespacesAndNewlines)
