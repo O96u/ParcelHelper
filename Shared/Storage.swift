@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import WidgetKit
 
 @MainActor final class ParcelStore: ObservableObject {
     static let shared = ParcelStore()
@@ -132,22 +133,59 @@ import Combine
         // Migrate station names already present in the existing parcel database.
         if discoverStations() { persist() }
     }
+    private func homeWidgetSnapshot() -> HomeWidgetSnapshot {
+        let pending = snapshot.parcels.filter { $0.type == "delivery" && $0.isPending }
+            .sorted { ($0.trackUpdatedAt ?? $0.createdAt) > ($1.trackUpdatedAt ?? $1.createdAt) }
+        let transit = snapshot.parcels.filter { $0.type == "delivery" && $0.isTransit }
+            .sorted { ($0.trackUpdatedAt ?? $0.createdAt) > ($1.trackUpdatedAt ?? $1.createdAt) }
+        func row(_ parcel: Parcel) -> HomeWidgetParcel {
+            HomeWidgetParcel(
+                id: parcel.uuid, code: parcel.displayCode,
+                company: parcel.trackCompany ?? "快递包裹",
+                title: parcel.itemTitle ?? parcel.userTitle ?? "",
+                station: parcel.stationText, latest: parcel.trackLatest ?? "",
+                source: parcel.source ?? parcel.srcApp?.id ?? "")
+        }
+        let lastSync = UserDefaults.standard.double(forKey: "native.home.lastRefresh")
+        return HomeWidgetSnapshot(
+            pending: Array(pending.prefix(10)).map(row),
+            transit: Array(transit.prefix(6)).map(row),
+            pendingTotal: pending.count, transitTotal: transit.count,
+            lastSync: lastSync > 0 ? Date(timeIntervalSince1970: lastSync) : .distantPast,
+            showTransit: snapshot.preferences.widgetShowTransit)
+    }
+
     func persist() {
+        // The widget records only picked-ID operations. Apply them in the
+        // main app, and remove operation files only after the disk save succeeds.
+        let widgetOps = HomeWidgetSharedStore.pendingPickedIDs()
+        if !widgetOps.isEmpty {
+            let selected = Set(widgetOps)
+            for i in snapshot.parcels.indices where selected.contains(snapshot.parcels[i].uuid) {
+                snapshot.parcels[i].status = 2
+                snapshot.parcels[i].pickedByUser = true
+                snapshot.parcels[i].pickedAt = snapshot.parcels[i].pickedAt ??
+                    Date().timeIntervalSince1970 * 1000
+            }
+        }
         snapshot.parcels = Self.collapseExactDuplicates(snapshot.parcels)
         _ = discoverStations()
         snapshot.updatedAt = Date()
         let current = snapshot
+        let widgetSnapshot = homeWidgetSnapshot()
         let destination = url
         persistenceQueue.async {
             do {
                 let data = try JSONEncoder().encode(current)
                 try data.write(to: destination, options: .atomic)
+                if HomeWidgetSharedStore.write(widgetSnapshot) {
+                    HomeWidgetSharedStore.clearPicked(widgetOps)
+                    WidgetCenter.shared.reloadTimelines(ofKind: HomeWidgetSharedStore.kind)
+                }
             } catch {
                 print("ParcelStore save failed: \(error)")
             }
         }
-        // ActivityKit supplies state directly to the Live Activity extension.
-        // There is no Home Screen widget or shared container to refresh.
         let rows = snapshot.parcels
         let enabled = snapshot.preferences.liveActivityEnabled
         Task { await LiveActivityCoordinator.update(with: enabled ? rows : []) }
