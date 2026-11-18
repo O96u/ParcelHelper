@@ -11,10 +11,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: parcelhelper-release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: macos-latest
@@ -117,7 +113,7 @@ jobs:
           set -euo pipefail
           tag="$APP_VERSION"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --title "ParcelHelper $tag" --notes-file build/release-notes.md --latest
+            gh release edit "$tag" --title "ParcelHelper $tag" --notes-file build/release-notes.md
             gh release upload "$tag" build/ParcelHelper.ipa build/ParcelHelper.ipa.sha256 --clobber
           else
             gh release create "$tag" \
@@ -125,8 +121,7 @@ jobs:
               build/ParcelHelper.ipa.sha256 \
               --title "ParcelHelper $tag" \
               --notes-file build/release-notes.md \
-              --target "$GITHUB_SHA" \
-              --latest
+              --target "$GITHUB_SHA"
           fi
 
       - name: Summarize build errors
