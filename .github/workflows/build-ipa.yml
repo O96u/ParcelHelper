@@ -1,16 +1,18 @@
 name: Build ParcelHelper IPA
 
-# Official releases are created only when a version tag is pushed.
+# Every commit to main builds an IPA and publishes a numbered release.
+# The release tag is generated automatically; never push a tag to trigger this workflow.
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: parcelhelper-release
+  group: parcelhelper-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -23,27 +25,19 @@ jobs:
         with:
           fetch-depth: 0  # Include tags/history so release notes can compare changes
 
-      - name: Determine version from pushed tag
+      - name: Determine automatic version
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            echo "Release tag must use vMAJOR.MINOR.PATCH (for example v1.0.5): $tag" >&2
-            exit 1
-          fi
-          major="${BASH_REMATCH[1]}"
-          minor="${BASH_REMATCH[2]}"
-          patch="${BASH_REMATCH[3]}"
-          version="${tag#v}"
-          build_number="$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))"
-          previous_tag="$(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname |
-            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
-            grep -Fxv "$tag" | head -n 1 || true)"
+          # Start a new minor series to avoid colliding with existing v1.0.x tags.
+          version="1.1.${GITHUB_RUN_NUMBER}"
+          build_number="${GITHUB_RUN_NUMBER}"
+          previous_tag="$(git tag --merged HEAD --sort=-creatordate |
+            grep -E '^v?[0-9]+\\.[0-9]+\\.[0-9]+$' | head -n 1 || true)"
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
           echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
-          echo "Publishing tag $tag (build $build_number), previous: ${previous_tag:-none}"
+          echo "Building $version at $GITHUB_SHA (previous release: ${previous_tag:-none})"
 
       - name: Generate dark appearance icon (Swift)
         run: |
@@ -95,12 +89,12 @@ jobs:
           ditto "$APP_PATH" build/package/Payload/ParcelHelper.app
           (cd build/package && /usr/bin/zip -qry ../ParcelHelper.ipa Payload)
           (cd build && shasum -a 256 ParcelHelper.ipa > ParcelHelper.ipa.sha256)
-          echo "Created ParcelHelper.ipa (unsigned build) v$APP_VERSION build $BUILD_NUMBER"
+          echo "Created ParcelHelper.ipa (unsigned build) $APP_VERSION build $BUILD_NUMBER"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ParcelHelper-v${{ env.APP_VERSION }}
+          name: ParcelHelper-${{ env.APP_VERSION }}
           path: |
             build/ParcelHelper.ipa
             build/ParcelHelper.ipa.sha256
@@ -128,6 +122,19 @@ jobs:
             --notes-file build/release-notes.md \
             --target "$GITHUB_SHA" \
             --latest
+
+      - name: Summarize build errors
+        if: failure()
+        shell: bash
+        run: |
+          if [[ -f build/xcodebuild.log ]]; then
+            {
+              echo '## Xcode build errors'
+              echo '\`\`\`text'
+              grep -nE 'error:|\\*\\* BUILD FAILED \\*\\*|fatal error:' build/xcodebuild.log | tail -n 60 || true
+              echo '\`\`\`'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload build logs
         if: always()
