@@ -621,18 +621,18 @@ struct LiveSettingsPage: View {
 
 // Actual package data preview; WidgetKit renders the same snapshot as the
 // main App, never a fabricated or internet-fetched sample.
+// Preview uses the same ParcelHelper blue-card vocabulary as the actual
+// WidgetKit extension. Unlike a mockup, rows are populated from ParcelStore.
 struct HomeWidgetSettingsPage: View {
     @EnvironmentObject private var store: ParcelStore
     @State private var selectedSize = "medium"
+    @State private var writeStatus: String?
 
     private var showTransit: Binding<Bool> {
-        Binding(
-            get: { store.snapshot.preferences.widgetShowTransit },
-            set: { value in
-                store.changePreferences { $0.widgetShowTransit = value }
-            }
-        )
+        Binding(get: { store.snapshot.preferences.widgetShowTransit },
+                set: { store.changePreferences { $0.widgetShowTransit = $0 } })
     }
+
     private var pending: [Parcel] {
         store.snapshot.parcels.filter { $0.type == "delivery" && $0.isPending }
             .sorted { ($0.trackUpdatedAt ?? $0.createdAt) > ($1.trackUpdatedAt ?? $1.createdAt) }
@@ -641,13 +641,19 @@ struct HomeWidgetSettingsPage: View {
         store.snapshot.parcels.filter { $0.type == "delivery" && $0.isTransit }
             .sorted { ($0.trackUpdatedAt ?? $0.createdAt) > ($1.trackUpdatedAt ?? $1.createdAt) }
     }
+    private var slots: Int {
+        selectedSize == "small" ? 2 : (selectedSize == "medium" ? 3 : 7)
+    }
     private var visible: [Parcel] {
-        let slots = selectedSize == "large" ? 10 : 4
         let first = Array(pending.prefix(slots))
         guard showTransit.wrappedValue else { return first }
         return first + Array(transit.prefix(max(0, slots - first.count)))
     }
-    private var title: String { selectedSize == "small" ? "小号" : selectedSize == "large" ? "大号" : "中号" }
+    private var blueGradient: LinearGradient {
+        LinearGradient(colors: [Color(red: 0.23, green: 0.48, blue: 0.95),
+                                Color(red: 0.12, green: 0.29, blue: 0.58)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
 
     var body: some View {
         Form {
@@ -659,103 +665,176 @@ struct HomeWidgetSettingsPage: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+
                 HStack {
                     Spacer(minLength: 0)
-                    VStack(alignment: .leading, spacing: 6) {
-                        if selectedSize == "medium" {
-                            HStack(alignment: .top, spacing: 9) {
-                                VStack(spacing: 4) {
-                                    Image(systemName: "person.crop.circle.fill")
-                                        .font(.system(size: 28)).foregroundStyle(.secondary)
-                                    Text("待取件").font(.caption2)
-                                    Text("\(pending.count)").font(.system(size: 30, weight: .bold))
-                                    if showTransit.wrappedValue {
-                                        Text("在途 \(transit.count)")
-                                            .font(.system(size: 9)).foregroundStyle(.blue)
-                                    }
-                                }
-                                .frame(width: 53)
-                                previewRows
-                            }
-                        } else {
-                            HStack(spacing: 5) {
-                                Text("待取 \(pending.count) 件")
-                                    .font(.system(size: 13, weight: .bold))
-                                if showTransit.wrappedValue {
-                                    Text("· 在途 \(transit.count)")
-                                        .font(.system(size: 10)).foregroundStyle(.blue)
-                                }
-                                Spacer(minLength: 0)
-                                Image(systemName: "person.crop.circle.fill")
-                                    .foregroundStyle(.secondary)
-                            }
-                            previewRows
-                        }
-                        Spacer(minLength: 0)
-                        HStack {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                            Text("打开 App 后更新")
-                            Spacer(minLength: 0)
-                        }
-                        .font(.system(size: 9)).foregroundStyle(.secondary)
-                    }
-                    .padding(12)
-                    .frame(width: selectedSize == "small" ? 156 : 310,
-                           height: selectedSize == "large" ? 337 : 160, alignment: .topLeading)
-                    .background(Color(uiColor: .secondarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 19))
+                    widgetPreview
+                        .frame(width: selectedSize == "small" ? 158 : 310,
+                               height: selectedSize == "large" ? 337 : 161)
                     Spacer(minLength: 0)
                 }
-                .padding(.vertical, 12)
-                Text("这是当前本地数据的预览。桌面小组件实际由 iOS WidgetKit 绘制，尺寸及刷新时间以系统为准。")
+                .padding(.vertical, 10)
+                Text("这是当前 App 本地数据的预览。桌面组件按照相同的蓝色卡片布局绘制，但真实内容需要可用的 App Group 共享快照。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("显示") {
                 Toggle("包含在途包裹", isOn: showTransit)
-                Text("优先显示待取件：小号和中号最多四条，大号最多十条；有剩余位置才显示在途包裹。")
+                Text("优先展示待取件：小号最多两条，中号三条，大号七条；有剩余空间才显示在途包裹。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("共享数据与签名") {
-                LabeledContent("App Groups", value: HomeWidgetSharedStore.isAvailable
-                    ? "当前签名可访问" : "当前签名未配置")
-                Button("重新写入小组件数据") { store.persist() }
-                Text("主 App 和 Widget 扩展必须使用相同且被签名描述文件允许的 App Group。成功安装后，在桌面长按空白处，选择「编辑 → 添加小组件 → 包裹助手」。")
+                LabeledContent("App Groups",
+                               value: HomeWidgetSharedStore.isAvailable
+                                    ? "当前签名可访问" : "当前签名未配置")
+                LabeledContent("构建共享组") {
+                    Text(HomeWidgetSharedStore.configuredGroup.isEmpty
+                         ? "未写入" : HomeWidgetSharedStore.configuredGroup)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.trailing)
+                }
+                if !HomeWidgetSharedStore.isAvailable {
+                    Label("当前签名无法访问该共享组；仅重新写入数据无法修复，须重新签名主 App 与 Widget 扩展。",
+                          systemImage: "exclamationmark.shield")
+                        .font(.footnote).foregroundStyle(.orange)
+                } else if HomeWidgetSharedStore.canReadSnapshot {
+                    Label("已读取共享快照", systemImage: "checkmark.circle.fill")
+                        .font(.footnote).foregroundStyle(.green)
+                } else {
+                    Label("共享组可访问，但没有可读取的包裹快照。", systemImage: "exclamationmark.circle")
+                        .font(.footnote).foregroundStyle(.orange)
+                }
+                Button("重新写入小组件数据") {
+                    store.persist()
+                    writeStatus = "已请求写入共享快照；正在检查…"
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(800))
+                        writeStatus = HomeWidgetSharedStore.canReadSnapshot
+                            ? "共享快照写入成功，请回到桌面等待 WidgetKit 刷新"
+                            : (HomeWidgetSharedStore.isAvailable
+                               ? "未读到共享快照，请检查存储写入情况"
+                               : "当前签名无共享组权限，请先修复签名")
+                    }
+                }
+                if let writeStatus {
+                    Text(writeStatus).font(.footnote).foregroundStyle(.secondary)
+                }
+                Text("主 App 和 Widget 扩展必须分别签名，使用双方描述文件都允许的同一个 App Group。签名器如果替换了扩展标识或权限，即使组件能显示也无法共享数据。")
                     .font(.footnote).foregroundStyle(.secondary)
-                Text("桌面组件读取本地快照，不直接运行电商网页登录。iOS 负责安排更新时间，不能保证固定间隔后台联网。")
+            }
+            Section("安装提示") {
+                Text("桌面长按空白处 → 编辑 → 添加小组件 → 包裹助手。组件读取本地快照，不会后台运行电商 WebView。iOS 决定 WidgetKit 实际刷新时机。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
         .navigationTitle("小组件")
     }
 
+    private var widgetPreview: some View {
+        Group {
+            if selectedSize == "medium" {
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Label("我的取件", systemImage: "shippingbox.fill")
+                            .font(.system(size: 10, weight: .medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text("\(pending.count)")
+                            .font(.system(size: 32, weight: .bold, design: .rounded))
+                        Text("件待取")
+                            .font(.system(size: 10))
+                        if showTransit.wrappedValue {
+                            Text("在途 \(transit.count) 件")
+                                .font(.system(size: 9))
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .padding(10)
+                    .frame(width: 105, height: 137, alignment: .leading)
+                    .background(blueGradient,
+                                in: RoundedRectangle(cornerRadius: 14))
+                    VStack(alignment: .leading, spacing: 2) {
+                        previewRows
+                        Spacer(minLength: 0)
+                        syncFooter
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: selectedSize == "small" ? 5 : 8) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("我的取件清单").font(.system(size: 10))
+                            Text("\(pending.count) 件待领取")
+                                .font(.system(size: selectedSize == "small" ? 15 : 23,
+                                              weight: .bold))
+                        }
+                        Spacer()
+                        Image(systemName: "tray.and.arrow.down.fill")
+                            .font(.system(size: 18))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(10)
+                    .background(blueGradient, in: RoundedRectangle(cornerRadius: 14))
+                    previewRows
+                    Spacer(minLength: 0)
+                    syncFooter
+                }
+            }
+        }
+        .padding(10)
+        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 19))
+    }
+
     private var previewRows: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 1) {
             if visible.isEmpty {
-                Label("暂无包裹", systemImage: "shippingbox")
-                    .font(.caption).foregroundStyle(.secondary)
+                Label("暂时没有包裹", systemImage: "checkmark.seal.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ForEach(visible, id: \.uuid) { parcel in
                     HStack(spacing: 5) {
                         Image(systemName: "shippingbox.fill")
-                            .foregroundStyle(.white)
-                            .font(.system(size: 10))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.blue)
                             .frame(width: 21, height: 21)
-                            .background(.blue, in: RoundedRectangle(cornerRadius: 5))
+                            .background(Color.blue.opacity(0.12),
+                                        in: RoundedRectangle(cornerRadius: 6))
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(parcel.displayCode.isEmpty ? parcel.displayStatus : parcel.displayCode)
-                                .font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                            Text(parcel.displayCode.isEmpty
+                                 ? parcel.displayStatus : parcel.displayCode)
+                                .font(.system(size: 10, weight: .semibold)).lineLimit(1)
                             Text(parcel.itemTitle ?? parcel.trackCompany ?? parcel.stationText)
-                                .font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
+                                .font(.system(size: 8))
+                                .foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
-                        Image(systemName: parcel.isPending ? "circle" : "truck.box")
+                        Image(systemName: parcel.isPending ? "circle" : "truck.box.fill")
+                            .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
-                    .frame(height: selectedSize == "large" ? 28 : 26)
+                    .frame(height: selectedSize == "small" ? 29 : 32)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var syncFooter: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "arrow.clockwise")
+            Text("打开 App 后更新")
+            Spacer(minLength: 0)
+            let remaining = pending.count + (showTransit.wrappedValue ? transit.count : 0)
+                - visible.count
+            if remaining > 0 { Text("+\(remaining) 件") }
+        }
+        .font(.system(size: 8))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
     }
 }
 
