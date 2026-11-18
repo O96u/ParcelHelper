@@ -116,17 +116,28 @@ import Security
     }
 
     static func exchangeWebLogin() async throws {
-        let list = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        let xiaomiCookies = list.filter {
-            $0.domain == "account.xiaomi.com" || $0.domain.hasSuffix(".xiaomi.com")
+        // Keep the login WebView alive while the cookie store finishes persisting.
+        // deviceId is not guaranteed to be present on every Xiaomi login.
+        var user = "", passToken = "", deviceID = ""
+        for attempt in 0..<5 {
+            let list = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
+            let cookies = list.filter {
+                ($0.domain == "account.xiaomi.com" || $0.domain.hasSuffix(".xiaomi.com")) &&
+                ($0.expiresDate == nil || $0.expiresDate! > Date())
+            }
+            user = cookies.first(where: { $0.name == "userId" })?.value ?? ""
+            passToken = cookies.first(where: { $0.name == "passToken" })?.value ?? ""
+            deviceID = cookies.first(where: { $0.name == "deviceId" })?.value ?? ""
+            if !user.isEmpty && !passToken.isEmpty { break }
+            if attempt < 4 { try await Task.sleep(for: .milliseconds(350)) }
         }
-        let user = xiaomiCookies.first(where: { $0.name == "userId" })?.value ?? ""
-        let passToken = xiaomiCookies.first(where: { $0.name == "passToken" })?.value ?? ""
-        let deviceID = xiaomiCookies.first(where: { $0.name == "deviceId" })?.value ?? ""
-        guard !user.isEmpty, !passToken.isEmpty, !deviceID.isEmpty else {
-            throw NativeSyncError.noLogin("没有获取到完整的小米网页登录会话，请重新登录")
+        guard !user.isEmpty, !passToken.isEmpty else {
+            let missing = [user.isEmpty ? "userId" : nil,
+                           passToken.isEmpty ? "passToken" : nil].compactMap { $0 }.joined(separator: "、")
+            throw NativeSyncError.noLogin("尚未取得小米登录 Cookie（缺少 \(missing)），请完成网页验证后重试")
         }
-        let header = "userId=\(user); passToken=\(passToken); deviceId=\(deviceID)"
+        var header = "userId=\(user); passToken=\(passToken)"
+        if !deviceID.isEmpty { header += "; deviceId=\(deviceID)" }
         var req = URLRequest(url: URL(string:
             "https://account.xiaomi.com/pass/serviceLogin?sid=assistant&_json=true&_appName=com.miui.personalassistant&_locale=zh_CN")!,
             timeoutInterval: 20)
@@ -161,10 +172,26 @@ import Security
         guard let http = tokenResponse as? HTTPURLResponse else {
             throw NativeSyncError.badResponse("小米 STS 响应异常")
         }
-        let setCookie = http.value(forHTTPHeaderField: "Set-Cookie") ?? ""
-        let token = setCookie.split(separator: ";")
-            .first(where: { $0.contains("serviceToken=") })?
-            .split(separator: "=").dropFirst().joined(separator: "=") ?? ""
+        // URLSession may normalize multiple Set-Cookie headers. Parse structured
+        // cookies first, then use a targeted fallback for combined headers.
+        let headers = http.allHeaderFields.reduce(into: [String: String]()) { output, item in
+            if let key = item.key as? String { output[key] = String(describing: item.value) }
+        }
+        let responseCookies = HTTPCookie.cookies(withResponseHeaderFields: headers,
+                                                  for: http.url ?? redirectURL)
+        var token = responseCookies.first(where: { $0.name == "serviceToken" })?.value ?? ""
+        if token.isEmpty {
+            let rawHeader = headers.first(where: { $0.key.caseInsensitiveCompare("Set-Cookie") == .orderedSame })?.value ?? ""
+            if let match = rawHeader.range(of: #"(?:^|[;,\n])\s*serviceToken=([^;,\s]+)"#,
+                                           options: .regularExpression) {
+                let cookie = String(rawHeader[match])
+                token = String(cookie.split(separator: "=", maxSplits: 1).last ?? "")
+            }
+        }
+        if token.isEmpty {
+            token = session.configuration.httpCookieStorage?.cookies?
+                .first(where: { $0.name == "serviceToken" })?.value ?? ""
+        }
         guard !token.isEmpty else {
             throw NativeSyncError.noLogin("小米未返回 serviceToken，请检查官方账号验证")
         }
@@ -352,13 +379,14 @@ private struct XiaomiWebLogin: UIViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: config)
         view.allowsBackForwardNavigationGestures = true
         view.load(URLRequest(url: URL(string:
-            "https://account.xiaomi.com/pass/serviceLogin?sid=assistant&_json=true&_appName=com.miui.personalassistant&_locale=zh_CN")!))
+            "https://account.xiaomi.com/pass/serviceLogin?sid=assistant&_appName=com.miui.personalassistant&_locale=zh_CN")!))
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {}
 }
 struct XiaomiAccountPage: View {
     @State private var webLogin = false
+    @State private var loginError: String?
     @State private var busy = false
     @State private var showBind = false
     @State private var authorized = NativeMiExpress.hasSession
@@ -466,23 +494,45 @@ struct XiaomiAccountPage: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("小米快递聚合")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $webLogin, onDismiss: {
-            perform {
-                try await NativeMiExpress.exchangeWebLogin()
-                authorized = NativeMiExpress.hasSession
-                notice = authorized ? "小米账号授权成功" : "小米登录未完成"
-            }
-        }) {
+        .sheet(isPresented: $webLogin) {
             NavigationStack {
                 XiaomiWebLogin()
                     .navigationTitle("小米账号登录")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("取消") { webLogin = false }
+                                .disabled(busy)
+                        }
                         ToolbarItem(placement: .topBarTrailing) {
-                            Button("完成") { webLogin = false }
+                            Button(busy ? "授权中…" : "完成授权") {
+                                guard !busy else { return }
+                                busy = true
+                                Task {
+                                    defer { busy = false }
+                                    do {
+                                        try await NativeMiExpress.exchangeWebLogin()
+                                        authorized = NativeMiExpress.hasSession
+                                        webLogin = false
+                                        notice = "小米账号授权成功"
+                                    } catch {
+                                        loginError = error.localizedDescription
+                                    }
+                                }
+                            }
+                            .disabled(busy)
                         }
                     }
+                    .alert("小米授权失败", isPresented: Binding(
+                        get: { loginError != nil },
+                        set: { if !$0 { loginError = nil } }
+                    )) {
+                        Button("确定", role: .cancel) { loginError = nil }
+                    } message: {
+                        Text(loginError ?? "")
+                    }
             }
+            .interactiveDismissDisabled(busy)
         }
         .confirmationDialog("解除小米授权？", isPresented: $askRevoke, titleVisibility: .visible) {
             Button("解除授权", role: .destructive) {
