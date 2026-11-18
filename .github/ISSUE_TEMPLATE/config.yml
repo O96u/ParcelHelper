@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Releases 与安装说明
+    url: https://github.com/O96u/ParcelHelper/releases
+    about: 下载 ParcelHelper.ipa 并查看各版本更新日志

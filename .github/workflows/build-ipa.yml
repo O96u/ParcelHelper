@@ -1,0 +1,142 @@
+name: Build ParcelHelper IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: parcelhelper-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Determine next release version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          if [[ -z "$latest" ]]; then
+            version="1.0.0"
+            build_number=1000
+            previous_tag=""
+          elif [[ ! "$latest" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Unexpected release tag: $latest" >&2
+            exit 1
+          else
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            next_patch=$((10#$patch + 1))
+            version="$major.$minor.$next_patch"
+            build_number=$((1000 + next_patch))
+            previous_tag="$latest"
+          fi
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
+          echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
+          echo "Next formal IPA: v$version (build $build_number)"
+
+      - name: Generate dark appearance icon (Swift)
+        run: |
+          swift scripts/create_dark_icon.swift
+
+      - name: Show Xcode configuration
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project ParcelHelper.xcodeproj
+
+      - name: Build iOS app and Live Activity extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild \
+            -project ParcelHelper.xcodeproj \
+            -scheme ParcelHelper \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            MARKETING_VERSION="$APP_VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build 2>&1 | tee build/xcodebuild.log
+
+      - name: Validate bundles and pack IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$PWD/build/DerivedData/Build/Products/Release-iphoneos/ParcelHelper.app"
+          WIDGET_PATH="$APP_PATH/PlugIns/ParcelHelperWidget.appex"
+          test -f "$APP_PATH/Info.plist"
+          test -f "$APP_PATH/ParcelHelper"
+          test -d "$WIDGET_PATH"
+          test -f "$WIDGET_PATH/Info.plist"
+          test -f "$APP_PATH/Assets.car"
+          for bundle in "$APP_PATH" "$WIDGET_PATH"; do
+            for key in CFBundleShortVersionString CFBundleVersion; do
+              test "$(/usr/libexec/PlistBuddy -c "Print :$key" "$bundle/Info.plist")" = "$([[ "$key" == CFBundleVersion ]] && echo "$BUILD_NUMBER" || echo "$APP_VERSION")"
+            done
+          done
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "com.muxui.ParcelHelper"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$WIDGET_PATH/Info.plist")" = "com.muxui.ParcelHelper.widget"
+          mkdir -p build/package/Payload
+          ditto "$APP_PATH" build/package/Payload/ParcelHelper.app
+          (cd build/package && /usr/bin/zip -qry ../ParcelHelper.ipa Payload)
+          (cd build && shasum -a 256 ParcelHelper.ipa > ParcelHelper.ipa.sha256)
+          echo "Created ParcelHelper.ipa (unsigned build) v$APP_VERSION build $BUILD_NUMBER"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ParcelHelper-v${{ env.APP_VERSION }}
+          path: |
+            build/ParcelHelper.ipa
+            build/ParcelHelper.ipa.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift scripts/generate_release_notes.swift
+          test -s build/release-notes.md
+          cat build/release-notes.md
+
+      - name: Publish official GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "v$APP_VERSION" \
+            build/ParcelHelper.ipa \
+            build/ParcelHelper.ipa.sha256 \
+            --title "ParcelHelper v$APP_VERSION" \
+            --notes-file build/release-notes.md \
+            --target "$GITHUB_SHA" \
+            --latest
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ParcelHelper-build-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 14

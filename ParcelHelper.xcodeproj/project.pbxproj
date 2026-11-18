@@ -1,0 +1,114 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+/* Begin PBXBuildFile section */
+B0BEFDDDE903BB4166C09241 /* NativeTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BEFDDDE903BB4166C09241 /* NativeTracking.swift */; };
+B0BEFDDDE903BB4166C09242 /* NativeTrackSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BEFDDDE903BB4166C09242 /* NativeTrackSearch.swift */; };
+B0BEFDDDE903BB4166C09243 /* CourierBrandView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BEFDDDE903BB4166C09243 /* CourierBrandView.swift */; };
+7D18E61684D71A2964816006 /* MiExpressAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E3977136D3EAD4410F21BCC /* MiExpressAccount.swift */; };
+5F18E61684D71A2964816006 /* NativeWebOrders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E3977136D3EAD4410F21BCC /* NativeWebOrders.swift */; };
+2B6A956D2E9A4D06905D16E2 /* FengchaoAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF4D07490938B2CEB5D51CC5 /* FengchaoAccount.swift */; };
+3B2A956D2E9A4D06905D16E6 /* NativePlatformSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF4D07490938B2CEB5D51CC2 /* NativePlatformSync.swift */; };
+4F321D8587A0F693B08CA658 /* PddOrderSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = E385C2471734C3B4EABB9D31 /* PddOrderSync.swift */; };
+E34AB1E05CE7F3C7312BD52B /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C22586ABB49CABC9DB8DB398 /* Models.swift */; };
+DF5A0793C83BEF9B07131E10 /* Storage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D25B3DFF3CBB607EE2ABBCB /* Storage.swift */; };
+AD0B25562A90F5A69ABC520B /* Parser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87085A88CB810C3CDB9629F /* Parser.swift */; };
+928A4CD8836FB9E5339073C9 /* DouyinImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE8983E0D84BB7999A16D2F9 /* DouyinImport.swift */; };
+6C18E199E4C8C2EA221254DF /* DouyinImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1573DDA33EFF0CF9562E8E77 /* DouyinImportView.swift */; };
+0240B0DCDBA3B222AFDB81F7 /* PlatformImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B73D94C70574D081904D19 /* PlatformImportView.swift */; };
+5A3A88CFBCC17854EA23A9C7 /* Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 400A8F68E09655E4B40FEBF6 /* Notifications.swift */; };
+801FBB7CEC422855D18A151A /* AppExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70F19158D286C45E943F9219 /* AppExtras.swift */; };
+259A366C430C0B9E4267C139 /* PlatformAccounts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C765F4C933E54B8994E2213 /* PlatformAccounts.swift */; };
+9BBF3E58AE0FB4F4232B119E /* LiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2926A8ACE643A96B16484A16 /* LiveActivity.swift */; };
+FFEBEB748F58354955C9C7D2 /* ParcelHelperApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 550C102390B2D6444F8EA73F /* ParcelHelperApp.swift */; };
+A141B55FF4361F09E5805E2C /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = A74F21807EBB5E63D99D1ABF /* Views.swift */; };
+C4B49781E0DB8F123F8F933A /* NativeSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A49024F7832EA5EA079BA77 /* NativeSettings.swift */; };
+674C73B61DA711F1F056C330 /* ParcelShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE20F1DD2679A6B09378AC4B /* ParcelShortcuts.swift */; };
+629A81EC42B5B0D498E59EAE /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C22586ABB49CABC9DB8DB398 /* Models.swift */; };
+EF49428AA44322C5D2775690 /* Storage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D25B3DFF3CBB607EE2ABBCB /* Storage.swift */; };
+98DAC6AE20FBDAE3FCC64B8B /* LiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2926A8ACE643A96B16484A16 /* LiveActivity.swift */; };
+13B06E2784C71BEF4A95A5DE /* ParcelWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3135804A50423AED36ACCC /* ParcelWidget.swift */; };
+648CAB8278C430F6C29DB74D /* Widget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 1B442E42980596EBCD246D51; settings = { ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+CBB9BC270A9567B2E3ACB369 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A790BB479B2477E3A634A1EB; };
+ B2FF128A07DC9447A3DAE121 /* Assets.xcassets in Widget Resources */ = {isa = PBXBuildFile; fileRef = A790BB479B2477E3A634A1EB; };
+/* End PBXBuildFile section */
+/* Begin PBXContainerItemProxy section */
+431387EB7262E1CFC79B125E = {isa = PBXContainerItemProxy; containerPortal = 46F86FAA6BBF9AC94A7E4595; proxyType = 1; remoteGlobalIDString = 0661F517A86C8F5C87C0EDBA; remoteInfo = ParcelHelperWidget; };
+/* End PBXContainerItemProxy section */
+/* Begin PBXCopyFilesBuildPhase section */
+425893CE4AEDF359C5F0F0D7 /* Embed App Extensions */ = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = (648CAB8278C430F6C29DB74D,); name = "Embed App Extensions"; runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXCopyFilesBuildPhase section */
+/* Begin PBXFileReference section */
+90BEFDDDE903BB4166C09241 /* NativeTracking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTracking.swift; sourceTree = "<group>"; };
+90BEFDDDE903BB4166C09242 /* NativeTrackSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTrackSearch.swift; sourceTree = "<group>"; };
+90BEFDDDE903BB4166C09243 /* CourierBrandView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CourierBrandView.swift; sourceTree = "<group>"; };
+9E3977136D3EAD4410F21BCC /* MiExpressAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiExpressAccount.swift; sourceTree = "<group>"; };
+8E3977136D3EAD4410F21BCC /* NativeWebOrders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeWebOrders.swift; sourceTree = "<group>"; };
+DF4D07490938B2CEB5D51CC5 /* FengchaoAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FengchaoAccount.swift; sourceTree = "<group>"; };
+CF4D07490938B2CEB5D51CC2 /* NativePlatformSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlatformSync.swift; sourceTree = "<group>"; };
+E385C2471734C3B4EABB9D31 /* PddOrderSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PddOrderSync.swift; sourceTree = "<group>"; };
+C22586ABB49CABC9DB8DB398 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+6D25B3DFF3CBB607EE2ABBCB /* Storage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage.swift; sourceTree = "<group>"; };
+E87085A88CB810C3CDB9629F /* Parser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Parser.swift; sourceTree = "<group>"; };
+DE8983E0D84BB7999A16D2F9 /* DouyinImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinImport.swift; sourceTree = "<group>"; };
+1573DDA33EFF0CF9562E8E77 /* DouyinImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinImportView.swift; sourceTree = "<group>"; };
+13B73D94C70574D081904D19 /* PlatformImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformImportView.swift; sourceTree = "<group>"; };
+400A8F68E09655E4B40FEBF6 /* Notifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifications.swift; sourceTree = "<group>"; };
+70F19158D286C45E943F9219 /* AppExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppExtras.swift; sourceTree = "<group>"; };
+3C765F4C933E54B8994E2213 /* PlatformAccounts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformAccounts.swift; sourceTree = "<group>"; };
+2926A8ACE643A96B16484A16 /* LiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivity.swift; sourceTree = "<group>"; };
+550C102390B2D6444F8EA73F /* ParcelHelperApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParcelHelperApp.swift; sourceTree = "<group>"; };
+A74F21807EBB5E63D99D1ABF /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
+8A49024F7832EA5EA079BA77 /* NativeSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSettings.swift; sourceTree = "<group>"; };
+BE20F1DD2679A6B09378AC4B /* ParcelShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParcelShortcuts.swift; sourceTree = "<group>"; };
+FF3135804A50423AED36ACCC /* ParcelWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParcelWidget.swift; sourceTree = "<group>"; };
+6E5B3F6DB88B2CB82F703A3A /* AppInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = AppInfo.plist; sourceTree = "<group>"; };
+4E15FE3B9739647473FD464B /* WidgetInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = WidgetInfo.plist; sourceTree = "<group>"; };
+991873A60A1AD7077BC119A5 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = App.entitlements; sourceTree = "<group>"; };
+7F9FFBB322CED223E05E4B48 /* Widget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Widget.entitlements; sourceTree = "<group>"; };
+A790BB479B2477E3A634A1EB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+84337AD8D27FCD69AF2C4FC2 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ParcelHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+1B442E42980596EBCD246D51 = {isa = PBXFileReference; explicitFileType = wrapper.app-extension; includeInIndex = 0; path = ParcelHelperWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+/* Begin PBXFrameworksBuildPhase section */
+7F27D1D65CE8422A6ACF33A0 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+CEA0DA7B2993D5502A83654F = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+E8543F1CDED26524254ECEB6 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (CBB9BC270A9567B2E3ACB369,); runOnlyForDeploymentPostprocessing = 0; };
+ B2FF128A07DC9447A3DAE122 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (B2FF128A07DC9447A3DAE121,); runOnlyForDeploymentPostprocessing = 0; };
+/* Begin PBXGroup section */
+1629A0BB4117BEFC577EF28D = {isa = PBXGroup; children = (D1D0524B025E57AFFF263442, B46A6AFB1DC88CE23F6E63F1, 206D9AE6A6433106E0AF6963, 887A6F90336FF23D95C3914B, 2F3A6B1E78F896718625FF06, ); sourceTree = "<group>"; };
+D1D0524B025E57AFFF263442 = {isa = PBXGroup; children = (E87085A88CB810C3CDB9629F, DE8983E0D84BB7999A16D2F9, 1573DDA33EFF0CF9562E8E77, 13B73D94C70574D081904D19, 400A8F68E09655E4B40FEBF6, 70F19158D286C45E943F9219, CF4D07490938B2CEB5D51CC2, DF4D07490938B2CEB5D51CC5, 8E3977136D3EAD4410F21BCC, 90BEFDDDE903BB4166C09241, 90BEFDDDE903BB4166C09242, 90BEFDDDE903BB4166C09243, 9E3977136D3EAD4410F21BCC, E385C2471734C3B4EABB9D31, 3C765F4C933E54B8994E2213, 2926A8ACE643A96B16484A16, 550C102390B2D6444F8EA73F, A74F21807EBB5E63D99D1ABF, 8A49024F7832EA5EA079BA77, BE20F1DD2679A6B09378AC4B, ); path = App; sourceTree = "<group>"; };
+B46A6AFB1DC88CE23F6E63F1 = {isa = PBXGroup; children = (C22586ABB49CABC9DB8DB398, 6D25B3DFF3CBB607EE2ABBCB, ); path = Shared; sourceTree = "<group>"; };
+206D9AE6A6433106E0AF6963 = {isa = PBXGroup; children = (FF3135804A50423AED36ACCC, ); path = Widget; sourceTree = "<group>"; };
+887A6F90336FF23D95C3914B = {isa = PBXGroup; children = (6E5B3F6DB88B2CB82F703A3A, 4E15FE3B9739647473FD464B, 991873A60A1AD7077BC119A5, 7F9FFBB322CED223E05E4B48, A790BB479B2477E3A634A1EB, ); path = Resources; sourceTree = "<group>"; };
+2F3A6B1E78F896718625FF06 = {isa = PBXGroup; children = (84337AD8D27FCD69AF2C4FC2, 1B442E42980596EBCD246D51, ); name = Products; sourceTree = "<group>"; };
+/* End PBXGroup section */
+/* Begin PBXNativeTarget section */
+E3435DDA2687639586BF0B70 = {isa = PBXNativeTarget; buildConfigurationList = 1D97B77EAD2380603A3F2A82; buildPhases = (EF596FBB90AC90528023F194, 7F27D1D65CE8422A6ACF33A0, E8543F1CDED26524254ECEB6, 425893CE4AEDF359C5F0F0D7, ); buildRules = (); dependencies = (E54DEBD65D8142E7785275AA ,); name = ParcelHelper; productName = ParcelHelper; productReference = 84337AD8D27FCD69AF2C4FC2; productType = "com.apple.product-type.application"; };
+0661F517A86C8F5C87C0EDBA = {isa = PBXNativeTarget; buildConfigurationList = 8B429FCF8E65333911689421; buildPhases = (9E6B33F13E404E58BBF7DA68, CEA0DA7B2993D5502A83654F, B2FF128A07DC9447A3DAE122, ); buildRules = (); dependencies = (); name = ParcelHelperWidget; productName = ParcelHelperWidget; productReference = 1B442E42980596EBCD246D51; productType = "com.apple.product-type.app-extension"; };
+/* End PBXNativeTarget section */
+/* Begin PBXProject section */
+46F86FAA6BBF9AC94A7E4595 = {isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = { E3435DDA2687639586BF0B70 = { CreatedOnToolsVersion = 16.0; }; 0661F517A86C8F5C87C0EDBA = { CreatedOnToolsVersion = 16.0; }; }; }; buildConfigurationList = 1F4E3D13C2320EDA50221924; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh_CN; hasScannedForEncodings = 0; knownRegions = (en, zh_CN, Base); mainGroup = 1629A0BB4117BEFC577EF28D; productRefGroup = 2F3A6B1E78F896718625FF06; projectDirPath = ""; projectRoot = ""; targets = (E3435DDA2687639586BF0B70, 0661F517A86C8F5C87C0EDBA, ); };
+/* End PBXProject section */
+/* Begin PBXSourcesBuildPhase section */
+EF596FBB90AC90528023F194 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (E34AB1E05CE7F3C7312BD52B, DF5A0793C83BEF9B07131E10, AD0B25562A90F5A69ABC520B, 928A4CD8836FB9E5339073C9, 6C18E199E4C8C2EA221254DF, 0240B0DCDBA3B222AFDB81F7, 5A3A88CFBCC17854EA23A9C7, 801FBB7CEC422855D18A151A, 3B2A956D2E9A4D06905D16E6, 2B6A956D2E9A4D06905D16E2, 5F18E61684D71A2964816006, B0BEFDDDE903BB4166C09241, B0BEFDDDE903BB4166C09242, B0BEFDDDE903BB4166C09243, 7D18E61684D71A2964816006, 4F321D8587A0F693B08CA658, 259A366C430C0B9E4267C139, 9BBF3E58AE0FB4F4232B119E, FFEBEB748F58354955C9C7D2, A141B55FF4361F09E5805E2C, C4B49781E0DB8F123F8F933A, 674C73B61DA711F1F056C330, ); runOnlyForDeploymentPostprocessing = 0; };
+9E6B33F13E404E58BBF7DA68 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (629A81EC42B5B0D498E59EAE, EF49428AA44322C5D2775690, 98DAC6AE20FBDAE3FCC64B8B, 13B06E2784C71BEF4A95A5DE, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+/* Begin PBXTargetDependency section */
+E54DEBD65D8142E7785275AA = {isa = PBXTargetDependency; target = 0661F517A86C8F5C87C0EDBA; targetProxy = 431387EB7262E1CFC79B125E; };
+/* End PBXTargetDependency section */
+/* Begin XCBuildConfiguration section */
+4A43692AD8BCEEB8B727C85B /* Debug */ = {isa = XCBuildConfiguration; buildSettings = { SWIFT_VERSION = 5.9; IPHONEOS_DEPLOYMENT_TARGET = 17.0; CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; }; name = Debug; };
+C28449456A5A705A7479770B /* Release */ = {isa = XCBuildConfiguration; buildSettings = { SWIFT_VERSION = 5.9; IPHONEOS_DEPLOYMENT_TARGET = 17.0; CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; }; name = Release; };
+0615050D04BD2DC4E6CFFAFF /* Debug */ = {isa = XCBuildConfiguration; buildSettings = { SWIFT_VERSION = 5.9; IPHONEOS_DEPLOYMENT_TARGET = 17.0; CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; PRODUCT_BUNDLE_IDENTIFIER = com.muxui.ParcelHelper; PRODUCT_NAME = "$(TARGET_NAME)"; MARKETING_VERSION = 1.0.6; CURRENT_PROJECT_VERSION = 7; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = Resources/AppInfo.plist; CODE_SIGN_ENTITLEMENTS = Resources/App.entitlements; SWIFT_EMIT_LOC_STRINGS = YES; TARGETED_DEVICE_FAMILY = "1,2"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; }; name = Debug; };
+2761849A6D0E26CA4E1817A1 /* Release */ = {isa = XCBuildConfiguration; buildSettings = { SWIFT_VERSION = 5.9; IPHONEOS_DEPLOYMENT_TARGET = 17.0; CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; PRODUCT_BUNDLE_IDENTIFIER = com.muxui.ParcelHelper; PRODUCT_NAME = "$(TARGET_NAME)"; MARKETING_VERSION = 1.0.6; CURRENT_PROJECT_VERSION = 7; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = Resources/AppInfo.plist; CODE_SIGN_ENTITLEMENTS = Resources/App.entitlements; SWIFT_EMIT_LOC_STRINGS = YES; TARGETED_DEVICE_FAMILY = "1,2"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; }; name = Release; };
+F6BAC4A516C70E3DCDCADAFC /* Debug */ = {isa = XCBuildConfiguration; buildSettings = { SWIFT_VERSION = 5.9; IPHONEOS_DEPLOYMENT_TARGET = 17.0; CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; PRODUCT_BUNDLE_IDENTIFIER = com.muxui.ParcelHelper.widget; PRODUCT_NAME = "$(TARGET_NAME)"; MARKETING_VERSION = 1.0.6; CURRENT_PROJECT_VERSION = 7; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = Resources/WidgetInfo.plist; CODE_SIGN_ENTITLEMENTS = Resources/Widget.entitlements; SWIFT_EMIT_LOC_STRINGS = YES; TARGETED_DEVICE_FAMILY = "1,2"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; APPLICATION_EXTENSION_API_ONLY = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; }; name = Debug; };
+2400F71B974292CB576F1869 /* Release */ = {isa = XCBuildConfiguration; buildSettings = { SWIFT_VERSION = 5.9; IPHONEOS_DEPLOYMENT_TARGET = 17.0; CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; PRODUCT_BUNDLE_IDENTIFIER = com.muxui.ParcelHelper.widget; PRODUCT_NAME = "$(TARGET_NAME)"; MARKETING_VERSION = 1.0.6; CURRENT_PROJECT_VERSION = 7; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = Resources/WidgetInfo.plist; CODE_SIGN_ENTITLEMENTS = Resources/Widget.entitlements; SWIFT_EMIT_LOC_STRINGS = YES; TARGETED_DEVICE_FAMILY = "1,2"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; APPLICATION_EXTENSION_API_ONLY = YES; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; }; name = Release; };
+/* End XCBuildConfiguration section */
+/* Begin XCConfigurationList section */
+1F4E3D13C2320EDA50221924 = {isa = XCConfigurationList; buildConfigurations = (4A43692AD8BCEEB8B727C85B, C28449456A5A705A7479770B, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+1D97B77EAD2380603A3F2A82 = {isa = XCConfigurationList; buildConfigurations = (0615050D04BD2DC4E6CFFAFF, 2761849A6D0E26CA4E1817A1, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+8B429FCF8E65333911689421 = {isa = XCConfigurationList; buildConfigurations = (F6BAC4A516C70E3DCDCADAFC, 2400F71B974292CB576F1869, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+}; rootObject = 46F86FAA6BBF9AC94A7E4595; }
