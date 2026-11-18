@@ -136,9 +136,9 @@ jobs:
           if [[ -f build/xcodebuild.log ]]; then
             {
               echo '## Xcode build errors'
-              echo '\`\`\`text'
+              echo '```text'
               grep -nE 'error:|\*\* BUILD FAILED \*\*|fatal error:' build/xcodebuild.log | tail -n 60 || true
-              echo '\`\`\`'
+              echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
