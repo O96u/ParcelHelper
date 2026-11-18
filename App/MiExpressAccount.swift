@@ -57,11 +57,13 @@ import Security
             ($0.domain == "account.xiaomi.com" || $0.domain.hasSuffix(".xiaomi.com")) &&
             ($0.expiresDate == nil || $0.expiresDate! > Date())
         }
-        let cUserId = (assistant + account).first(where: { $0.name == "cUserId" })?.value ?? ""
-        let userId = account.first(where: { $0.name == "userId" })?.value ?? ""
-        guard !cUserId.isEmpty || !userId.isEmpty else { return false }
+        // Xiaomi's assistant API expects cUserId. An account-domain userId is
+        // not interchangeable and can produce an apparently logged-in account
+        // whose business API immediately rejects every request (e.g. 4001).
+        let cUserId = (assistant + account).first(where: { $0.name == "cUserId" && !$0.value.isEmpty })?.value ?? ""
+        guard !cUserId.isEmpty else { return false }
         KeychainData.store("token", token)
-        KeychainData.store("user", cUserId.isEmpty ? userId : cUserId)
+        KeychainData.store("user", cUserId)
         return true
     }
 
@@ -256,8 +258,12 @@ import Security
                 "小米账号会话已读取，但 assistant 服务尚未签发 serviceToken（HTTP \\(http.statusCode)）。请确认账号已完成安全验证；若仍失败，可能是小米限制了第三方 WebView 的 STS 授权。"
             )
         }
+        let cUserId = str(result["cUserId"])
+        guard !cUserId.isEmpty else {
+            throw NativeSyncError.noLogin("小米 STS 已返回令牌，但缺少快递服务需要的 cUserId，请重新扫码完成 assistant 授权")
+        }
         KeychainData.store("token", token)
-        KeychainData.store("user", str(result["cUserId"]).isEmpty ? user : str(result["cUserId"]))
+        KeychainData.store("user", cUserId)
     }
 
     private static func wrap(_ data: [String: Any], userID: String) -> [String: Any] {
@@ -284,7 +290,9 @@ import Security
     private static func post(_ path: String, body: [String: Any]) async throws -> [String: Any] {
         let token = KeychainData.load("token")
         let user = KeychainData.load("user")
-        guard !token.isEmpty else { throw NativeSyncError.noLogin("请先完成小米账号授权") }
+        guard !token.isEmpty, !user.isEmpty else {
+            throw NativeSyncError.noLogin("小米快递服务缺少 serviceToken 或 cUserId，请解除授权后重新登录")
+        }
         guard path.hasPrefix("/cpa/express/") else {
             throw NativeSyncError.badResponse("小米详情路径不符合预期")
         }
@@ -322,7 +330,22 @@ import Security
             result["data"] = decodedJSON
         }
         guard isSuccess(result) else {
-            throw NativeSyncError.unavailable("小米业务返回失败（" + str(result["code"]) + "）")
+            // Do not log response bodies or secrets. Preserve the endpoint and
+            // server code so failed phone binding can be distinguished from
+            // authentication and parcel-list errors.
+            let status = json(result["status"])
+            let errorCode = first(result, ["code", "error_code"]).isEmpty
+                ? first(status, ["code"]) : first(result, ["code", "error_code"])
+            let endpoint = path.hasSuffix("/getList") ? "包裹列表"
+                : path.hasSuffix("/query") ? "物流详情"
+                : path.hasSuffix("/sendVerificationCode") ? "发送验证码"
+                : path.hasSuffix("/checkVerificationCode") ? "校验验证码"
+                : path.hasSuffix("/bind") ? "绑定手机号" : "快递服务"
+            let hint = errorCode == "4001"
+                ? "。可能是 assistant 会话不被服务端接受，建议解除小米授权后重新扫码登录；若仍为 4001，说明该服务可能限制第三方客户端"
+                : "。请检查官方账号验证与服务状态"
+            throw NativeSyncError.unavailable("小米" + endpoint + "失败（服务代码 " +
+                                              (errorCode.isEmpty ? "未知" : errorCode) + "）" + hint)
         }
         return result
     }
