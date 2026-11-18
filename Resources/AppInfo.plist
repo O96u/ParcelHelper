@@ -19,6 +19,8 @@
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>ParcelHelperWidgetGroup</key>
+	<string>$(PH_WIDGET_GROUP)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
