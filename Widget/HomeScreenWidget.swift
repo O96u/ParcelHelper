@@ -141,6 +141,7 @@ private struct ParcelWidgetRow: View {
     let item: HomeWidgetParcel
     let transit: Bool
     let compact: Bool
+    var dense = false
 
     private var code: String {
         let trimmed = item.code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -156,8 +157,9 @@ private struct ParcelWidgetRow: View {
     var body: some View {
         HStack(spacing: compact ? 5 : 7) {
             PickupCarrierMark(company: item.company, accent: ParcelWidgetTheme.blue)
-                .scaleEffect(compact ? 0.76 : 0.92)
-                .frame(width: compact ? 24 : 29, height: compact ? 24 : 29)
+                .scaleEffect(dense ? 0.70 : (compact ? 0.76 : 0.92))
+                .frame(width: dense ? 22 : (compact ? 24 : 29),
+                       height: dense ? 22 : (compact ? 24 : 29))
             VStack(alignment: .leading, spacing: 1) {
                 Text(code)
                     .font(.system(size: compact ? 10 : 12, weight: .semibold))
@@ -188,7 +190,7 @@ private struct ParcelWidgetRow: View {
                 .accessibilityLabel("标记 \(code) 为已取")
             }
         }
-        .frame(height: compact ? 29 : 33)
+        .frame(height: dense ? 22 : (compact ? 29 : 33))
     }
 }
 
@@ -252,23 +254,109 @@ private struct ParcelHomeContent: View {
         }
     }
 
+    // A full-width header avoids the large blank right column when the user
+    // has only one parcel. More parcels automatically use a denser list.
     private var mediumContent: some View {
-        HStack(alignment: .top, spacing: 9) {
-            ParcelWidgetHero(model: entry.model, compact: false, vertical: true)
-                .frame(width: 115)
-            VStack(alignment: .leading, spacing: 2) {
-                if rows.isEmpty {
-                    emptyContent
-                } else {
+        VStack(alignment: .leading, spacing: 4) {
+            mediumHeader
+            if rows.isEmpty {
+                emptyContent
+            } else if rows.count == 1 {
+                featuredMediumRow(item: rows[0].0, transit: rows[0].1)
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
                     ForEach(rows.indices, id: \.self) { index in
-                        ParcelWidgetRow(item: rows[index].0, transit: rows[index].1,
-                                        compact: false)
+                        ParcelWidgetRow(item: rows[index].0,
+                                        transit: rows[index].1,
+                                        compact: true, dense: true)
                     }
                 }
-                Spacer(minLength: 0)
-                footer
+            }
+            Spacer(minLength: 0)
+            footer
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var mediumHeader: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "shippingbox.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .background(.white.opacity(0.17),
+                            in: RoundedRectangle(cornerRadius: 9))
+            Text("我的取件")
+                .font(.system(size: 11, weight: .semibold))
+            Spacer(minLength: 2)
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text("\(entry.model.pendingTotal)")
+                    .font(.system(size: 23, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                Text("件待取")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            if entry.model.showTransit {
+                Text("· 在途 \(entry.model.transitTotal)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.86))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
         }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .frame(height: rows.count >= 3 ? 43 : 49)
+        .frame(maxWidth: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(LinearGradient(colors: [ParcelWidgetTheme.blue,
+                                              ParcelWidgetTheme.deepBlue],
+                                     startPoint: .topLeading,
+                                     endPoint: .bottomTrailing))
+        }
+    }
+
+    private func featuredMediumRow(item: HomeWidgetParcel, transit: Bool) -> some View {
+        HStack(spacing: 10) {
+            PickupCarrierMark(company: item.company, accent: ParcelWidgetTheme.blue)
+                .scaleEffect(1.08)
+                .frame(width: 35, height: 35)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                     ? (transit ? "运输中" : "待取件") : item.code)
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(!item.title.isEmpty ? item.title :
+                     (!item.station.isEmpty ? item.station : item.company))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if !item.station.isEmpty && item.station != item.title {
+                    Text(item.station)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            if transit {
+                Label("在途", systemImage: "truck.box.fill")
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(ParcelWidgetTheme.blue)
+            } else {
+                Button(intent: MarkParcelPickedIntent(parcelID: item.id)) {
+                    Image(systemName: "circle")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("标记 \(item.code) 为已取")
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
     }
 
     private var emptyContent: some View {
