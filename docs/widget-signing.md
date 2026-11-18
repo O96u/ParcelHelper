@@ -17,6 +17,17 @@ ParcelHelper 现已包含两种不同的 WidgetKit 内容：
 
 不要直接复制别人证书详情中的 Group 名称。Group ID 必须属于自己有效的描述文件；第三方签名不保证 App Group 数据共享可用。
 
+## 自己的 App Group：最简步骤
+
+要使用桌面小组件，**需要在 GitHub 手动构建时输入自己证书允许的 App Groups**。成功签名的小组件不必使用仓库示例组。
+
+1. 打开 [Build ParcelHelper IPA](https://github.com/O96u/ParcelHelper/actions/workflows/build-ipa.yml)，点击 **Run workflow**。
+2. 在 `widget_group` 中填入**你自己签名描述文件列出的** `group.xxx`，点击运行。不要照抄他人或无关应用的 Group。
+3. 下载生成的 IPA，使用 LCSign 等签名工具保留 Widget 扩展，并确认主 App、Widget 使用同一个被允许的 App Group。
+4. 安装后在 App 的「设置 → 小组件」确认「当前签名可访问」，再点击「重新写入小组件数据」。
+
+如果经常从 `main` 自动构建，可以在仓库 Actions Variables 配置 `PH_WIDGET_GROUP` 作为默认值；手动输入的组名优先于变量。GitHub 的 IPA 构建本身不会自动颁发签名权限。
+
 ## 构建配置
 
 Xcode 工程中的 `PH_WIDGET_GROUP` 默认是示例值 `group.com.muxui.ParcelHelper`，**并不代表该 Group 已获你的证书授权**。真正用自有 Xcode 签名时，应为两个 target 使用自己在 Apple Developer 中启用的相同 Group。
@@ -61,3 +72,6 @@ GitHub Actions 构建未签名 IPA 时，可通过以下两种方式指定**你�
 5. 看数量与取件列表是否一致；点圆圈测试已取操作，打开 App 确认数据保存。
 
 如找不到「包裹助手」，优先排查 **Widget 扩展单独签名、Bundle ID、扩展的 provisioning profile**，而不是刷新间隔。
+## 只保留最新构建
+
+仓库的 GitHub Actions 为同一分支设置了 `concurrency.cancel-in-progress: true`。当 `main` 新提交或再次运行 Workflow，旧的**排队中/执行中**任务会自动取消，只继续最新一次；不会删除历史任务记录或已经发布的 Release。手动用专用 App Group 构建时，请避免在它执行期间继续向 `main` 推送，否则也会被最新运行取消。
