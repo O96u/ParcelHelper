@@ -55,7 +55,9 @@
 
 **GitHub Actions 自动构建**
 
-- 普通提交到 `main` **不会自动构建或发布 IPA**。只有推送形如 `v1.0.5` 的 Git Tag 时，`.github/workflows/build-ipa.yml` 才会执行 `xcodebuild`，生成 `ParcelHelper.ipa` 并发布到 [Releases](https://github.com/O96u/ParcelHelper/releases)；版本号直接取 Tag，不自动递增。
+- 每次向 `main` 推送代码（包括合并 PR）都会自动运行 `.github/workflows/build-ipa.yml`，构建 `ParcelHelper.ipa` 并在成功后发布到 [Releases](https://github.com/O96u/ParcelHelper/releases)。也可以从 Actions 手动运行工作流。
+- 不需要手动创建或推送 Git Tag。版本号由 Actions 自动生成，使用纯数字 `1.1.<运行序号>`（例如 `1.1.12`，无 `v` 前缀）；成功构建后会自动创建对应的 Git Tag 和 Release。失败的构建不会发布新 Release，但仍保留 Actions 日志。重新运行同一次构建会覆盖对应 Release 的 IPA。
+
 - 文件名不含 `unsigned`，但仍须使用有效证书签名后才能安装到普通 iPhone。第三方重签名可能影响快捷指令、通知和实时活动扩展。
 - 正式版本从 **v1.0.0** 起编号；后续每版根据实际提交内容生成更新日志，按需使用「新增 / 修改 / 修复 / 优化 / 移除 / 文档 / 构建与发布」等栏目，不显示没有对应改动的空栏目。Release 版本号不代表 Apple 签名或功能兼容性保证。发布时请确认 Tag 指向要发布的提交。
 
