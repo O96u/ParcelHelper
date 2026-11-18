@@ -217,15 +217,7 @@ private enum SyncJSON {
         let noPickup = ["转运中心", "分拨中心", "集散中心", "运转中心", "揽收", "正在派送", "派件中"]
         // "已签收" can mean an express station signed on behalf of the user.
         // Only unequivocal pickup wording should mark an item as collected.
-        let signedTerms = ["已取走", "您已取件", "本人签收",
-                           "已领取", "取件完成", "用户已取", "取件成功",
-                           "已被取走", "已被领取", "用户取件成功", "收件人已取"]
-        let waitingForSignature = ["待签收", "等待签收", "签收中",
-                                   "快递员已取件", "揽收取件", "待取件",
-                                   "未取件", "请取件"].contains(where: { text.contains($0) })
-        if !waitingForSignature && signedTerms.contains(where: { text.contains($0) }) {
-            return "picked"
-        }
+        if Parcel.confirmsRecipientPickup(text) { return "picked" }
         if noPickup.contains(where: { text.contains($0) }) { return "transit" }
         if ["待取件", "已到站", "已暂存", "已存放", "已放入", "已代收", "送达代收点",
             "请及时取", "请及时领取", "凭取件码", "待领取", "快递柜", "驿站", "代收点"]
