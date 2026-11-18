@@ -57,7 +57,7 @@ struct PddOrderSyncPage: View {
         }
     }
 
-    @MainActor private static func save(_ orders: [PddDetectedOrder]) -> Int {
+    @MainActor fileprivate static func save(_ orders: [PddDetectedOrder]) -> Int {
         let incoming = orders.compactMap { order -> NativeSyncParcel? in
             let mail = order.trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines)
             let code = order.pickupCode ?? ""
@@ -79,6 +79,25 @@ struct PddOrderSyncPage: View {
     }
 }
 
+// The same official order reader powers both the visible manual action and
+// the foreground automatic sync. There are no separate parsing paths.
+struct PddOrdersAutoSyncReader: View {
+    let onComplete: (String, Bool) -> Void
+
+    var body: some View {
+        PddOrdersWebView { result in
+            switch result {
+            case .success(let orders, let discovered):
+                let changed = PddOrderSyncPage.save(orders)
+                let message = "拼多多购物订单：发现 \\(discovered) 笔，核验 \\(orders.count) 笔，新增或更新 \\(changed) 件。"
+                onComplete(message, true)
+            case .failure(let reason):
+                onComplete("拼多多购物订单：" + reason, false)
+            }
+        } onProgress: { _ in }
+    }
+}
+
 private struct PddOrdersWebView: UIViewRepresentable {
     let onResult: (PddSyncResult) -> Void
     let onProgress: (String) -> Void
@@ -91,13 +110,29 @@ private struct PddOrdersWebView: UIViewRepresentable {
         config.websiteDataStore = .default()
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
         view.load(URLRequest(url: URL(string: "https://mobile.yangkeduo.com/orders.html")!))
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {}
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        // Never open PDD's custom-app schemes during an order refresh.
+        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            let scheme = action.request.url?.scheme?.lowercased()
+            decisionHandler(scheme == "https" || scheme == "http" || scheme == "about" ? .allow : .cancel)
+        }
+        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                     for action: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard action.targetFrame == nil,
+                  let scheme = action.request.url?.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http" else { return nil }
+            webView.load(action.request)
+            return nil
+        }
         private let onResult: (PddSyncResult) -> Void
         private let onProgress: (String) -> Void
         private enum Stage { case list, detail }
@@ -106,6 +141,7 @@ private struct PddOrdersWebView: UIViewRepresentable {
         private var enriched: [PddDetectedOrder] = []
         private var cursor = 0
         private var discovered = 0
+        private var emptyAttempts = 0
         private var requestID = 0
         private var finished = false
 
@@ -160,6 +196,15 @@ private struct PddOrdersWebView: UIViewRepresentable {
                 }
                 self.discovered = filtered.count
                 if filtered.isEmpty {
+                    // The H5 order list often renders after didFinish.
+                    if self.emptyAttempts < 2 {
+                        self.emptyAttempts += 1
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self, weak view] in
+                            guard let self, let view, !self.finished else { return }
+                            self.readList(view)
+                        }
+                        return
+                    }
                     self.conclude(.success([], 0))
                     return
                 }
