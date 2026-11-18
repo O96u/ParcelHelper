@@ -1,9 +1,11 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44317517994
-Commit: 356c2f53dfca2aab6fded465d2ca919f1c6a9b82
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44320835467
+Commit: 52b71eb788836cd0d784362b72290dbdf7289db1
 Ref: refs/heads/main
-Date: 2026-11-18T14:00:30Z
+Date: 2026-11-18T14:08:51Z
 
 Error excerpts:
-718:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativeSettings.swift:633:22: error: contextual type for closure argument list expects 1 argument, which cannot be implicitly ignored
-722:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativeSettings.swift:633:73: error: cannot assign value of type 'Preferences' to type 'Bool'
-808:** BUILD FAILED **
+388:/Users/runner/work/ParcelHelper/ParcelHelper/Shared/HomeWidgetSnapshot.swift:44:26: error: cannot find 'SecTaskCreateFromSelf' in scope
+391:/Users/runner/work/ParcelHelper/ParcelHelper/Shared/HomeWidgetSnapshot.swift:44:48: error: 'nil' requires a contextual type
+394:/Users/runner/work/ParcelHelper/ParcelHelper/Shared/HomeWidgetSnapshot.swift:45:27: error: cannot find 'SecTaskCopyValueForEntitlement' in scope
+397:/Users/runner/work/ParcelHelper/ParcelHelper/Shared/HomeWidgetSnapshot.swift:46:76: error: 'nil' requires a contextual type
+412:** BUILD FAILED **
