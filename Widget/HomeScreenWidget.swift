@@ -57,11 +57,9 @@ private struct HomeWidgetRow: View {
 
     var body: some View {
         HStack(spacing: compact ? 4 : 7) {
-            Image(systemName: "shippingbox.fill")
-                .font(.system(size: compact ? 12 : 13, weight: .medium))
-                .foregroundStyle(.white)
+            PickupCarrierMark(company: item.company, accent: .blue)
+                .scaleEffect(compact ? 0.83 : 1.0)
                 .frame(width: compact ? 24 : 29, height: compact ? 24 : 29)
-                .background(.blue, in: RoundedRectangle(cornerRadius: 7))
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayCode)
                     .font(.system(size: compact ? 11 : 13, weight: .semibold))
