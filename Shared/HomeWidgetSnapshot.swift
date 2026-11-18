@@ -43,6 +43,23 @@ enum HomeWidgetSharedStore {
 
     static var isAvailable: Bool { groupURL != nil }
 
+    // Separate a signing mismatch from an empty collection. A successful
+    // containerURL() call alone does not mean the app has written a snapshot.
+    static var configuredGroup: String {
+        Bundle.main.object(forInfoDictionaryKey: "ParcelHelperWidgetGroup") as? String ?? ""
+    }
+
+    static var hasSnapshot: Bool {
+        guard let url = snapshotURL else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    static var canReadSnapshot: Bool {
+        guard let url = snapshotURL, let data = try? Data(contentsOf: url)
+        else { return false }
+        return (try? JSONDecoder().decode(HomeWidgetSnapshot.self, from: data)) != nil
+    }
+
     private static var snapshotURL: URL? {
         groupURL?.appendingPathComponent(filename)
     }
@@ -57,8 +74,11 @@ enum HomeWidgetSharedStore {
         let picked = Set(pendingPickedIDs())
         guard !picked.isEmpty else { return value }
         var copy = value
+        let matched = copy.pending.filter { picked.contains($0.id) }.count
         copy.pending.removeAll { picked.contains($0.id) }
-        copy.pendingTotal = max(0, copy.pendingTotal - picked.count)
+        // A pending operation may be older than the snapshot or refer to a
+        // different parcel. Only subtract items actually present in it.
+        copy.pendingTotal = max(0, copy.pendingTotal - matched)
         return copy
     }
 
