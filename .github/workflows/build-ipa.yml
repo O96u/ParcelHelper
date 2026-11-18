@@ -7,6 +7,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      widget_group:
+        description: 'App Group granted to both signed targets (group.xxx); blank = repository variable or sample'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -36,6 +41,27 @@ jobs:
           echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
           echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
           echo "Building $version at $GITHUB_SHA (previous release: ${previous_tag:-none})"
+
+      - name: Resolve shared Widget App Group
+        shell: bash
+        env:
+          REQUESTED_WIDGET_GROUP: ${{ inputs.widget_group }}
+          REPOSITORY_WIDGET_GROUP: ${{ vars.PH_WIDGET_GROUP }}
+        run: |
+          set -euo pipefail
+          group="${REQUESTED_WIDGET_GROUP:-${REPOSITORY_WIDGET_GROUP:-}}"
+          if [[ -z "$group" ]]; then
+            group="group.com.muxui.ParcelHelper"
+            echo "::warning::Using the example App Group. It will NOT work with a third-party certificate unless its signed provisioning profiles grant this exact group."
+            echo "⚠️ Default example group; enter the App Group from both signing profiles before distributing a Widget-enabled IPA." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ ! "$group" =~ ^group\.[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || [[ "$group" == *..* ]] || [[ "$group" == *. ]]; then
+            echo "::error::Invalid App Group: $group. Expected group.your-authorized-id"
+            exit 1
+          fi
+          echo "PH_WIDGET_GROUP=$group" >> "$GITHUB_ENV"
+          echo "Widget group embedded into both targets: \`$group\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::Unsigned build only. Main App and Widget must EACH be signed with profiles permitting $group."
 
       - name: Generate and validate dark Home Screen icon
         shell: bash
@@ -75,8 +101,6 @@ jobs:
 
       - name: Build iOS app and WidgetKit extensions
         shell: bash
-        env:
-          PH_WIDGET_GROUP: ${{ vars.PH_WIDGET_GROUP }}
         run: |
           set -euo pipefail
           mkdir -p build
@@ -97,7 +121,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' \
-            PH_WIDGET_GROUP="${PH_WIDGET_GROUP:-group.com.muxui.ParcelHelper}" \
+            PH_WIDGET_GROUP="$PH_WIDGET_GROUP" \
             build 2>&1 | tee build/xcodebuild.log
 
       - name: Validate bundles and pack IPA
@@ -125,6 +149,16 @@ jobs:
               test "$(/usr/libexec/PlistBuddy -c "Print :$key" "$bundle/Info.plist")" = "$([[ "$key" == CFBundleVersion ]] && echo "$BUILD_NUMBER" || echo "$APP_VERSION")"
             done
           done
+          # Both Info.plists must reference the same group embedded at build time.
+          # This checks the IPA's configuration, NOT the re-signed entitlements.
+          for bundle in "$APP_PATH" "$WIDGET_PATH"; do
+            actual_group="$(/usr/libexec/PlistBuddy -c 'Print :ParcelHelperWidgetGroup' "$bundle/Info.plist")"
+            if [[ "$actual_group" != "$PH_WIDGET_GROUP" ]]; then
+              echo "::error::Widget App Group mismatch in $bundle: $actual_group != $PH_WIDGET_GROUP"
+              exit 1
+            fi
+          done
+          echo "App and Widget bundle metadata both use $PH_WIDGET_GROUP" >> "$GITHUB_STEP_SUMMARY"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "com.muxui.ParcelHelper"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$WIDGET_PATH/Info.plist")" = "com.muxui.ParcelHelper.widget"
           mkdir -p build/package/Payload
