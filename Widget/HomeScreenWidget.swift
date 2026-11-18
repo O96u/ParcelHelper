@@ -65,7 +65,7 @@ private struct HomeWidgetRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayCode)
                     .font(.system(size: compact ? 11 : 13, weight: .semibold))
-                    .foregroundStyle(transit ? .blue : .primary)
+                    .foregroundStyle(transit ? Color.blue : Color.primary)
                     .lineLimit(1)
                 Text(item.title.isEmpty ? (item.latest.isEmpty ? item.company : item.latest) : item.title)
                     .font(.system(size: compact ? 8 : 9))
@@ -132,7 +132,7 @@ private struct ParcelHomeContent: View {
         return waiting + moving
     }
     private var moreCount: Int {
-        max(0, entry.model.pendingTotal - entry.model.pending.count)
+        max(0, entry.model.pendingTotal - rows.filter { !$0.1 }.count)
     }
 
     var body: some View {
