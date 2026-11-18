@@ -1467,11 +1467,14 @@ struct SettingsHome: View {
         NavigationLink(destination: destination) { settingsLabel(title, icon, color) }.buttonStyle(.plain)
     }
 }
-// Station management is a directory, not a parcel analytics dashboard.
+// Inline station directory inspired by the Scripting app. Keep the existing
+// Station model and ParcelStore persistence; no data migration is required.
 struct StationsHome: View {
     @EnvironmentObject private var store: ParcelStore
-    @State private var creating = false
     @State private var searchText = ""
+    @State private var expandedID: String?
+    @State private var adding = false
+    @State private var newStation = Station()
     @State private var deleting: Station?
 
     private var stations: [Station] {
@@ -1479,73 +1482,94 @@ struct StationsHome: View {
             $0.courierStationName.localizedStandardCompare($1.courierStationName) == .orderedAscending
         }
     }
-
-    private var filteredStations: [Station] {
-        let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !keyword.isEmpty else { return stations }
-        return stations.filter { station in
-            [station.courierStationName, station.address, station.phone,
-             station.businessHours, station.notes].contains {
-                $0.localizedCaseInsensitiveContains(keyword)
-            } || station.keywords.contains {
-                $0.localizedCaseInsensitiveContains(keyword)
-            }
+    private var filtered: [Station] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return stations }
+        return stations.filter {
+            [$0.courierStationName, $0.address, $0.phone,
+             $0.businessHours, $0.notes].contains {
+                $0.localizedCaseInsensitiveContains(query)
+            } || $0.keywords.contains { $0.localizedCaseInsensitiveContains(query) }
         }
     }
 
     var body: some View {
-        List {
-            if stations.isEmpty {
-                ContentUnavailableView("还没有驿站", systemImage: "building.2",
-                                       description: Text("识别到明确的取件站点会自动建档，或点击右上角添加。"))
-                    .listRowBackground(Color.clear)
-            } else if filteredStations.isEmpty {
-                ContentUnavailableView.search(text: searchText)
-                    .listRowBackground(Color.clear)
-            } else {
-                Section {
-                    ForEach(filteredStations) { station in
-                        NavigationLink {
-                            StationEditor(station: station)
-                        } label: {
-                            stationRow(station)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("已添加").foregroundStyle(.secondary).font(.subheadline)
+                    Spacer()
+                    Text("\(stations.count) 个驿站")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 20)
+
+                if stations.isEmpty && !adding {
+                    ContentUnavailableView(
+                        "还没有驿站", systemImage: "building.2",
+                        description: Text("识别到明确的取件站点会自动建档，也可以点击右上角添加。")
+                    )
+                    .frame(maxWidth: .infinity)
+                } else if filtered.isEmpty && !adding {
+                    ContentUnavailableView.search(text: searchText)
+                } else {
+                    VStack(spacing: 0) {
+                        if adding {
+                            StationInlineCard(
+                                station: newStation, expanded: true, isNew: true,
+                                onToggle: { adding = false },
+                                onSaved: {
+                                    adding = false
+                                    expandedID = nil
+                                    newStation = Station()
+                                },
+                                onDelete: { adding = false })
+                            if !filtered.isEmpty { Divider().padding(.leading, 72) }
                         }
-                        .buttonStyle(.plain)
-                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button(role: .destructive) { deleting = station } label: {
-                                Label("删除", systemImage: "trash")
-                            }
-                        }
-                        .contextMenu {
-                            Button(role: .destructive) { deleting = station } label: {
-                                Label("删除驿站", systemImage: "trash")
+                        ForEach(Array(filtered.enumerated()), id: \.element.id) { index, station in
+                            StationInlineCard(
+                                station: station, expanded: expandedID == station.id,
+                                onToggle: {
+                                    if expandedID == station.id { expandedID = nil }
+                                    else {
+                                        adding = false
+                                        expandedID = station.id
+                                    }
+                                },
+                                onSaved: { expandedID = nil },
+                                onDelete: { deleting = station })
+                            if index < filtered.count - 1 {
+                                Divider().padding(.leading, 72).padding(.trailing, 18)
                             }
                         }
                     }
-                } header: {
-                    Text("驿站列表")
-                } footer: {
-                    Text("点开驿站可以修改名称、地址、联系电话、营业时间和匹配关键词。")
-                        .padding(.top, 8)
+                    .background(PH.card, in: RoundedRectangle(cornerRadius: 23, style: .continuous))
+                }
+
+                if !stations.isEmpty || adding {
+                    Text("点击驿站展开编辑。关键词会匹配包裹短信和取件点名称；多个关键词可用逗号分隔。保存后仍保留已有包裹，不会覆盖手动修改。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 20)
                 }
             }
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 115)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+        .scrollDismissesKeyboard(.interactively)
         .background(PH.page)
         .navigationTitle("驿站管理")
+        .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, prompt: "搜索驿站、地址或电话")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { creating = true } label: { Image(systemName: "plus") }
+                Button {
+                    newStation = Station()
+                    expandedID = nil
+                    adding = true
+                } label: { Image(systemName: "plus") }
                     .accessibilityLabel("添加驿站")
             }
-        }
-        .sheet(isPresented: $creating) {
-            NavigationStack { StationEditor(station: Station()) }
         }
         .alert("删除驿站？", isPresented: Binding(
             get: { deleting != nil },
@@ -1554,47 +1578,167 @@ struct StationsHome: View {
             Button("删除驿站", role: .destructive) {
                 if let station = deleting { store.removeStation(station.id) }
                 deleting = nil
+                expandedID = nil
             }
             Button("取消", role: .cancel) { deleting = nil }
         } message: {
             Text("只删除驿站档案，不会删除已有包裹。")
         }
     }
+}
 
-    private func stationRow(_ station: Station) -> some View {
-        HStack(alignment: .top, spacing: 13) {
-            Image(systemName: "building.2.crop.circle.fill")
-                .font(.system(size: 28))
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(accent, accent.opacity(0.12))
-                .frame(width: 44, height: 44)
-            VStack(alignment: .leading, spacing: 8) {
-                Text(station.courierStationName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
+private struct StationInlineCard: View {
+    @EnvironmentObject private var store: ParcelStore
+    let station: Station
+    let expanded: Bool
+    var isNew = false
+    let onToggle: () -> Void
+    let onSaved: () -> Void
+    let onDelete: () -> Void
 
-                Label(station.address.isEmpty ? "地址待补充" : station.address,
-                      systemImage: "mappin")
-                    .lineLimit(2)
+    @State private var draft: Station
+    @State private var keywordText: String
+    @State private var problem = ""
 
-                if !station.phone.isEmpty {
-                    Label(station.phone, systemImage: "phone")
-                        .lineLimit(1)
+    init(station: Station, expanded: Bool, isNew: Bool = false,
+         onToggle: @escaping () -> Void,
+         onSaved: @escaping () -> Void,
+         onDelete: @escaping () -> Void) {
+        self.station = station
+        self.expanded = expanded
+        self.isNew = isNew
+        self.onToggle = onToggle
+        self.onSaved = onSaved
+        self.onDelete = onDelete
+        _draft = State(initialValue: station)
+        _keywordText = State(initialValue: station.keywords.joined(separator: "，"))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onToggle) {
+                HStack(spacing: 12) {
+                    Image(systemName: "building.2.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(accent)
+                        .frame(width: 38)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(isNew ? "新增驿站" : station.courierStationName)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Text(isNew ? "填写名称与匹配关键词" :
+                             (station.keywords.first ?? (station.address.isEmpty
+                                ? "未设置关键词" : station.address)))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
-                if !station.businessHours.isEmpty {
-                    Label(station.businessHours, systemImage: "clock")
-                        .lineLimit(1)
+                .padding(.horizontal, 18).padding(.vertical, 16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(spacing: 0) {
+                    field("名称", text: $draft.courierStationName, placeholder: "驿站名称")
+                    field("关键词", text: $keywordText, placeholder: "用于自动匹配")
+                    HStack {
+                        Text("将匹配：")
+                        Text(keywordText.isEmpty ? "未设置" : keywordText)
+                    }
+                    .font(.caption).foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
+
+                    field("地址", text: $draft.address, placeholder: "选填")
+                    field("手机号", text: $draft.phone, placeholder: "选填", phone: true)
+                    field("营业时间", text: $draft.businessHours, placeholder: "例如 08:00 - 22:00")
+                    field("备注", text: $draft.notes, placeholder: "选填", last: true)
+
+                    if !problem.isEmpty {
+                        Text(problem).foregroundStyle(.red).font(.caption)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 8)
+                    }
+
+                    HStack(spacing: 0) {
+                        Button(isNew ? "取消" : "删除", role: isNew ? .cancel : .destructive) {
+                            onDelete()
+                        }
+                        .frame(maxWidth: .infinity)
+                        Divider().frame(height: 23)
+                        Button("保存", action: save)
+                            .frame(maxWidth: .infinity)
+                            .fontWeight(.semibold)
+                    }
+                    .padding(.top, 17).padding(.bottom, 6)
+                }
+                .padding(.leading, 20).padding(.trailing, 18).padding(.bottom, 16)
+                .transition(.opacity)
+            }
+        }
+        .onChange(of: expanded) { _, value in
+            if value {
+                draft = station
+                keywordText = station.keywords.joined(separator: "，")
+                problem = ""
+            }
+        }
+    }
+
+    private func field(_ label: String, text: Binding<String>,
+                       placeholder: String, phone: Bool = false,
+                       last: Bool = false) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(alignment: .center, spacing: 10) {
+                Text(label).foregroundStyle(.primary).frame(width: 86, alignment: .leading)
+                if phone {
+                    TextField(placeholder, text: text).keyboardType(.phonePad)
+                        .multilineTextAlignment(.trailing)
+                } else {
+                    TextField(placeholder, text: text)
+                        .multilineTextAlignment(.trailing)
                 }
             }
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
+            .font(.system(size: 15))
+            .padding(.vertical, 14)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(PH.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func save() {
+        let name = draft.courierStationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { problem = "请填写驿站名称"; return }
+        let phone = draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
+        let digits = phone.filter(\.isNumber)
+        if !phone.isEmpty && (digits.count < 7 || digits.count > 15 ||
+            phone.range(of: #"^[+0-9()\\- ]+$"#, options: .regularExpression) == nil) {
+            problem = "请输入有效的联系电话"; return
+        }
+        let keys = keywordText.components(separatedBy: CharacterSet(charactersIn: ",，"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if keys.contains(where: { $0.count > 50 }) {
+            problem = "单个匹配关键词不能超过 50 字"; return
+        }
+        let address = draft.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let duplicate = store.snapshot.stations.contains {
+            $0.id != draft.id &&
+            $0.courierStationName.localizedCaseInsensitiveCompare(name) == .orderedSame &&
+            $0.address.trimmingCharacters(in: .whitespacesAndNewlines)
+                .localizedCaseInsensitiveCompare(address) == .orderedSame
+        }
+        guard !duplicate else { problem = "相同名称与地址的驿站已存在"; return }
+        draft.courierStationName = name
+        draft.address = address
+        draft.phone = phone
+        draft.keywords = Array(Set(keys)).sorted()
+        store.upsertStation(draft)
+        onSaved()
     }
 }
 struct StationEditor: View {
