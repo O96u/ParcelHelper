@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 // A small, credential-free snapshot shared by the containing app and WidgetKit.
 // The signing tool must grant BOTH binaries the same App Group entitlement.
@@ -30,26 +29,16 @@ enum HomeWidgetSharedStore {
     static let kind = "ParcelHelperHome"
     private static let filename = "parcelhelper-widget.json"
 
-    // sign.lc / other third-party signers may supply a different approved
-    // group name. Do not hard-code a group that the profile cannot authorize.
-    // To force a particular group, set ParcelHelperWidgetGroup in BOTH Info.plists.
+    // This identifier must be built into both Info.plists AND granted to
+    // both signed targets. iOS does not provide a public API for enumerating
+    // group entitlements at runtime, so never guess a third-party profile ID.
     private static var groupURL: URL? {
-        let fm = FileManager.default
-        if let preferred = Bundle.main.object(forInfoDictionaryKey: "ParcelHelperWidgetGroup") as? String,
-           preferred.hasPrefix("group."),
-           let url = fm.containerURL(forSecurityApplicationGroupIdentifier: preferred) {
-            return url
-        }
-        guard let task = SecTaskCreateFromSelf(nil),
-              let granted = SecTaskCopyValueForEntitlement(
-                task, "com.apple.security.application-groups" as CFString, nil
-              ) as? [String] else { return nil }
-        for group in granted.filter({ $0.hasPrefix("group.") }).sorted() {
-            if let url = fm.containerURL(forSecurityApplicationGroupIdentifier: group) {
-                return url
-            }
-        }
-        return nil
+        guard let group = Bundle.main.object(forInfoDictionaryKey:
+            "ParcelHelperWidgetGroup") as? String,
+              group.hasPrefix("group."), !group.contains("$(")
+        else { return nil }
+        return FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: group)
     }
 
     static var isAvailable: Bool { groupURL != nil }
