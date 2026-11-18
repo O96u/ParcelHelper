@@ -121,7 +121,7 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                     store.persist()
                     clipboardMonitor.checkOnForeground()
                     // Foreground-only update checks never sign or install an IPA.
-                    Task { await ParcelUpdateCenter.shared.checkOnForeground() }
+                    Task { await ParcelUpdateCenter.shared.checkOnLaunch() }
                     _ = await NativeHomeRefresh.refresh()
                     await NativeWebAutoSync.shared.refreshAvailable()
                 }
@@ -130,7 +130,6 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                         store.persist()
                         clipboardMonitor.checkOnForeground()
                         Task {
-                            Task { await ParcelUpdateCenter.shared.checkOnForeground() }
                             _ = await NativeHomeRefresh.refresh()
                             await NativeWebAutoSync.shared.refreshAvailable()
                         }
