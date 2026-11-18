@@ -473,7 +473,7 @@ private struct PlatformAccountDetail: View {
     @State private var authorized = false
     @State private var loginPresented = false
     @State private var showPddLoginWarning = false
-    @AppStorage(PddAccountProtection.key) private var pddWebAccessAllowed = false
+    @AppStorage("native.pdd.webAccessAllowed") private var pddWebAccessAllowed = false
     @State private var showRevokeConfirmation = false
     @State private var isSyncing = false
     @State private var webOrdersPresented = false
