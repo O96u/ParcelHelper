@@ -1,9 +1,10 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44284895001
-Commit: 4b077146f38d63106b6a7c2f9ab1384d857d2181
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44297269012
+Commit: ba0ab84dd77c55b8b7d6e121882b2f0e0d085b5b
 Ref: refs/heads/main
-Date: 2026-11-18T10:30:17Z
+Date: 2026-11-18T11:45:00Z
 
 Error excerpts:
-446:/Users/runner/work/ParcelHelper/ParcelHelper/App/ParcelShortcuts.swift:34:40: error: cannot convert value of type 'String' to expected argument type 'IntentDialog'
-448:/Users/runner/work/ParcelHelper/ParcelHelper/App/ParcelShortcuts.swift:69:40: error: cannot convert value of type 'String' to expected argument type 'IntentDialog'
-505:** BUILD FAILED **
+669:/Users/runner/work/ParcelHelper/ParcelHelper/App/DouyinImportView.swift:37:20: error: missing argument label 'content:' in call
+671:/Users/runner/work/ParcelHelper/ParcelHelper/App/DouyinImportView.swift:37:21: error: cannot convert value of type 'String' to expected argument type '() -> Content'
+673:/Users/runner/work/ParcelHelper/ParcelHelper/App/DouyinImportView.swift:37:13: error: generic parameter 'Content' could not be inferred
+731:** BUILD FAILED **
