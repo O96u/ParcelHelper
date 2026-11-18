@@ -13,7 +13,8 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # Pin macOS instead of silently changing SDK/Xcode on macos-latest.
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - name: Checkout source
@@ -49,7 +50,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
+          echo "## Build" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Version: \`$APP_VERSION\`" >> "$GITHUB_STEP_SUMMARY"
           xcodebuild \
+            -jobs 2 \
+            -resultBundlePath "$PWD/build/ParcelHelper.xcresult" \
             -project ParcelHelper.xcodeproj \
             -scheme ParcelHelper \
             -configuration Release \
@@ -142,6 +148,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ParcelHelper-build-log
-          path: build/xcodebuild.log
+          path: |
+            build/xcodebuild.log
+            build/ParcelHelper.xcresult/
           if-no-files-found: ignore
           retention-days: 14
