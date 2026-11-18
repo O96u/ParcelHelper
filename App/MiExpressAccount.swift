@@ -122,7 +122,8 @@ import Security
         for attempt in 0..<5 {
             let list = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
             let cookies = list.filter {
-                ($0.domain == "account.xiaomi.com" || $0.domain.hasSuffix(".xiaomi.com")) &&
+                ($0.domain == "account.xiaomi.com" || $0.domain.hasSuffix(".xiaomi.com") ||
+                 $0.domain == "id.mi.com") &&
                 ($0.expiresDate == nil || $0.expiresDate! > Date())
             }
             user = cookies.first(where: { $0.name == "userId" })?.value ?? ""
