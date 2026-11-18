@@ -1,4 +1,8 @@
-# ParcelHelper for iOS
+<p align="center">
+  <img src="Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png" alt="ParcelHelper App 图标" width="112" height="112">
+</p>
+
+<h1 align="center">ParcelHelper for iOS</h1>
 
 [![iOS](https://img.shields.io/badge/iOS-17%2B-blue)](https://developer.apple.com/ios/)
 [![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange)](https://www.swift.org/)
