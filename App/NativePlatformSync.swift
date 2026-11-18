@@ -161,6 +161,9 @@ private enum SyncJSON {
         guard platforms.contains(id) else {
             throw NativeSyncError.unavailable("该平台尚未完成 Swift 原生查询适配")
         }
+        if id == "pdd" && !PddAccountProtection.webAccessAllowed {
+            throw NativeSyncError.unavailable("拼多多同步已暂停，以保护官方 App 的登录状态。可在拼多多账号详情手动开启。")
+        }
         let key = "native.sync.at." + id
         let last = UserDefaults.standard.double(forKey: key)
         if !force && Date().timeIntervalSince1970 - last < minGap {
@@ -375,6 +378,9 @@ private enum SyncJSON {
     }
 
     private static func pddJSON(_ path: String, body: [String: Any]? = nil, referer: String? = nil) async throws -> [String: Any] {
+        guard PddAccountProtection.webAccessAllowed else {
+            throw NativeSyncError.unavailable("已关闭拼多多网页访问，以免影响官方 App 登录。")
+        }
         let cookies = await WebCookieRequest.cookies(domain: "yangkeduo.com")
         var headers: [String: String] = [
             "Referer": referer ?? "https://m.pinduoduo.net/mdkd/package?pr_page_from=scheme",
@@ -815,6 +821,7 @@ private enum SyncJSON {
             }
             if id == "fengchao" && !NativeFengchao.hasSession { continue }
             if id == "pdd" {
+                guard PddAccountProtection.webAccessAllowed else { continue }
                 let platformCookies = await WebCookieRequest.cookies(domain: "yangkeduo.com")
                 if PddSessionVault.token.isEmpty && platformCookies.isEmpty { continue }
             }
