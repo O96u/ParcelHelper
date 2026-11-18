@@ -14,6 +14,56 @@ import Security
     private static let aesKey = "d101b17c77ff93cs"
     private static let salt = "77eb2e8a5755abd016c0d69ba74b219c"
     private static let version = 25000031
+    static let loginUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    // Follow ui/miLoginHelper.ts from the supplied Scripting project:
+    // fetch the serviceLogin JSON and open its location, not the JSON endpoint.
+    static func resolveLoginURL() async -> URL {
+        let fallback = URL(string: "https://account.xiaomi.com/fe/service/identity/authStart?sid=assistant")!
+        var request = URLRequest(url: URL(string:
+            "https://account.xiaomi.com/pass/serviceLogin?sid=assistant&_json=true")!,
+            timeoutInterval: 20)
+        request.setValue(loginUserAgent, forHTTPHeaderField: "User-Agent")
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            if let body = String(data: data, encoding: .utf8),
+               let begin = body.firstIndex(of: "{"),
+               let json = try? JSONSerialization.jsonObject(with: Data(body[begin...].utf8)) as? [String: Any],
+               let location = json["location"] as? String,
+               let url = URL(string: location),
+               url.scheme == "https",
+               let host = url.host?.lowercased(),
+               (host == "xiaomi.com" || host.hasSuffix(".xiaomi.com") ||
+                host == "mi.com" || host.hasSuffix(".mi.com") ||
+                host == "miui.com" || host.hasSuffix(".miui.com")) {
+                return url
+            }
+        } catch { }
+        return fallback
+    }
+
+    // Scripting checks the assistant-domain token before trying legacy STS mint.
+    static func acceptWebSessionToken() async -> Bool {
+        let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
+        let assistant = cookies.filter {
+            ($0.domain == "api.assistant.miui.com" ||
+             $0.domain.hasSuffix(".assistant.miui.com")) &&
+            ($0.expiresDate == nil || $0.expiresDate! > Date())
+        }
+        let token = assistant.first(where: { $0.name == "assistant_serviceToken" && !$0.value.isEmpty })?.value ??
+            assistant.first(where: { $0.name == "serviceToken" && !$0.value.isEmpty })?.value ?? ""
+        guard !token.isEmpty else { return false }
+        let account = cookies.filter {
+            ($0.domain == "account.xiaomi.com" || $0.domain.hasSuffix(".xiaomi.com")) &&
+            ($0.expiresDate == nil || $0.expiresDate! > Date())
+        }
+        let cUserId = (assistant + account).first(where: { $0.name == "cUserId" })?.value ?? ""
+        let userId = account.first(where: { $0.name == "userId" })?.value ?? ""
+        guard !cUserId.isEmpty || !userId.isEmpty else { return false }
+        KeychainData.store("token", token)
+        KeychainData.store("user", cUserId.isEmpty ? userId : cUserId)
+        return true
+    }
 
     private enum KeychainData {
         static func load(_ key: String) -> String {
@@ -116,8 +166,8 @@ import Security
     }
 
     static func exchangeWebLogin() async throws {
-        // Keep the login WebView alive while the cookie store finishes persisting.
-        // deviceId is not guaranteed to be present on every Xiaomi login.
+        if await acceptWebSessionToken() { return }
+        // Legacy Scripting mint fallback needs the complete three-cookie set.
         var user = "", passToken = "", deviceID = ""
         for attempt in 0..<5 {
             let list = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
@@ -129,20 +179,26 @@ import Security
             user = cookies.first(where: { $0.name == "userId" })?.value ?? ""
             passToken = cookies.first(where: { $0.name == "passToken" })?.value ?? ""
             deviceID = cookies.first(where: { $0.name == "deviceId" })?.value ?? ""
-            if !user.isEmpty && !passToken.isEmpty { break }
+            if !user.isEmpty && !passToken.isEmpty && !deviceID.isEmpty { break }
             if attempt < 4 { try await Task.sleep(for: .milliseconds(350)) }
         }
-        guard !user.isEmpty, !passToken.isEmpty else {
+        guard !user.isEmpty, !passToken.isEmpty, !deviceID.isEmpty else {
             let missing = [user.isEmpty ? "userId" : nil,
-                           passToken.isEmpty ? "passToken" : nil].compactMap { $0 }.joined(separator: "、")
-            throw NativeSyncError.noLogin("尚未取得小米登录 Cookie（缺少 \(missing)），请完成网页验证后重试")
+                           passToken.isEmpty ? "passToken" : nil,
+                           deviceID.isEmpty ? "deviceId" : nil].compactMap { $0 }.joined(separator: "、")
+            throw NativeSyncError.noLogin("尚未取得完整的小米登录 Cookie（缺少 \(missing)），请在登录页完成验证")
         }
-        var header = "userId=\(user); passToken=\(passToken)"
-        if !deviceID.isEmpty { header += "; deviceId=\(deviceID)" }
+        // Match encodeURIComponent in utils/mi.ts.
+        func encoded(_ value: String) -> String {
+            value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed
+                .subtracting(CharacterSet(charactersIn: "&=+;?#"))) ?? value
+        }
+        let header = "userId=\(encoded(user)); passToken=\(encoded(passToken)); deviceId=\(encoded(deviceID))"
         var req = URLRequest(url: URL(string:
             "https://account.xiaomi.com/pass/serviceLogin?sid=assistant&_json=true&_appName=com.miui.personalassistant&_locale=zh_CN")!,
             timeoutInterval: 20)
         req.setValue(header, forHTTPHeaderField: "Cookie")
+        req.setValue(loginUserAgent, forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: req)
         guard let _ = response as? HTTPURLResponse,
               let body = String(data: data, encoding: .utf8),
@@ -167,6 +223,7 @@ import Security
         parts.queryItems = items
         var final = URLRequest(url: parts.url!, timeoutInterval: 20)
         final.setValue(header, forHTTPHeaderField: "Cookie")
+        final.setValue(loginUserAgent, forHTTPHeaderField: "User-Agent")
         let session = URLSession(configuration: .ephemeral, delegate: DoNotFollowRedirect(), delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         let (_, tokenResponse) = try await session.data(for: final)
@@ -180,10 +237,11 @@ import Security
         }
         let responseCookies = HTTPCookie.cookies(withResponseHeaderFields: headers,
                                                   for: http.url ?? redirectURL)
-        var token = responseCookies.first(where: { $0.name == "serviceToken" })?.value ?? ""
+        var token = responseCookies.first(where: { $0.name == "assistant_serviceToken" })?.value ??
+            responseCookies.first(where: { $0.name == "serviceToken" })?.value ?? ""
         if token.isEmpty {
             let rawHeader = headers.first(where: { $0.key.caseInsensitiveCompare("Set-Cookie") == .orderedSame })?.value ?? ""
-            if let match = rawHeader.range(of: #"(?:^|[;,\n])\s*serviceToken=([^;,\s]+)"#,
+            if let match = rawHeader.range(of: #"(?:^|[;,\n])\s*(?:assistant_)?serviceToken=([^;,\s]+)"#,
                                            options: .regularExpression) {
                 let cookie = String(rawHeader[match])
                 token = String(cookie.split(separator: "=", maxSplits: 1).last ?? "")
@@ -191,7 +249,7 @@ import Security
         }
         if token.isEmpty {
             token = session.configuration.httpCookieStorage?.cookies?
-                .first(where: { $0.name == "serviceToken" })?.value ?? ""
+                .first(where: { $0.name == "assistant_serviceToken" || $0.name == "serviceToken" })?.value ?? ""
         }
         guard !token.isEmpty else {
             throw NativeSyncError.noLogin(
@@ -379,11 +437,14 @@ private struct XiaomiWebLogin: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
+        config.defaultWebpagePreferences.preferredContentMode = .desktop
         let view = WKWebView(frame: .zero, configuration: config)
+        view.customUserAgent = NativeMiExpress.loginUserAgent
         view.allowsBackForwardNavigationGestures = true
-        // serviceLogin is an STS endpoint; it can return raw JSON instead
-        // of an interactive form. Use Xiaomi's account site for sign-in.
-        view.load(URLRequest(url: URL(string: "https://id.mi.com/")!))
+        Task { @MainActor in
+            let loginURL = await NativeMiExpress.resolveLoginURL()
+            view.load(URLRequest(url: loginURL))
+        }
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {}
@@ -537,6 +598,19 @@ struct XiaomiAccountPage: View {
                     }
             }
             .interactiveDismissDisabled(busy)
+        }
+        .task(id: webLogin) {
+            guard webLogin else { return }
+            // Same 2-second polling as ui/miLogin.tsx; direct STS token wins.
+            while webLogin && !Task.isCancelled {
+                if !busy && await NativeMiExpress.acceptWebSessionToken() {
+                    authorized = true
+                    webLogin = false
+                    notice = "小米账号授权成功"
+                    break
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
         }
         .confirmationDialog("解除小米授权？", isPresented: $askRevoke, titleVisibility: .visible) {
             Button("解除授权", role: .destructive) {
