@@ -43,7 +43,7 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            echo "::error::发版标签必须为 v主版本.次版本.修订号（例如 v1.2.0），当前为：$tag"
+            echo "::error::发版标签必须为 v主版本.次版本.修订号 (例如 v1.2.0), 当前为: ${tag}"
             exit 1
           fi
           major="${BASH_REMATCH[1]}"
@@ -90,7 +90,7 @@ jobs:
             echo '- **注意**：当前为示例 App Group，分发带小组件的 IPA 前请在仓库变量 `PH_WIDGET_GROUP` 中填写与签名描述文件一致的组 ID。' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ ! "$group" =~ ^group\.[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || [[ "$group" == *..* ]] || [[ "$group" == *. ]]; then
-            echo "::error::无效的 App Group：$group（应为 group. 开头的合法标识）"
+            echo "::error::无效的 App Group: ${group} (应为 group. 开头的合法标识)"
             exit 1
           fi
           echo "PH_WIDGET_GROUP=$group" >> "$GITHUB_ENV"
@@ -120,17 +120,17 @@ jobs:
           version="$(xcodebuild -version | awk '/^Xcode / {print $2}')"
           major="${version%%.*}"
           if [[ ! "$major" =~ ^[0-9]+$ ]] || (( major < 26 )); then
-            echo "::error::需要 Xcode 26 或更高版本，当前：Xcode $version"
+            echo "::error::需要 Xcode 26 或更高版本, 当前 Xcode ${version}"
             exit 1
           fi
           sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
           sdk_major="${sdk_version%%.*}"
           if [[ ! "$sdk_major" =~ ^[0-9]+$ ]] || (( sdk_major < 26 )); then
-            echo "::error::需要 iOS 26 SDK 或更高版本，当前：$sdk_version"
+            echo "::error::需要 iOS 26 SDK 或更高版本, 当前 ${sdk_version}"
             exit 1
           fi
-          echo "工具链就绪：Xcode $version，iOS SDK $sdk_version"
-          echo "- **Xcode**：$version · **iOS SDK**：$sdk_version" >> "$GITHUB_STEP_SUMMARY"
+          echo "工具链就绪: Xcode ${version}, iOS SDK ${sdk_version}"
+          echo "- **Xcode**: ${version} · **iOS SDK**: ${sdk_version}" >> "$GITHUB_STEP_SUMMARY"
           xcodebuild -list -project ParcelHelper.xcodeproj
 
       - name: 编译主程序与 WidgetKit 扩展
@@ -187,7 +187,7 @@ jobs:
           for bundle in "$APP_PATH" "$WIDGET_PATH"; do
             actual_group="$(/usr/libexec/PlistBuddy -c 'Print :ParcelHelperWidgetGroup' "$bundle/Info.plist")"
             if [[ "$actual_group" != "$PH_WIDGET_GROUP" ]]; then
-              echo "::error::小组件 App Group 不一致（$bundle）：$actual_group != $PH_WIDGET_GROUP"
+              echo "::error::小组件 App Group 不一致 (${bundle}): ${actual_group} != ${PH_WIDGET_GROUP}"
               exit 1
             fi
           done
