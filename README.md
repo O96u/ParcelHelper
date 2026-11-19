@@ -46,51 +46,6 @@
 
 平台页面、私有接口及登录策略可能随时变化，**不保证所有订单均能同步**。重要取件信息请以快递公司或平台官方页面为准。
 
-## 安装与构建
-
-**源代码构建（推荐）**
-
-1. 在 macOS 项目根目录先执行 `swift scripts/create_dark_icon.swift`，生成 `Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Dark.png`，再用 Xcode 16 或更新版本打开 `ParcelHelper.xcodeproj`（最低部署目标 iOS 17）。深色图标文件是构建生成物，不直接提交到 Git 仓库。
-2. 选择 `ParcelHelper` scheme 和设备，在 Xcode 中为主 App 与实时活动扩展分别配置适合自己账号的签名、Bundle Identifier 和所需能力。
-3. Build / Run 或使用 Xcode Archive 导出可签名版本。
-
-**GitHub Actions 自动构建**
-
-- 每次向 `main` 推送代码（包括合并 PR）都会自动运行 `.github/workflows/build-ipa.yml`，构建 `ParcelHelper.ipa` 并在成功后发布到 [Releases](https://github.com/O96u/ParcelHelper/releases)。也可以从 Actions 手动运行工作流。
-- **只保留最新构建：** 相同分支的新提交或手动启动会自动取消此前尚在排队或构建中的 Actions 任务（`concurrency.cancel-in-progress: true`），以最新提交为准，避免重复占用 macOS 构建机。已完成的历史记录和已发布的 Release 不会自动删除。
-- CI 会在编译前生成深色图标，校验它不是普通图标的原样复制，检查资产目录已声明 `luminosity: dark`，并保留编译后的资产诊断数据。iOS 18 及以上需在主屏幕长按空白处选择「编辑 → 自定义 → 深色」或「自动」才能看到相应图标；仅打开 ParcelHelper 内的深色主题不改变主屏幕图标。
-- 不需要手动创建或推送 Git Tag。版本号由 Actions 自动生成，使用纯数字 `1.1.<运行序号>`（例如 `1.1.12`，无 `v` 前缀）；成功构建后会自动创建对应的 Git Tag 和 Release。失败的构建不会发布新 Release，但仍保留 Actions 日志。重新运行同一次构建会覆盖对应 Release 的 IPA。
-
-- 文件名不含 `unsigned`，但仍须使用有效证书签名后才能安装到普通 iPhone。第三方重签名可能影响快捷指令、通知和实时活动扩展。
-- 正式版本从 **v1.0.0** 起编号；后续每版根据实际提交内容生成更新日志，按需使用「新增 / 修改 / 修复 / 优化 / 移除 / 文档 / 构建与发布」等栏目，不显示没有对应改动的空栏目。Release 版本号不代表 Apple 签名或功能兼容性保证。发布时请确认 Tag 指向要发布的提交。
-
-**App 内检查更新（侧载用户）**
-
-「设置 → 软件更新」会显示**实际已安装版本**与 GitHub 最新 Release，展示该版本的更新内容。启用「自动检查更新」后，App 启动或返回前台时会按至少 6 小时的间隔检查一次；也可以手动点击「检查更新」。
-
-**如果你使用新版 LCSign，推荐在 LCSign「软件源」里添加一次**：
-
-`https://github.com/O96u/ParcelHelper/releases`
-
-LCSign 官方作者确认新版可直接把 GitHub Releases 当作软件源，跟踪后续更新。ParcelHelper 的「软件更新」页提供「复制 LCSign 软件源地址」，一键复制后粘贴到 LCSign 即可；后续可以直接在 LCSign 中看到版本并选择签名安装。LCSign 使用 GitHub API 有请求额度限制，需要时可在 LCSign 配置自己的 GitHub Token。
-
-同时保留 App 内的备用更新方式：发现新版后直接下载 `ParcelHelper.ipa`，看到进度，下载完成即弹出 iOS 系统分享面板，选择 **LCSign → 导入 / 签名 / 安装**。无需再复制 GitHub 下载链接。下载的是仓库官方 **未签名** IPA，App 不会自行签名或绕过 iOS 安装流程，LCSign 的选择、证书配置及安装确认仍须由用户操作。iOS 不保证锁屏后台检查，LCSign 是否支持第三方 App 直接调用自动安装尚未获得可靠的公开接口说明，因此没有提供未经验证的跳转 URL。
-
-**覆盖安装请保留原有 Bundle Identifier、签名配置与 Widget 扩展设置**；更换标识或卸载 App 可能造成本地数据无法保留。自动更新只检查版本，不会偷偷替换应用，也不会修改平台登录 Cookie。
-
-**使用桌面小组件前，请先用自己的 App Group 构建 IPA。** 在 GitHub 仓库 [Actions → Build ParcelHelper IPA](https://github.com/O96u/ParcelHelper/actions/workflows/build-ipa.yml) 点击 **Run workflow**，在 `widget_group` 输入框填入**自己签名证书允许的** `group.xxx`（不要照抄别人的组名），然后构建并使用相同授权组签名主 App 和 Widget 扩展。若希望普通提交也使用这个组，可以在仓库 Actions Variables 中设置 `PH_WIDGET_GROUP`。不填写时使用的示例 `group.com.muxui.ParcelHelper` 不保证拥有权限。
-
-**主屏幕小组件签名说明：** 支持小、中、大三种桌面组件，以及在组件中标记已取；需要主 App 与嵌入式 Widget 扩展分别签名，并使用相同且被描述文件允许的 App Group。证书显示 App Groups 权限不等于已经完成共享设置，具体流程见 [小组件签名与验证](docs/widget-signing.md)。WidgetKit 读取 App 共享的本地快照，不保证锁屏或后台按固定频率联网更新。
-
-[查看构建记录](https://github.com/O96u/ParcelHelper/actions)
-
-> 构建流程使用 Xcode、Swift 与系统工具；**App 无需 Python、Node.js 或 Scripting 运行环境**。深色 App 图标由 `scripts/create_dark_icon.swift` 在 macOS 构建时生成。
-
-## 版本记录
-
-- **首个正式版**：`v1.0.0`，基准发行说明见 [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md)。
-- 日常提交建议使用 `feat:`（新增）、`fix:`（修复）、`refactor:`、`docs:` 等前缀，便于 Actions 归类到对应栏目。
-
 ## 刷新机制与数据来源
 
 | 数据来源        | 获取方式                                      | 主要限制                                    |
