@@ -1,7 +1,7 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44436880926
-Commit: 6b72b504e86b17d6a89077e51cf26c038b651b23
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44437003963
+Commit: b988775d9e699f871f9234413b0e253b562258ab
 Ref: refs/tags/v1.2.0
-Date: 2026-11-19T01:26:19Z
+Date: 2026-11-19T01:27:47Z
 
 Error excerpts:
 No xcodebuild.log: failure happened before/during another step.
