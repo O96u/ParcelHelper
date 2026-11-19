@@ -1,11 +1,7 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44321226589
-Commit: b3006837960e9a8e58c66fe2e37c0b66a0b53351
-Ref: refs/heads/main
-Date: 2026-11-18T14:11:02Z
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44436880926
+Commit: 6b72b504e86b17d6a89077e51cf26c038b651b23
+Ref: refs/tags/v1.2.0
+Date: 2026-11-19T01:26:19Z
 
 Error excerpts:
-420:/Users/runner/work/ParcelHelper/ParcelHelper/Shared/HomeWidgetSnapshot.swift:44:26: error: cannot find 'SecTaskCreateFromSelf' in scope
-423:/Users/runner/work/ParcelHelper/ParcelHelper/Shared/HomeWidgetSnapshot.swift:44:48: error: 'nil' requires a contextual type
-426:/Users/runner/work/ParcelHelper/ParcelHelper/Shared/HomeWidgetSnapshot.swift:45:27: error: cannot find 'SecTaskCopyValueForEntitlement' in scope
-429:/Users/runner/work/ParcelHelper/ParcelHelper/Shared/HomeWidgetSnapshot.swift:46:76: error: 'nil' requires a contextual type
-441:** BUILD FAILED **
+No xcodebuild.log: failure happened before/during another step.
