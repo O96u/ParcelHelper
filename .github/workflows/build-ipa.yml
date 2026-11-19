@@ -62,14 +62,19 @@ jobs:
           echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
           echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
-          echo "即将发版：$tag（构建号 $build_number），上一版本：${previous_tag:-无}"
+          if [[ -z "$previous_tag" ]]; then
+            previous_label="无"
+          else
+            previous_label="$previous_tag"
+          fi
+          echo "即将发版: ${tag} (构建号 ${build_number}), 上一版本: ${previous_label}"
           {
             echo ''
             echo '## 版本信息'
-            echo "- **发版标签**：\`$tag\`"
-            echo "- **营销版本**：\`$version\`"
-            echo "- **构建号**：\`$build_number\`"
-            echo "- **上一标签**：\`${previous_tag:-无}\`"
+            echo "- **发版标签**: \`${tag}\`"
+            echo "- **营销版本**: \`${version}\`"
+            echo "- **构建号**: \`${build_number}\`"
+            echo "- **上一标签**: \`${previous_label}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 解析 Widget App Group
