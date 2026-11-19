@@ -21,12 +21,12 @@
 当前仓库展示的是此前上传的界面截图。新版截图涵盖「取件首页、包裹列表、物流详情、设置、账号授权」五个页面；发布新版图片前需遮挡手机号、详细地址、运单号和物流记录中的个人信息，避免在公开仓库泄露隐私。
 
 <p align="center">
-  <img src="docs/screenshots/preview-01.png" alt="账号授权" width="270">
-  <img src="docs/screenshots/preview-02.png" alt="设置" width="270">
-  <img src="docs/screenshots/preview-03.png" alt="统计" width="270">
-  <img src="docs/screenshots/preview-04.png" alt="包裹列表" width="270">
-  <img src="docs/screenshots/preview-05.png" alt="取件列表" width="270">
-  <img src="docs/screenshots/preview-06.png" alt="取件列表示例" width="270">
+  <img src="docs/screenshots/preview-01.jpg" alt="取件首页" width="270">
+  <img src="docs/screenshots/preview-02.jpg" alt="包裹列表" width="270">
+  <img src="docs/screenshots/preview-03.jpg" alt="物流详情" width="270">
+  <img src="docs/screenshots/preview-04.jpg" alt="设置" width="270">
+  <img src="docs/screenshots/preview-05.jpg" alt="账号授权" width="270">
+   <img src="docs/screenshots/preview-06.png" alt="统计" width="270">
 </p>
 
 ## 主要功能
