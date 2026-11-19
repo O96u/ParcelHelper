@@ -3,9 +3,18 @@ import Foundation
 
 // Generate release notes from actual changes. Only non-empty categories are shown.
 let env = ProcessInfo.processInfo.environment
-let version = env["APP_VERSION"] ?? "1.0.0"
+let version = env["APP_VERSION"] ?? "1.2.0"
 let previous = env["PREVIOUS_TAG"] ?? ""
-let firstOfficial = version == "1.0.0" && previous.isEmpty
+
+func isPreV12Line(_ tag: String) -> Bool {
+    let raw = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+    let parts = raw.split(separator: ".")
+    guard parts.count == 3, let major = Int(parts[0]), let minor = Int(parts[1]) else { return false }
+    return major < 1 || (major == 1 && minor < 2)
+}
+
+// v1.2.0 为新版发版线起点：无上一标签，或上一标签仍属于 v1.1 及以前时，使用手写基准说明。
+let useBaseline = version == "1.2.0" && (previous.isEmpty || isPreV12Line(previous))
 let destination = URL(fileURLWithPath: "build/release-notes.md")
 let baseline = URL(fileURLWithPath: "docs/RELEASE_NOTES.md")
 
@@ -81,8 +90,7 @@ let installation = """
 """
 
 let releaseNotes: String
-if firstOfficial {
-    // The initial release is deliberately hand-authored, describing the baseline.
+if useBaseline {
     releaseNotes = try String(contentsOf: baseline, encoding: .utf8)
 } else {
     let messages = previous.isEmpty ? gitLog() : gitLog(since: previous)
@@ -93,7 +101,7 @@ if firstOfficial {
             entries[kind, default: []].append(detail)
         }
     }
-    var sections: [String] = ["# ParcelHelper \(version)"]
+    var sections: [String] = ["# ParcelHelper v\(version)"]
     for kind in Kind.allCases {
         guard let items = entries[kind], !items.isEmpty else { continue }
         sections.append("## \(kind.rawValue)\n" + items.map { "- " + $0 }.joined(separator: "\n"))
@@ -107,4 +115,4 @@ if firstOfficial {
 try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
                                         withIntermediateDirectories: true)
 try releaseNotes.write(to: destination, atomically: true, encoding: .utf8)
-print("Generated release notes for \(version) (only categories with changes)")
+print("已生成 v\(version) 中文版发行说明（仅含非空分类）")

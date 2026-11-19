@@ -1,24 +1,14 @@
 name: Build ParcelHelper IPA
 
-# Every commit to main builds an IPA and publishes a numbered release.
-# The release tag is generated automatically; never push a tag to trigger this workflow.
+# 仅推送符合 vMAJOR.MINOR.PATCH 的 Git 标签时构建并发版；向 main 提交不会自动发版。
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
-    inputs:
-      widget_group:
-        description: 'App Group granted to both signed targets (group.xxx); blank = repository variable or sample'
-        required: false
-        type: string
+    tags:
+      - 'v*'
 
-# Keep only the newest build of the same branch. A new push (or manual
-# dispatch) cancels older queued/in-progress work instead of wasting macOS
-# runner time or creating stale numbered Releases.
 concurrency:
-  group: parcelhelper-ipa-${{ github.ref }}
-  cancel-in-progress: true
+  group: parcelhelper-release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -30,47 +20,79 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 40
     steps:
-      - name: Checkout source
+      - name: 检出源代码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Include tags/history so release notes can compare changes
+          fetch-depth: 0
 
-      - name: Determine automatic version
+      - name: 写入构建摘要（中文）
         shell: bash
         run: |
           set -euo pipefail
-          # Start a new minor series to avoid colliding with existing v1.0.x tags.
-          version="1.1.${GITHUB_RUN_NUMBER}"
-          build_number="${GITHUB_RUN_NUMBER}"
-          previous_tag="$(git tag --merged HEAD --sort=-creatordate |
-            grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
+          {
+            echo '# ParcelHelper IPA 构建'
+            echo ''
+            echo "- **触发方式**：版本标签 \`${GITHUB_REF_NAME}\`"
+            echo "- **提交**：\`${GITHUB_SHA}\`"
+            echo '- **说明**：仅推送版本标签才会发版（当前发版线从 **v1.2.0** 起）；向 main 提交不会触发本工作流。'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 解析版本标签
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::发版标签必须为 v主版本.次版本.修订号（例如 v1.2.0），当前为：$tag"
+            exit 1
+          fi
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          if (( major == 1 && minor < 2 )); then
+            echo "::error::发版线已从 v1.2.x 开始，请使用 v1.2.0 或更高标签（不再接受 v1.0.x / v1.1.x）。"
+            exit 1
+          fi
+          version="${tag#v}"
+          build_number="$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))"
+          previous_tag="$(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname |
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+            grep -Fxv "$tag" | head -n 1 || true)"
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
           echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
-          echo "Building $version at $GITHUB_SHA (previous release: ${previous_tag:-none})"
+          echo "即将发版：$tag（构建号 $build_number），上一版本：${previous_tag:-无}"
+          {
+            echo ''
+            echo '## 版本信息'
+            echo "- **发版标签**：\`$tag\`"
+            echo "- **营销版本**：\`$version\`"
+            echo "- **构建号**：\`$build_number\`"
+            echo "- **上一标签**：\`${previous_tag:-无}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Resolve shared Widget App Group
+      - name: 解析 Widget App Group
         shell: bash
         env:
-          REQUESTED_WIDGET_GROUP: ${{ inputs.widget_group }}
           REPOSITORY_WIDGET_GROUP: ${{ vars.PH_WIDGET_GROUP }}
         run: |
           set -euo pipefail
-          group="${REQUESTED_WIDGET_GROUP:-${REPOSITORY_WIDGET_GROUP:-}}"
+          group="${REPOSITORY_WIDGET_GROUP:-}"
           if [[ -z "$group" ]]; then
             group="group.com.muxui.ParcelHelper"
-            echo "::warning::Using the example App Group. It will NOT work with a third-party certificate unless its signed provisioning profiles grant this exact group."
-            echo "⚠️ Default example group; enter the App Group from both signing profiles before distributing a Widget-enabled IPA." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::使用示例 App Group；第三方证书的描述文件未包含该组时，小组件无法跨进程共享数据。"
+            echo '- **注意**：当前为示例 App Group，分发带小组件的 IPA 前请在仓库变量 `PH_WIDGET_GROUP` 中填写与签名描述文件一致的组 ID。' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ ! "$group" =~ ^group\.[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || [[ "$group" == *..* ]] || [[ "$group" == *. ]]; then
-            echo "::error::Invalid App Group: $group. Expected group.your-authorized-id"
+            echo "::error::无效的 App Group：$group（应为 group. 开头的合法标识）"
             exit 1
           fi
           echo "PH_WIDGET_GROUP=$group" >> "$GITHUB_ENV"
-          echo "Widget group embedded into both targets: \`$group\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice::Unsigned build only. Main App and Widget must EACH be signed with profiles permitting $group."
+          echo "- **小组件 App Group**：\`$group\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::当前为未签名构建；主 App 与小组件扩展须各自使用包含 $group 的描述文件签名。"
 
-      - name: Generate and validate dark Home Screen icon
+      - name: 生成并校验深色主屏幕图标
         shell: bash
         run: |
           set -euo pipefail
@@ -78,14 +100,14 @@ jobs:
           icon_dir="Resources/Assets.xcassets/AppIcon.appiconset"
           test -s "$icon_dir/AppIcon-Dark.png"
           if cmp -s "$icon_dir/AppIcon.png" "$icon_dir/AppIcon-Dark.png"; then
-            echo "::error::Dark icon is identical to the regular icon"
+            echo "::error::深色图标与默认图标相同"
             exit 1
           fi
           jq -e 'any(.images[]; .filename == "AppIcon-Dark.png" and any(.appearances[]?; .appearance == "luminosity" and .value == "dark"))' "$icon_dir/Contents.json"
           sips -g pixelWidth -g pixelHeight "$icon_dir/AppIcon-Dark.png"
           shasum -a 256 "$icon_dir/AppIcon.png" "$icon_dir/AppIcon-Dark.png"
 
-      - name: Verify Xcode 26 Liquid Glass SDK
+      - name: 校验 Xcode 26 与 iOS SDK
         shell: bash
         run: |
           set -euo pipefail
@@ -93,27 +115,26 @@ jobs:
           version="$(xcodebuild -version | awk '/^Xcode / {print $2}')"
           major="${version%%.*}"
           if [[ ! "$major" =~ ^[0-9]+$ ]] || (( major < 26 )); then
-            echo "::error::Liquid Glass requires Xcode 26 or newer; found Xcode $version"
+            echo "::error::需要 Xcode 26 或更高版本，当前：Xcode $version"
             exit 1
           fi
           sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
           sdk_major="${sdk_version%%.*}"
           if [[ ! "$sdk_major" =~ ^[0-9]+$ ]] || (( sdk_major < 26 )); then
-            echo "::error::Liquid Glass requires iOS 26 SDK or newer; found $sdk_version"
+            echo "::error::需要 iOS 26 SDK 或更高版本，当前：$sdk_version"
             exit 1
           fi
-          echo "Liquid Glass-ready toolchain: Xcode $version, iOS SDK $sdk_version"
-          echo "Xcode: $version · iOS SDK: $sdk_version" >> "$GITHUB_STEP_SUMMARY"
+          echo "工具链就绪：Xcode $version，iOS SDK $sdk_version"
+          echo "- **Xcode**：$version · **iOS SDK**：$sdk_version" >> "$GITHUB_STEP_SUMMARY"
           xcodebuild -list -project ParcelHelper.xcodeproj
 
-      - name: Build iOS app and WidgetKit extensions
+      - name: 编译主程序与 WidgetKit 扩展
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build
-          echo "## Build" >> "$GITHUB_STEP_SUMMARY"
-          echo "Commit: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "Version: \`$APP_VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+          echo '## 编译' >> "$GITHUB_STEP_SUMMARY"
+          echo "正在编译营销版本 \`$APP_VERSION\` …" >> "$GITHUB_STEP_SUMMARY"
           xcodebuild \
             -jobs 2 \
             -resultBundlePath "$PWD/build/ParcelHelper.xcresult" \
@@ -131,7 +152,7 @@ jobs:
             PH_WIDGET_GROUP="$PH_WIDGET_GROUP" \
             build 2>&1 | tee build/xcodebuild.log
 
-      - name: Validate bundles and pack IPA
+      - name: 校验产物并打包 IPA
         shell: bash
         run: |
           set -euo pipefail
@@ -146,9 +167,9 @@ jobs:
           if command -v assetutil >/dev/null 2>&1; then
             assetutil --info "$APP_PATH/Assets.car" > build/asset-renditions.json
             if grep -Eiq 'dark' build/asset-renditions.json; then
-              echo "Compiled Assets.car contains a dark appearance rendition."
+              echo "已编译资源包含深色外观变体。"
             else
-              echo "::warning::No dark appearance name found in compiled asset metadata; inspect asset-renditions.json"
+              echo "::warning::编译后的资源元数据中未发现深色外观，请检查 asset-renditions.json"
             fi
           fi
           for bundle in "$APP_PATH" "$WIDGET_PATH"; do
@@ -161,63 +182,79 @@ jobs:
           for bundle in "$APP_PATH" "$WIDGET_PATH"; do
             actual_group="$(/usr/libexec/PlistBuddy -c 'Print :ParcelHelperWidgetGroup' "$bundle/Info.plist")"
             if [[ "$actual_group" != "$PH_WIDGET_GROUP" ]]; then
-              echo "::error::Widget App Group mismatch in $bundle: $actual_group != $PH_WIDGET_GROUP"
+              echo "::error::小组件 App Group 不一致（$bundle）：$actual_group != $PH_WIDGET_GROUP"
               exit 1
             fi
           done
-          echo "App and Widget bundle metadata both use $PH_WIDGET_GROUP" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **嵌入 App Group**：主程序与小组件均为 \`$PH_WIDGET_GROUP\`" >> "$GITHUB_STEP_SUMMARY"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "com.muxui.ParcelHelper"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$WIDGET_PATH/Info.plist")" = "com.muxui.ParcelHelper.widget"
           mkdir -p build/package/Payload
           ditto "$APP_PATH" build/package/Payload/ParcelHelper.app
           (cd build/package && /usr/bin/zip -qry ../ParcelHelper.ipa Payload)
           (cd build && shasum -a 256 ParcelHelper.ipa > ParcelHelper.ipa.sha256)
-          echo "Created ParcelHelper.ipa (unsigned build) $APP_VERSION build $BUILD_NUMBER"
+          echo "已生成未签名 ParcelHelper.ipa · 版本 $RELEASE_TAG · 构建号 $BUILD_NUMBER"
+          {
+            echo ''
+            echo '## 打包结果'
+            echo "- **安装包**：\`ParcelHelper.ipa\`（未签名）"
+            echo "- **版本标签**：\`$RELEASE_TAG\`"
+            echo "- **构建号**：\`$BUILD_NUMBER\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload IPA artifact
+      - name: 上传 IPA 工件
         uses: actions/upload-artifact@v4
         with:
-          name: ParcelHelper-${{ env.APP_VERSION }}
+          name: ParcelHelper-${{ env.RELEASE_TAG }}
           path: |
             build/ParcelHelper.ipa
             build/ParcelHelper.ipa.sha256
           if-no-files-found: error
           retention-days: 90
 
-      - name: Generate release notes
+      - name: 生成中文版发行说明
         shell: bash
         run: |
           set -euo pipefail
           swift scripts/generate_release_notes.swift
           test -s build/release-notes.md
+          echo '## 发行说明预览' >> "$GITHUB_STEP_SUMMARY"
+          echo '```markdown' >> "$GITHUB_STEP_SUMMARY"
+          cat build/release-notes.md >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
           cat build/release-notes.md
 
-      - name: Publish official GitHub Release
+      - name: 发布 GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag="$APP_VERSION"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --title "ParcelHelper $tag" --notes-file build/release-notes.md
-            gh release upload "$tag" build/ParcelHelper.ipa build/ParcelHelper.ipa.sha256 --clobber
-          else
-            gh release create "$tag" \
-              build/ParcelHelper.ipa \
-              build/ParcelHelper.ipa.sha256 \
-              --title "ParcelHelper $tag" \
-              --notes-file build/release-notes.md \
-              --target "$GITHUB_SHA"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Release $RELEASE_TAG 已存在；请勿重复推送同一标签，或先在 GitHub 上删除该 Release/标签后重试。"
+            exit 1
           fi
+          gh release create "$RELEASE_TAG" \
+            build/ParcelHelper.ipa \
+            build/ParcelHelper.ipa.sha256 \
+            --title "ParcelHelper $RELEASE_TAG" \
+            --notes-file build/release-notes.md \
+            --target "$GITHUB_SHA" \
+            --latest
+          {
+            echo ''
+            echo '## 发版完成'
+            echo "- **Release**：[\`$RELEASE_TAG\`](https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG)"
+            echo '- **附件**：`ParcelHelper.ipa`、`ParcelHelper.ipa.sha256`'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Summarize build errors
+      - name: 汇总编译错误（中文）
         if: failure()
         shell: bash
         run: |
           if [[ -f build/xcodebuild.log ]]; then
             {
-              echo '## Xcode build errors'
+              echo '## Xcode 编译错误摘要'
               echo '```text'
               grep -nE 'error:|\*\* BUILD FAILED \*\*|fatal error:' build/xcodebuild.log | tail -n 60 || true
               echo '```'
@@ -226,7 +263,7 @@ jobs:
 
       # Preserve one small failure report on a separate branch so diagnostics
       # can be inspected without the Actions run/job numeric IDs.
-      - name: Save latest failure report
+      - name: 保存最新失败诊断
         if: failure()
         continue-on-error: true
         shell: bash
@@ -271,7 +308,7 @@ jobs:
               gh api -X PUT "$remote" --input - >/dev/null
           fi
 
-      - name: Upload build logs
+      - name: 上传构建日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
