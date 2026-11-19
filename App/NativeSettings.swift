@@ -713,7 +713,7 @@ struct HomeWidgetSettingsPage: View {
                         .font(.caption)
                         .foregroundStyle(HomeWidgetSharedStore.isAvailable ? .green : .orange)
                 }
-                Text("需要使用桌面小组件？请在 GitHub 仓库的 Actions → Build ParcelHelper IPA → Run workflow 中，把你自己证书允许的 App Group 填入 widget_group 后再构建。主 App 和 Widget 扩展签名时必须保留同一个组。")
+                Text("需要使用桌面小组件？请在 GitHub Actions → Build ParcelHelper IPA → Run workflow 中填写你证书允许的 App Group（widget_group）。该手动构建为预发布版，不会替代最新正式 Release。签名时主 App 与 Widget 须保留同一组。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Link(destination: URL(string: "https://github.com/O96u/ParcelHelper/actions/workflows/build-ipa.yml")!) {

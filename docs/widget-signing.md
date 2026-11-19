@@ -26,18 +26,18 @@ ParcelHelper 现已包含两种不同的 WidgetKit 内容：
 3. 下载生成的 IPA，使用 LCSign 等签名工具保留 Widget 扩展，并确认主 App、Widget 使用同一个被允许的 App Group。
 4. 安装后在 App 的「设置 → 小组件」确认「当前签名可访问」，再点击「重新写入小组件数据」。
 
-如果经常从 `main` 自动构建，可以在仓库 Actions Variables 配置 `PH_WIDGET_GROUP` 作为默认值；手动输入的组名优先于变量。GitHub 的 IPA 构建本身不会自动颁发签名权限。
+手动构建产生 **Pre-release**（例如 `v1.2.0-pre.42`），**不会**成为 Releases 页的 Latest。推送 `v1.2.x` 标签才是正式 Latest。GitHub 的 IPA 构建本身不会自动颁发签名权限。
 
 ## 构建配置
 
 Xcode 工程中的 `PH_WIDGET_GROUP` 默认是示例值 `group.com.muxui.ParcelHelper`，**并不代表该 Group 已获你的证书授权**。真正用自有 Xcode 签名时，应为两个 target 使用自己在 Apple Developer 中启用的相同 Group。
 
-GitHub Actions 构建未签名 IPA 时，可通过以下两种方式指定**你本人证书有效授权**的 Group ID：
+GitHub Actions 构建未签名 IPA 时指定 Group ID：
 
-- **手机端最方便：** 在仓库 **Actions → Build ParcelHelper IPA → Run workflow** 中填写新增的 `widget_group` 输入项，格式为 `group.xxx`。此值只覆盖本次手动构建。
-- **后续自动构建默认使用：** 在仓库 **Settings → Secrets and variables → Actions → Variables** 中设置 `PH_WIDGET_GROUP`。普通 `main` 提交构建时读取此值。
+- **手动预发布（推荐自用签名）：** **Actions → Build ParcelHelper IPA → Run workflow**，必填 `widget_group`（`group.xxx`）。产出为 Pre-release，仅供下载对应 IPA，不替换 Latest。
+- **正式版标签发版：** 维护者推送 `v1.2.x` 标签；可选用仓库变量 **`PH_WIDGET_GROUP`**（Settings → Actions → Variables）作为正式构建默认值。未配置时使用示例 `group.com.muxui.ParcelHelper` 并给出警告。
 
-手动输入优先于仓库变量；都未设置时仍用示例 `group.com.muxui.ParcelHelper`，GitHub Actions 会明确警告。构建过程会检查**主 App 和 Widget 两份 Info.plist 的共享组值是否一致**。但构建是未签名的，此检查不代表设备安装时已有实际权限。
+构建过程会检查**主 App 和 Widget 两份 Info.plist 的共享组值是否一致**。但构建是未签名的，此检查不代表设备安装时已有实际权限。
 
 **必须确认主 App 与 Widget 扩展的重签名描述文件都允许这个组。** 如果 LCSign 为二者使用不同 App Group 或把共享权限删除，那么换一个源码中的组名也无法解决；需要在签名器内调整扩展的描述文件/权限后覆盖安装。
 

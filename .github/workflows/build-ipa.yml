@@ -1,13 +1,25 @@
 name: Build ParcelHelper IPA
 
-# 仅推送符合 vMAJOR.MINOR.PATCH 的 Git 标签时构建并发版；向 main 提交不会自动发版。
+# 正式版：推送 vMAJOR.MINOR.PATCH 标签 → Latest Release。
+# 预发布：Actions 手动运行，填写 App Group → Pre-release，不会成为 Latest。
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      widget_group:
+        description: '主 App 与小组件共用的 App Group，例如 group.your.id'
+        required: true
+        type: string
+      base_ref:
+        description: '要构建的分支或提交（默认 main）'
+        required: false
+        default: main
+        type: string
 
 concurrency:
-  group: parcelhelper-release-${{ github.ref }}
+  group: parcelhelper-${{ github.event_name == 'workflow_dispatch' && format('prerelease-{0}', github.run_id) || format('release-{0}', github.ref) }}
   cancel-in-progress: false
 
 permissions:
@@ -24,70 +36,122 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.base_ref || github.ref }}
 
       - name: 写入构建摘要（中文）
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           {
             echo '# ParcelHelper IPA 构建'
             echo ''
-            echo "- **触发方式**：版本标签 \`${GITHUB_REF_NAME}\`"
-            echo "- **提交**：\`${GITHUB_SHA}\`"
-            echo '- **说明**：仅推送版本标签才会发版（当前发版线从 **v1.2.0** 起）；向 main 提交不会触发本工作流。'
+            if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+              echo '- **触发方式**: Actions 手动构建（预发布）'
+              echo "- **构建分支/引用**: \`${{ inputs.base_ref }}\`"
+            else
+              echo "- **触发方式**: 版本标签 \`${GITHUB_REF_NAME}\`（正式 Latest）"
+            fi
+            echo "- **提交**: \`${GITHUB_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 解析版本标签
+      - name: 确定发版参数
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            echo "::error::发版标签必须为 v主版本.次版本.修订号 (例如 v1.2.0), 当前为: ${tag}"
-            exit 1
-          fi
-          major="${BASH_REMATCH[1]}"
-          minor="${BASH_REMATCH[2]}"
-          patch="${BASH_REMATCH[3]}"
-          if (( major == 1 && minor < 2 )); then
-            echo "::error::发版线已从 v1.2.x 开始，请使用 v1.2.0 或更高标签（不再接受 v1.0.x / v1.1.x）。"
-            exit 1
-          fi
-          version="${tag#v}"
-          build_number="$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))"
-          previous_tag="$(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname |
-            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
-            grep -Fxv "$tag" | head -n 1 || true)"
-          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
-          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
-          echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
-          echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
-          if [[ -z "$previous_tag" ]]; then
-            previous_label="无"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "IS_PRERELEASE=true" >> "$GITHUB_ENV"
+            latest_official="$(git tag --list 'v[0-9]*' --sort=-version:refname |
+              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
+            if [[ -z "$latest_official" ]]; then
+              version="1.2.0"
+              previous_tag=""
+            else
+              version="${latest_official#v}"
+              previous_tag="$latest_official"
+            fi
+            IFS=. read -r major minor patch <<< "$version"
+            build_number="$((10#${major:-1} * 1000000 + 10#${minor:-2} * 1000 + 10#${patch:-0} + GITHUB_RUN_NUMBER))"
+            tag="v${version}-pre.${GITHUB_RUN_NUMBER}"
+            echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+            echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+            echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
+            echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
+            echo "预发布: ${tag} (营销版本 ${version}, 构建号 ${build_number})"
+            {
+              echo ''
+              echo '## 版本信息'
+              echo '- **类型**: 预发布 (Pre-release)，**不会**设为 Latest'
+              echo "- **Release 标签**: \`${tag}\`"
+              echo "- **营销版本**: \`${version}\`"
+              echo "- **构建号**: \`${build_number}\`"
+              echo "- **对照正式版**: \`${previous_tag:-无}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
           else
-            previous_label="$previous_tag"
+            echo "IS_PRERELEASE=false" >> "$GITHUB_ENV"
+            tag="${GITHUB_REF_NAME}"
+            if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo "::error::发版标签必须为 v主版本.次版本.修订号 (例如 v1.2.0), 当前为: ${tag}"
+              exit 1
+            fi
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            if (( major == 1 && minor < 2 )); then
+              echo "::error::发版线已从 v1.2.x 开始，请使用 v1.2.0 或更高标签（不再接受 v1.0.x / v1.1.x）。"
+              exit 1
+            fi
+            version="${tag#v}"
+            build_number="$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))"
+            previous_tag="$(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname |
+              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+              grep -Fxv "$tag" | head -n 1 || true)"
+            echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+            echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+            echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
+            echo "PREVIOUS_TAG=$previous_tag" >> "$GITHUB_ENV"
+            if [[ -z "$previous_tag" ]]; then
+              previous_label="无"
+            else
+              previous_label="$previous_tag"
+            fi
+            echo "即将发版: ${tag} (构建号 ${build_number}), 上一版本: ${previous_label}"
+            {
+              echo ''
+              echo '## 版本信息'
+              echo '- **类型**: 正式版 (Latest)'
+              echo "- **发版标签**: \`${tag}\`"
+              echo "- **营销版本**: \`${version}\`"
+              echo "- **构建号**: \`${build_number}\`"
+              echo "- **上一标签**: \`${previous_label}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "即将发版: ${tag} (构建号 ${build_number}), 上一版本: ${previous_label}"
-          {
-            echo ''
-            echo '## 版本信息'
-            echo "- **发版标签**: \`${tag}\`"
-            echo "- **营销版本**: \`${version}\`"
-            echo "- **构建号**: \`${build_number}\`"
-            echo "- **上一标签**: \`${previous_label}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 解析 Widget App Group
         shell: bash
         env:
           REPOSITORY_WIDGET_GROUP: ${{ vars.PH_WIDGET_GROUP }}
+          MANUAL_WIDGET_GROUP: ${{ inputs.widget_group }}
+          IS_PRERELEASE: ${{ env.IS_PRERELEASE }}
         run: |
           set -euo pipefail
-          group="${REPOSITORY_WIDGET_GROUP:-}"
-          if [[ -z "$group" ]]; then
-            group="group.com.muxui.ParcelHelper"
-            echo "::warning::使用示例 App Group；第三方证书的描述文件未包含该组时，小组件无法跨进程共享数据。"
-            echo '- **注意**：当前为示例 App Group，分发带小组件的 IPA 前请在仓库变量 `PH_WIDGET_GROUP` 中填写与签名描述文件一致的组 ID。' >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            group="${MANUAL_WIDGET_GROUP:-}"
+            if [[ -z "$group" ]]; then
+              echo "::error::手动预发布构建必须在 workflow 输入中填写 widget_group。"
+              exit 1
+            fi
+            echo '- **App Group 来源**: 本次手动输入（仅用于此次预发布 IPA）' >> "$GITHUB_STEP_SUMMARY"
+          else
+            group="${REPOSITORY_WIDGET_GROUP:-}"
+            if [[ -z "$group" ]]; then
+              group="group.com.muxui.ParcelHelper"
+              echo "::warning::使用示例 App Group；第三方证书的描述文件未包含该组时，小组件无法跨进程共享数据。"
+              echo '- **注意**: 当前为示例 App Group；正式版可在仓库变量 `PH_WIDGET_GROUP` 中配置默认值。' >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           if [[ ! "$group" =~ ^group\.[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || [[ "$group" == *..* ]] || [[ "$group" == *. ]]; then
             echo "::error::无效的 App Group: ${group} (应为 group. 开头的合法标识)"
@@ -219,9 +283,27 @@ jobs:
 
       - name: 生成中文版发行说明
         shell: bash
+        env:
+          IS_PRERELEASE: ${{ env.IS_PRERELEASE }}
+          PH_WIDGET_GROUP: ${{ env.PH_WIDGET_GROUP }}
         run: |
           set -euo pipefail
-          swift scripts/generate_release_notes.swift
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            {
+              echo "# ParcelHelper ${RELEASE_TAG}"
+              echo ""
+              echo "## 预发布说明"
+              echo "- 本次为 **Actions 手动预发布**，**不会**替代 [最新正式版](https://github.com/$GITHUB_REPOSITORY/releases/latest)。"
+              echo "- 嵌入 App Group: \`${PH_WIDGET_GROUP}\`（与你在 Run workflow 中填写的一致）。"
+              echo "- 构建引用: \`${{ inputs.base_ref }}\` · 提交 \`${GITHUB_SHA:0:7}\`"
+              echo ""
+              echo "## 安装说明"
+              echo "- \`ParcelHelper.ipa\` 为未签名 IPA，须自行签名后安装。"
+              echo "- 签名时主 App 与小组件扩展须使用包含上述 App Group 的描述文件。"
+            } > build/release-notes.md
+          else
+            swift scripts/generate_release_notes.swift
+          fi
           test -s build/release-notes.md
           echo '## 发行说明预览' >> "$GITHUB_STEP_SUMMARY"
           echo '```markdown' >> "$GITHUB_STEP_SUMMARY"
@@ -233,24 +315,36 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_PRERELEASE: ${{ env.IS_PRERELEASE }}
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "::error::Release $RELEASE_TAG 已存在；请勿重复推送同一标签，或先在 GitHub 上删除该 Release/标签后重试。"
+            echo "::error::Release ${RELEASE_TAG} 已存在；请勿重复推送同一标签，或先在 GitHub 上删除该 Release/标签后重试。"
             exit 1
           fi
-          gh release create "$RELEASE_TAG" \
-            build/ParcelHelper.ipa \
-            build/ParcelHelper.ipa.sha256 \
-            --title "ParcelHelper $RELEASE_TAG" \
-            --notes-file build/release-notes.md \
-            --target "$GITHUB_SHA" \
-            --latest
+          release_args=(
+            "$RELEASE_TAG"
+            build/ParcelHelper.ipa
+            build/ParcelHelper.ipa.sha256
+            --title "ParcelHelper ${RELEASE_TAG}"
+            --notes-file build/release-notes.md
+            --target "$GITHUB_SHA"
+          )
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            gh release create "${release_args[@]}" --prerelease
+          else
+            gh release create "${release_args[@]}" --latest
+          fi
           {
             echo ''
             echo '## 发版完成'
-            echo "- **Release**：[\`$RELEASE_TAG\`](https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG)"
-            echo '- **附件**：`ParcelHelper.ipa`、`ParcelHelper.ipa.sha256`'
+            if [[ "$IS_PRERELEASE" == "true" ]]; then
+              echo '- **类型**: Pre-release（非 Latest）'
+            else
+              echo '- **类型**: 正式版 Latest'
+            fi
+            echo "- **Release**: [\`${RELEASE_TAG}\`](https://github.com/$GITHUB_REPOSITORY/releases/tag/${RELEASE_TAG})"
+            echo '- **附件**: `ParcelHelper.ipa`、`ParcelHelper.ipa.sha256`'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 汇总编译错误（中文）
