@@ -23,6 +23,7 @@ private enum PddSyncResult {
 }
 
 struct PddOrderSyncPage: View {
+    var accountID: String? = nil
     @State private var message = "正在读取拼多多订单…"
     @State private var busy = true
     let onFinish: (String) -> Void
@@ -34,11 +35,11 @@ struct PddOrderSyncPage: View {
                 Text(message).font(.footnote).lineLimit(3)
                 Spacer()
             }.padding(12)
-            PddOrdersWebView { result in
+            PddOrdersWebView(accountID: accountID) { result in
                 busy = false
                 switch result {
                 case .success(let orders, let discovered):
-                    let changed = Self.save(orders)
+                    let changed = Self.save(orders, accountID: accountID)
                     UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success.pdd")
                     message = "发现 \(discovered) 笔订单，核验 \(orders.count) 笔；保存 \(changed) 件有效物流包裹。"
                 case .failure(let reason):
@@ -57,13 +58,15 @@ struct PddOrderSyncPage: View {
         }
     }
 
-    @MainActor fileprivate static func save(_ orders: [PddDetectedOrder]) -> Int {
+    @MainActor fileprivate static func save(_ orders: [PddDetectedOrder],
+                                            accountID: String? = nil) -> Int {
         let incoming = orders.compactMap { order -> NativeSyncParcel? in
             let mail = order.trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines)
             let code = order.pickupCode ?? ""
             guard mail.range(of: #"^[A-Za-z0-9-]{8,40}$"#, options: .regularExpression) != nil ||
                     (!code.isEmpty && !(order.station ?? "").isEmpty) else { return nil }
             var p = NativeSyncParcel(source: "pdd")
+            p.accountID = accountID ?? ParcelAccounts.activeID(for: "pdd")
             p.orderID = order.orderSn
             p.mailNo = mail
             p.title = order.title
@@ -82,13 +85,14 @@ struct PddOrderSyncPage: View {
 // The same official order reader powers both the visible manual action and
 // the foreground automatic sync. There are no separate parsing paths.
 struct PddOrdersAutoSyncReader: View {
+    var accountID: String? = nil
     let onComplete: (String, Bool) -> Void
 
     var body: some View {
-        PddOrdersWebView { result in
+        PddOrdersWebView(accountID: accountID) { result in
             switch result {
             case .success(let orders, let discovered):
-                let changed = PddOrderSyncPage.save(orders)
+                let changed = PddOrderSyncPage.save(orders, accountID: accountID)
                 let message = "拼多多购物订单：发现 \(discovered) 笔，核验 \(orders.count) 笔，新增或更新 \(changed) 件。"
                 onComplete(message, true)
             case .failure(let reason):
@@ -99,6 +103,7 @@ struct PddOrdersAutoSyncReader: View {
 }
 
 private struct PddOrdersWebView: UIViewRepresentable {
+    var accountID: String? = nil
     let onResult: (PddSyncResult) -> Void
     let onProgress: (String) -> Void
 
@@ -107,7 +112,7 @@ private struct PddOrdersWebView: UIViewRepresentable {
     }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        config.websiteDataStore = ParcelAccounts.webStore(for: "pdd", accountID: accountID)
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
