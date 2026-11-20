@@ -247,8 +247,10 @@ private enum SyncJSON {
                 found: incoming.count, imported: count, errors: [])
             UserDefaults.standard.set(result.description, forKey: "native.sync.result." + id)
             UserDefaults.standard.set(result.description, forKey: "native.sync.result." + id + "." + selected)
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success." + id)
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success." + id + "." + selected)
+            let syncedAt = Date().timeIntervalSince1970
+            UserDefaults.standard.set(syncedAt, forKey: "native.sync.success." + id)
+            UserDefaults.standard.set(syncedAt, forKey: "native.sync.success." + id + "." + selected)
+            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
             UserDefaults.standard.removeObject(forKey: retryKey)
             UserDefaults.standard.removeObject(forKey: failuresKey)
             if ParcelStore.shared.snapshot.preferences.liveActivityEnabled {
