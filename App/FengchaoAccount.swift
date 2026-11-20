@@ -11,7 +11,7 @@ import Security
     private static let base = "https://consumer.fcbox.com"
     private static let op = "30b2718363204beeae98b7d03a75c3a4"
 
-    private enum SecureStore {
+    @MainActor private enum SecureStore {
         static func get(_ key: String) -> String {
             let query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
