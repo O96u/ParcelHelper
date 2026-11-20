@@ -18,6 +18,7 @@ enum NativeSyncError: LocalizedError {
 }
 struct NativeSyncParcel {
     var source: String
+    var accountID: String = ""
     var orderID: String = ""
     var mailNo: String = ""
     var title: String = ""
@@ -69,14 +70,17 @@ private enum SyncJSON {
 
 @MainActor private enum WebCookieRequest {
     static let store = WKWebsiteDataStore.default().httpCookieStore
-    static func cookies(domain: String) async -> [HTTPCookie] {
-        await store.allCookies().filter {
+    static func cookieStore(accountID: String? = nil) -> WKHTTPCookieStore {
+        ParcelAccounts.websiteDataStore(for: accountID ?? "legacy:taobao").httpCookieStore
+    }
+    static func cookies(domain: String, accountID: String? = nil) async -> [HTTPCookie] {
+        await cookieStore(accountID: accountID).allCookies().filter {
             ($0.domain == domain || $0.domain.hasSuffix("." + domain)) &&
             ($0.expiresDate == nil || ($0.expiresDate ?? .distantPast) > Date())
         }
     }
-    static func headers(domain: String) async throws -> [String: String] {
-        let cookies = await cookies(domain: domain)
+    static func headers(domain: String, accountID: String? = nil) async throws -> [String: String] {
+        let cookies = await cookies(domain: domain, accountID: accountID)
         guard !cookies.isEmpty else {
             throw NativeSyncError.noLogin("尚未检测到\(domain)网页会话，请先网页登录")
         }
@@ -157,14 +161,16 @@ private enum SyncJSON {
     // Throttle user-triggered refreshes too: no bursts into private endpoints.
     static let minGap: TimeInterval = 30
 
-    static func run(_ id: String, force: Bool = false) async throws -> NativeSyncResult {
+    static func run(_ id: String, force: Bool = false,
+                    accountID: String? = nil) async throws -> NativeSyncResult {
         guard platforms.contains(id) else {
             throw NativeSyncError.unavailable("该平台尚未完成 Swift 原生查询适配")
         }
         if id == "pdd" && !PddAccountProtection.webAccessAllowed {
             throw NativeSyncError.unavailable("拼多多同步已暂停，以保护官方 App 的登录状态。可在拼多多账号详情手动开启。")
         }
-        let key = "native.sync.at." + id
+        let selected = accountID ?? ParcelAccounts.activeID(for: id)
+        let key = "native.sync.at." + id + "." + selected
         let last = UserDefaults.standard.double(forKey: key)
         if !force && Date().timeIntervalSince1970 - last < minGap {
             throw NativeSyncError.unavailable("请求过于频繁，请稍后再试")
@@ -172,16 +178,18 @@ private enum SyncJSON {
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: key)
         do {
             let incoming: [NativeSyncParcel]
-            if id == "pdd" { incoming = try await pddPackages() }
-            else if id == "cainiao" { incoming = try await cainiaoPackages() }
-            else if id == "fengchao" { incoming = try await NativeFengchao.packages() }
+            if id == "pdd" { incoming = try await pddPackages(accountID: selected) }
+            else if id == "cainiao" { incoming = try await cainiaoPackages(accountID: selected) }
+            else if id == "fengchao" { incoming = try await NativeFengchao.packages(accountID: selected) }
             else { incoming = try await NativeMiExpress.packages() }
             let count = merge(incoming)
             let result = NativeSyncResult(
                 name: id == "pdd" ? "拼多多驿站包裹" : (id == "cainiao" ? "菜鸟" : (id == "fengchao" ? "丰巢" : "小米")),
                 found: incoming.count, imported: count, errors: [])
             UserDefaults.standard.set(result.description, forKey: "native.sync.result." + id)
+            UserDefaults.standard.set(result.description, forKey: "native.sync.result." + id + "." + selected)
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success." + id)
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success." + id + "." + selected)
             if ParcelStore.shared.snapshot.preferences.liveActivityEnabled {
                 await LiveActivityCoordinator.update(with: ParcelStore.shared.snapshot.parcels)
             }
@@ -189,6 +197,7 @@ private enum SyncJSON {
         } catch {
             let detail = error.localizedDescription
             UserDefaults.standard.set(detail, forKey: "native.sync.result." + id)
+            UserDefaults.standard.set(detail, forKey: "native.sync.result." + id + "." + selected)
             throw error
         }
     }
@@ -235,7 +244,11 @@ private enum SyncJSON {
             let mail = row.mailNo.trimmingCharacters(in: .whitespacesAndNewlines)
             let code = normalizedCode(row.code)
             guard SyncJSON.isMail(mail) || (row.arrived && !code.isEmpty) else { continue }
-            let orderKey = row.orderID.isEmpty ? "" : row.source + ":" + row.orderID
+            let scopedAccount = row.accountID
+            let orderPrefix = scopedAccount.isEmpty ||
+                scopedAccount == ParcelAccounts.legacyID(row.source) ?
+                row.source : row.source + ":" + scopedAccount
+            let orderKey = row.orderID.isEmpty ? "" : orderPrefix + ":" + row.orderID
             // Manual delete is a user decision: never silently re-import this
             // shipment on the next platform refresh.
             guard !store.isDeletedShipment(source: row.source, order: orderKey,
@@ -276,6 +289,11 @@ private enum SyncJSON {
             let oldLatest = p.trackLatest ?? ""
             let previousCodes = p.codes
             if p.orderId == nil && !orderKey.isEmpty { p.orderId = orderKey }
+            if !scopedAccount.isEmpty {
+                var owners = Set(p.linkedAccounts ?? [])
+                owners.insert(scopedAccount)
+                p.linkedAccounts = owners.sorted()
+            }
             if p.mailNo == nil && !mail.isEmpty { p.mailNo = mail }
 
             if priorSource == nil || priorSource?.isEmpty == true ||
@@ -331,7 +349,7 @@ private enum SyncJSON {
                 p.pickedAt != previous?.pickedAt || p.trackNodes != oldNodes ||
                 p.trackLatest != oldLatest || p.codes != previousCodes ||
                 p.stationText != previous?.stationText ||
-                p.source != priorSource
+                p.source != priorSource || p.linkedAccounts != previous?.linkedAccounts
             if needsWrite {
                 store.upsert(p)
                 if previous != nil {
