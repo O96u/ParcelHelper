@@ -122,7 +122,7 @@ struct IdentitySettingsPage: View {
                 row("拼多多", "pdd", enabled: $pdd)
                 row("京东", "jd", enabled: $jd)
             } header: { Text("快捷入口设置") } footer: {
-                Text("身份码只展示各平台默认账号的真实出码。淘宝与菜鸟共用默认淘宝账号；京东展示官方网页动态条形码。关闭入口不会解除授权。")
+                Text("这里只管理首页身份码快捷入口，不影响取件列表。登录统一在「设置 → 账号授权」操作；关闭入口不会解除授权。")
             }
             Section {
                 Button {
@@ -176,9 +176,8 @@ struct IdentitySettingsPage: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(name).font(.body).foregroundStyle(.primary)
                     Text(hasSession[id] == true
-                         ? (id == "cainiao" ? "已登录 · 实名身份码" :
-                            id == "jd" ? "已登录 · 官方条形码" : "已登录 · 动态取件码")
-                         : "未授权，请在账号页登录")
+                         ? "已授权 · 动态取件码"
+                         : "未授权 · 请前往账号授权")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

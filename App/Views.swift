@@ -339,14 +339,14 @@ struct PickupHome: View {
                         HStack(spacing: 6) {
                             Image(systemName: "lock.shield")
                                 .foregroundStyle(accent)
-                            Text("实时身份码来自已登录的平台")
+                            Text("身份码快捷入口 · 不影响取件列表")
                                 .foregroundStyle(.secondary)
                             Spacer(minLength: 4)
                             NavigationLink {
                                 IdentitySettingsPage()
                             } label: {
                                 HStack(spacing: 4) {
-                                    Text("管理")
+                                    Text("身份码设置")
                                     Image(systemName: "chevron.right")
                                 }
                                 .fontWeight(.medium)
@@ -453,7 +453,7 @@ struct PickupHome: View {
                 Text(name)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
-                Text(platform == "cainiao" ? "实名身份码" : "动态取件码")
+                Text("动态取件码")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

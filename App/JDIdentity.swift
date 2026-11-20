@@ -18,14 +18,11 @@ struct JDIdentityPage: View {
     @State private var state: JDIdentityState = .loading
     @State private var expanded = false
     @State private var refreshIndex = 0
-    @State private var showingLogin = false
+    @State private var sessionValid = false
     private let accent = Color(red: 0.19, green: 0.49, blue: 0.96)
     private var accountName: String {
         ParcelAccounts.displayName(accountID, platform: "jd")
     }
-    private let loginURL = URL(string:
-        "https://plogin.m.jd.com/login/login?appid=0&returnurl=https%3A%2F%2Fconvenient-h5.jd.com%2FidentityCode%3Fchannel%3Dxueshengjirukou")!
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -61,7 +58,7 @@ struct JDIdentityPage: View {
                 }
                 .tint(accent)
                 ZStack {
-                    if !accountID.isEmpty {
+                    if !accountID.isEmpty && sessionValid {
                         JDIdentityWebView(accountID: accountID,
                                           refreshIndex: refreshIndex,
                                           dark: colorScheme == .dark) { newState, isExpanded in
@@ -85,9 +82,16 @@ struct JDIdentityPage: View {
                             case .loginRequired:
                                 Image(systemName: "person.badge.key")
                                     .font(.system(size: 35)).foregroundStyle(accent)
-                                Text("默认京东账号需要登录").font(.headline)
-                                Button("登录京东") { showingLogin = true }
-                                    .buttonStyle(.borderedProminent)
+                                Text("当前京东账号尚未授权").font(.headline)
+                                Text("请在账号授权页面完成登录，身份码页不处理登录。")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                NavigationLink {
+                                    PlatformAccountsPage()
+                                } label: {
+                                    Text("前往账号授权")
+                                }
+                                .buttonStyle(.borderedProminent)
                             case .failed(let reason):
                                 Image(systemName: "exclamationmark.circle")
                                     .font(.system(size: 35)).foregroundStyle(.orange)
@@ -129,28 +133,29 @@ struct JDIdentityPage: View {
             do { try await Task.sleep(for: .seconds(22)) } catch { return }
             if state == .loading { state = .failed("京东身份码暂未加载成功，请刷新重试") }
         }
-        .sheet(isPresented: $showingLogin, onDismiss: { reload() }) {
-            NavigationStack {
-                PlatformWebLogin(url: loginURL, platformID: "jd", accountID: accountID) {
-                    showingLogin = false
-                }
-                .navigationTitle("登录默认京东账号")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("完成") { showingLogin = false }
-                    }
-                }
-            }
-        }
     }
     private func syncDefault() {
         let selected = ParcelAccounts.activeID(for: "jd")
         if accountID != selected {
             accountID = selected
+            sessionValid = false
             state = .loading
             expanded = false
             refreshIndex = 0
+        }
+        Task { @MainActor in
+            let valid = await ParcelAccounts.hasSession("jd", accountID: selected)
+            guard selected == accountID,
+                  selected == ParcelAccounts.activeID(for: "jd") else { return }
+            sessionValid = valid
+            if !valid {
+                state = .loginRequired
+                expanded = false
+            } else if state == .loginRequired {
+                state = .loading
+                expanded = false
+                refreshIndex &+= 1
+            }
         }
     }
     private func reload() {
@@ -158,6 +163,7 @@ struct JDIdentityPage: View {
         state = .loading
         expanded = false
         refreshIndex &+= 1
+        syncDefault()
     }
 }
 
@@ -271,6 +277,12 @@ private struct JDIdentityWebView: UIViewRepresentable {
                 decisionHandler(.cancel)
                 return
             }
+            if navigationAction.targetFrame?.isMainFrame != false,
+               JDIdentityWebView.needsLogin(url) {
+                onUpdate(.loginRequired, false)
+                decisionHandler(.cancel)
+                return
+            }
             decisionHandler(.allow)
         }
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
@@ -279,6 +291,10 @@ private struct JDIdentityWebView: UIViewRepresentable {
             guard navigationAction.targetFrame == nil,
                   let url = navigationAction.request.url,
                   JDIdentityWebView.permitted(url) else { return nil }
+            if JDIdentityWebView.needsLogin(url) {
+                onUpdate(.loginRequired, false)
+                return nil
+            }
             webView.load(navigationAction.request)
             return nil
         }
