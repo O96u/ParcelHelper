@@ -16,17 +16,17 @@
 
 </div>
 
-## 应用预览
+## 应用宣传
 
-当前仓库展示的是此前上传的界面截图。新版截图涵盖「取件首页、包裹列表、物流详情、设置、账号授权」五个页面；发布新版图片前需遮挡手机号、详细地址、运单号和物流记录中的个人信息，避免在公开仓库泄露隐私。
+以下为 `docs/screenshots/` 中的宣传图（PNG），展示取件、包裹、统计、设置、账号授权与小组件等核心界面；图中手机号、详细地址、运单号等敏感信息已脱敏。在 GitHub 中点击可查看原图。
 
 <p align="center">
-  <img src="docs/screenshots/preview-01.jpg" alt="取件首页" width="270">
-  <img src="docs/screenshots/preview-02.jpg" alt="包裹列表" width="270">
-  <img src="docs/screenshots/preview-03.jpg" alt="物流详情" width="270">
-  <img src="docs/screenshots/preview-04.jpg" alt="设置" width="270">
-  <img src="docs/screenshots/preview-05.jpg" alt="账号授权" width="270">
-   <img src="docs/screenshots/preview-06.png" alt="统计" width="270">
+  <img src="docs/screenshots/poster-01.png" alt="宣传图：取件总览与平台身份码" width="240">
+  <img src="docs/screenshots/poster-02.png" alt="宣传图：包裹列表与状态分类" width="240">
+  <img src="docs/screenshots/poster-03.png" alt="宣传图：取件统计与趋势" width="240">
+  <img src="docs/screenshots/poster-04.png" alt="宣传图：设置与个性化" width="240">
+  <img src="docs/screenshots/poster-05.png" alt="宣传图：多平台账号授权" width="240">
+  <img src="docs/screenshots/poster-06.png" alt="宣传图：主屏幕小组件" width="240">
 </p>
 
 ## 主要功能
@@ -85,7 +85,7 @@
 | `Resources/`                     | 图标、Info.plist 和签名能力配置                                          |
 | `ParcelHelper.xcodeproj/`        | 已提交的 Xcode 工程                                                      |
 | `scripts/create_dark_icon.swift` | 构建时生成深色 App 图标                                                  |
-| `docs/`                          | 签名说明及图标素材来源                                                   |
+| `docs/`                          | 签名说明、宣传图（`screenshots/`）及图标素材来源                         |
 | `Tests/`                         | 部分解析逻辑测试                                                         |
 
 界面以 SwiftUI 为主；网页登录、剪贴板、远程请求和通知等仍会使用 WebKit、UIKit、Foundation、UserNotifications、ActivityKit 等原生 API。
