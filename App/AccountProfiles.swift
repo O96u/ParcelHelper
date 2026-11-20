@@ -143,6 +143,7 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
             try await WKWebsiteDataStore.remove(forIdentifier: uuid)
             write(saved.filter { $0.id != account.id })
         }
+        ParcelStore.shared.removeImportedParcels(linkedTo: account.id, platform: account.platform)
         if activeID(for: account.platform) == account.id {
             select(legacyID(account.platform), for: account.platform)
         }
@@ -276,6 +277,7 @@ private struct PddOfficialPhoneManager: UIViewRepresentable {
     @State private var authorized = false
     @State private var resultError: String?
     @State private var officialPage = false
+    @State private var officialRevision = 0
     @State private var askWebConsent = false
     @State private var syncing = false
     @State private var notice: String?
@@ -415,9 +417,17 @@ private struct PddOfficialPhoneManager: UIViewRepresentable {
         }) {
             NavigationStack {
                 PddOfficialPhoneManager(accountID: account.id)
+                    .id(officialRevision)
                     .navigationTitle("拼多多官方手机号管理")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                officialRevision += 1
+                            } label: {
+                                Label("重新加载", systemImage: "arrow.clockwise")
+                            }
+                        }
                         ToolbarItem(placement: .topBarTrailing) {
                             Button("完成") { officialPage = false }
                         }
@@ -544,14 +554,23 @@ struct MultiAccountPage: View {
                         loginAccount = account
                     }
                 } label: {
-                    Label("添加其他账号", systemImage: "plus.circle.fill")
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(maxWidth: .infinity, minHeight: 64)
-                        .foregroundStyle(.white)
-                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 26))
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 21)).foregroundStyle(.blue)
+                        Text("添加其他账号")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 19)
+                    .frame(maxWidth: .infinity, minHeight: 64)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 25))
                 }
                 .buttonStyle(.plain)
-                .disabled(loginAccount != nil || busy != nil)
+                .disabled(loginAccount != nil || pddConsent || busy != nil)
                 if kind == "pdd" {
                     Toggle("允许拼多多网页授权及同步", isOn: $pddWebEnabled)
                         .tint(.blue)
@@ -583,7 +602,9 @@ struct MultiAccountPage: View {
                         finishLogin(account)
                     }
                 } else if let url = PlatformCatalog.rows.first(where: { $0.id == kind })?.login {
-                    PlatformWebLogin(url: url, platformID: kind,
+                    PlatformWebLogin(url: kind == "pdd"
+                                     ? URL(string: "https://m.pinduoduo.net/mdkd/package?tab=ID_CODE")!
+                                     : url, platformID: kind,
                                      accountID: account.id) {
                         finishLogin(account)
                     }
@@ -610,6 +631,11 @@ struct MultiAccountPage: View {
         }) { account in
             NavigationStack {
                 PddPhoneLinkPage(account: account)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") { managePhoneAccount = nil }
+                        }
+                    }
             }
         }
         .alert("修改账号备注", isPresented: Binding(
@@ -635,13 +661,13 @@ struct MultiAccountPage: View {
                     do {
                         try await ParcelAccounts.unlink(target)
                         await reload()
-                        notice = "已解除该账号授权，已导入的包裹不会被删除。"
+                        notice = "已解除授权，并移除该账号独有的同步包裹；共享包裹与手动添加的内容已保留。"
                     } catch { notice = "删除账号数据失败：" + error.localizedDescription }
                 }
             }
             Button("取消", role: .cancel) { removeAccount = nil }
         } message: {
-            Text("只解除选中的账号，不删除已导入的包裹或其他账号。")
+            Text("将清除该账号的登录会话和独有同步包裹。其他账号共享的包裹与手动添加的内容会保留。")
         }
         .alert("拼多多网页登录提醒", isPresented: $pddConsent) {
             Button("仍要登录") {

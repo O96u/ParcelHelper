@@ -20,6 +20,7 @@ struct NativeSyncParcel {
     var source: String
     var accountID: String = ""
     var orderID: String = ""
+    var orderStatus: String = ""
     var mailNo: String = ""
     var title: String = ""
     var company: String = ""
@@ -272,14 +273,25 @@ private enum SyncJSON {
                 (mail.isEmpty && wasArrived && !code.isEmpty &&
                  codeKey($0.code) == codeKey(code) && $0.stationText == row.station)
             })
-            if kind == "picked" && previous == nil { continue }
-            // A carrier "signed" event is not necessarily the user's pickup:
-            // an express station may have signed on the recipient's behalf.
-            // Do not import historical signed parcels as new transit records.
-            let signed = ["已签收", "签收成功", "已妥投", "SIGN", "收件人签收"].contains {
-                currentStatus.contains($0)
+            // Do not create records from completed historical orders.
+            // Existing records still receive completed/signed tracking updates.
+            let finishedOrder = ["交易成功", "已完成", "确认收货", "已收货",
+                                 "已签收", "已取件"].contains {
+                row.orderStatus.contains($0)
             }
-            if signed && code.isEmpty && previous == nil { continue }
+            let stationTerms = ["驿站签收", "驿站代签收", "代为签收",
+                                "网点签收", "快递柜签收", "暂存签收",
+                                "包裹已到站", "待取件"]
+            let receiptTerms = ["已签收", "签收成功", "已妥投",
+                                "收件人签收", "本人签收", "已从代收点取出"]
+            let finishedDelivery = ([row.latest] + row.tracks.map(\.text)).contains { event in
+                Parcel.confirmsRecipientPickup(event) ||
+                (!stationTerms.contains(where: event.contains) &&
+                 receiptTerms.contains(where: event.contains))
+            }
+            if previous == nil && (kind == "picked" || finishedOrder || finishedDelivery) {
+                continue
+            }
             // An old order with no actual route detail should not become a
             // new fake in-transit shipment.
             if previous == nil && !wasArrived && row.latest.isEmpty && row.tracks.isEmpty { continue }

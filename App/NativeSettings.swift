@@ -222,6 +222,7 @@ struct IdentityDetailPage: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var identity: NativeParcelSync.IdentityResult?
     @State private var identityAccountID = ""
+    @State private var cainiaoPageVersion = 0
     @State private var now = Date()
     @State private var fetching = false
     @State private var authorized = false
@@ -294,6 +295,32 @@ struct IdentityDetailPage: View {
                     .frame(maxWidth: .infinity)
                     .background(Color(uiColor: .secondarySystemGroupedBackground),
                                 in: RoundedRectangle(cornerRadius: 23))
+                } else if platform == "cainiao" {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("菜鸟官方身份码")
+                                .font(.headline)
+                            Spacer()
+                            Button {
+                                cainiaoPageVersion += 1
+                            } label: {
+                                Label("刷新", systemImage: "arrow.clockwise")
+                            }
+                            .font(.subheadline)
+                        }
+                        CainiaoOfficialIdentityWebView(
+                            accountID: ParcelAccounts.activeID(for: "taobao"))
+                            .id("\(ParcelAccounts.activeID(for: "taobao"))-\(cainiaoPageVersion)")
+                            .frame(height: 560)
+                            .background(Color.white,
+                                        in: RoundedRectangle(cornerRadius: 15))
+                            .clipShape(RoundedRectangle(cornerRadius: 15))
+                        Text("身份码由菜鸟官方网页实时生成。若页面要求重新登录或绑定手机号，请按官方提示完成。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(16)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 24))
                 } else {
                     VStack(spacing: 14) {
                         if let img = barcode {
@@ -458,6 +485,13 @@ struct IdentityDetailPage: View {
             failure = nil
             return
         }
+        if platform == "cainiao" {
+            // Cainiao's official H5 creates the actual scannable image. The
+            // older native MTOP result is not interchangeable with that image.
+            identity = nil
+            failure = nil
+            return
+        }
         do {
             let response = try await NativeParcelSync.identityCode(platform)
             guard requestedAccountID == ParcelAccounts.activeID(for: platform),
@@ -475,6 +509,22 @@ struct IdentityDetailPage: View {
             failure = error.localizedDescription
         }
     }
+}
+
+
+private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
+    let accountID: String
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
+        let view = WKWebView(frame: .zero, configuration: config)
+        view.allowsBackForwardNavigationGestures = true
+        // Mirrors the entry used by handycode: show the real official barcode.
+        let url = URL(string: "https://page.cainiao.com/cn-app-web/identity-code/index.html#/")!
+        view.load(URLRequest(url: url))
+        return view
+    }
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
 private struct IdentityFullScreenCode: View {

@@ -98,7 +98,7 @@ enum PlatformCatalog {
         .init(id: "taobao", title: "淘宝", login: URL(string: "https://login.taobao.com/member/login.jhtml"), validCookie: "unb", domain: "taobao.com", note: "网页登录", home: URL(string: "https://www.taobao.com/") ),
         .init(id: "cainiao", title: "菜鸟", login: URL(string: "https://login.taobao.com/member/login.jhtml"), validCookie: "unb", domain: "taobao.com", note: "网页登录", home: URL(string: "https://www.cainiao.com/") ),
         .init(id: "jd", title: "京东", login: URL(string: "https://plogin.m.jd.com/login/login?appid=0&returnurl=https%3A%2F%2Fhome.m.jd.com%2FmyJd%2Fnewhome.action"), validCookie: "pt_key", domain: "jd.com", note: "网页登录", home: URL(string: "https://m.jd.com/") ),
-        .init(id: "pdd", title: "拼多多", login: URL(string: "https://mobile.yangkeduo.com/login.html"), validCookie: "PDDAccessToken", domain: "yangkeduo.com", note: "网页登录", home: URL(string: "https://mobile.yangkeduo.com/") ),
+        .init(id: "pdd", title: "拼多多", login: URL(string: "https://m.pinduoduo.net/mdkd/package?tab=ID_CODE"), validCookie: "PDDAccessToken", domain: "yangkeduo.com", note: "网页登录", home: URL(string: "https://mobile.yangkeduo.com/") ),
         .init(id: "fengchao", title: "丰巢", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.fcbox.com/") ),
         .init(id: "mi", title: "小米快递聚合", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.mi.com/") ),
         .init(id: "douyin", title: "抖音", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.douyin.com/") )
@@ -988,7 +988,9 @@ struct PlatformWebLogin: UIViewRepresentable {
           try {
             for(var j=0;j<localStorage.length;j++) {
               var k=localStorage.key(j),v=localStorage.getItem(k);
-              if(/token|access/i.test(k)&&typeof v==='string'&&v.length>=8)return v;
+              if(/^(PDDAccessToken|pddAccessToken|accessToken)$/i.test(k)&&
+                 typeof v==='string'&&v.length>=16&&v.length<=4096&&
+                 v!=='undefined'&&v!=='null')return v;
             }
           }catch(e){}
           return '';

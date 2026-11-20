@@ -320,11 +320,13 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     self.complete("未检测到有效账号登录，请先授权")
                     return
                 }
-                self.orders = Array(result.orders.filter {
-                    !$0.id.isEmpty &&
-                    $0.id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil &&
-                    !$0.status.contains("退款") && !$0.status.contains("已关闭") &&
-                    !$0.status.contains("已完成")
+                self.orders = Array(result.orders.filter { order in
+                    !order.id.isEmpty &&
+                    order.id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil &&
+                    !["退款", "已关闭", "已完成", "交易成功", "已签收",
+                      "已收货", "已取件", "确认收货"].contains {
+                        order.status.contains($0)
+                    }
                 }.prefix(10))
                 if self.orders.isEmpty {
                     if self.emptyReadAttempts < 2 {
@@ -382,6 +384,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     var item = NativeSyncParcel(source: self.platform)
                     item.accountID = self.accountID ?? ""
                     item.orderID = order.id
+                    item.orderStatus = order.status
                     item.mailNo = shipment.mail
                     item.company = shipment.company
                     item.title = order.title

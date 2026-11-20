@@ -276,6 +276,43 @@ import WidgetKit
         return false
     }
 
+    /// Delete account-owned synced parcels, not manual/SMS parcels.
+    /// Retain records linked to other authorized accounts.
+    @discardableResult
+    func removeImportedParcels(linkedTo accountID: String, platform: String) -> Int {
+        let sources: Set<String> = platform == "taobao" ? ["taobao", "cainiao"] : [platform]
+        let legacy = accountID.hasPrefix("legacy:")
+        var survivors: [Parcel] = []
+        var removed = 0
+        var changed = false
+        for var parcel in snapshot.parcels {
+            let source = parcel.source ?? parcel.srcApp?.id ?? ""
+            let linked = parcel.linkedAccounts ?? []
+            let matched = linked.contains(accountID)
+            let olderImported = legacy && linked.isEmpty &&
+                sources.contains(source) &&
+                parcel.orderId?.hasPrefix(source + ":") == true &&
+                parcel.smsContent.isEmpty
+            guard matched || olderImported else {
+                survivors.append(parcel)
+                continue
+            }
+            changed = true
+            let others = linked.filter { $0 != accountID }
+            if others.isEmpty {
+                removed += 1
+            } else {
+                parcel.linkedAccounts = others
+                survivors.append(parcel)
+            }
+        }
+        if changed {
+            snapshot.parcels = survivors
+            persist()
+        }
+        return removed
+    }
+
     func markDone(_ id: String, done: Bool) {
         guard let i = snapshot.parcels.firstIndex(where: { $0.uuid == id }) else { return }
         snapshot.parcels[i].status = done ? 2 : 1
