@@ -180,9 +180,12 @@ import WidgetKit
             do {
                 let data = try JSONEncoder().encode(current)
                 try data.write(to: destination, options: .atomic)
-                if HomeWidgetSharedStore.write(widgetSnapshot) {
+                let published = HomeWidgetSharedStore.writeWithChange(widgetSnapshot)
+                if published.saved {
                     HomeWidgetSharedStore.clearPicked(widgetOps)
-                    WidgetCenter.shared.reloadTimelines(ofKind: HomeWidgetSharedStore.kind)
+                    if published.changed {
+                        WidgetCenter.shared.reloadTimelines(ofKind: HomeWidgetSharedStore.kind)
+                    }
                 }
             } catch {
                 print("ParcelStore save failed: \(error)")
