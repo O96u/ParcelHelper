@@ -615,6 +615,34 @@ private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
+        // Reveal ONLY the official barcode image. Even if H5 renders an
+        // account form later, its other content remains hidden.
+        let isolateBarcode = #"""
+        (() => {
+          if (location.hostname !== 'page.cainiao.com') return;
+          const style = document.createElement('style');
+          style.textContent = `
+            html[data-ph-identity-ready="1"] body * {
+              visibility: hidden !important;
+            }
+            html[data-ph-identity-ready="1"] #auth-code-id {
+              visibility: visible !important;
+              position: fixed !important;
+              top: 115px !important;
+              left: 5% !important;
+              width: 90% !important;
+              height: 135px !important;
+              object-fit: contain !important;
+              z-index: 2147483647 !important;
+              background: white !important;
+            }
+          `;
+          (document.head || document.documentElement).appendChild(style);
+        })();
+        """#
+        config.userContentController.addUserScript(
+            WKUserScript(source: isolateBarcode, injectionTime: .atDocumentStart,
+                         forMainFrameOnly: true))
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
@@ -695,13 +723,14 @@ private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
                       const host = location.hostname.toLowerCase();
                       if (host.startsWith('login.') || host.startsWith('passport.')) return 'auth';
                       if (host !== 'page.cainiao.com') return 'loading';
+                      const text = (document.body && document.body.innerText || '').slice(0, 1500);
+                      if (/您需要登录才能继续访问|请先登录|账号密码登录|获取验证码/.test(text))
+                        return 'auth';
                       const code = document.getElementById('auth-code-id');
                       const box = code && code.getBoundingClientRect();
                       if (box && box.width > 0 && box.height > 0 &&
                           code.complete && code.naturalWidth > 0) return 'ready';
-                      const text = (document.body && document.body.innerText || '').slice(0, 1500);
-                      return /您需要登录才能继续访问|请先登录|账号密码登录|登录\/注册|获取验证码/.test(text)
-                        ? 'auth' : 'loading';
+                      return 'loading';
                     })()
                     """#
                     webView.evaluateJavaScript(probe) { result, _ in
@@ -710,9 +739,16 @@ private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
                             self.ready.wrappedValue = false
                             self.requiresAuthorization.wrappedValue = true
                         } else if phase == "ready" {
-                            self.requiresAuthorization.wrappedValue = false
-                            self.loadFailed.wrappedValue = false
-                            self.ready.wrappedValue = true
+                            // Isolate the barcode before making the WebView
+                            // visible in SwiftUI.
+                            webView.evaluateJavaScript(
+                                "document.documentElement.setAttribute('data-ph-identity-ready','1')"
+                            ) { _, error in
+                                guard version == self.generation, error == nil else { return }
+                                self.requiresAuthorization.wrappedValue = false
+                                self.loadFailed.wrappedValue = false
+                                self.ready.wrappedValue = true
+                            }
                         } else if delay == 12 && !self.ready.wrappedValue &&
                                   !self.requiresAuthorization.wrappedValue {
                             self.loadFailed.wrappedValue = true
