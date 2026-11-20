@@ -110,8 +110,6 @@ ParcelHelper 在设计与实现中参考、借鉴了以下社区作品（感谢�
 | Scripting 版「包裹助手」 | [Telegram 介绍帖](https://t.me/scripting_app/913) | 整体交互、短信解析与部分物流同步思路 |
 | [HandyCode](https://github.com/xianhe51920/handycode) | [GitHub](https://github.com/xianhe51920/handycode) | 拼多多小号关联大号收件手机号、京东官方身份码 WebView / 实时 SVG 等实现思路 |
 
-HandyCode 相关代码在 GPL 工程中的 MIT 片段见 [docs/licenses/HandyCode-MIT.txt](docs/licenses/HandyCode-MIT.txt)。
-
 ## 开源协议
 
 本项目源代码以 **GNU General Public License v3.0（GPL-3.0-only）** 发布，具体条款见 [LICENSE](LICENSE)。你可以在遵守 GPL-3.0 条款的前提下使用、研究、修改和再分发源代码；分发修改后的受 GPL 约束版本时，需要履行相应的源代码及许可义务。

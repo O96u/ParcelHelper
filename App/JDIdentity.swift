@@ -1,7 +1,7 @@
 import SwiftUI
 import WebKit
 
-// 京东身份码展示参考 HandyCode (MIT License).
+// 京东身份码展示参考 HandyCode 项目思路。
 // Only official JD-generated SVG content is shown; no code, cookie or
 // credentials are sent through the WKWebView-to-Swift message bridge.
 private struct JDBarcodeImage: Identifiable {
