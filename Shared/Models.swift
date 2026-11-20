@@ -28,6 +28,9 @@ struct Parcel: Codable, Identifiable, Hashable {
     var trackNodes: [TrackNode] = []
     var trackUpdatedAt: Double? = nil
     var source: String? = nil
+    // A shipment may be visible to more than one authorized platform account.
+    // Optional for compatibility with snapshots saved by older versions.
+    var linkedAccounts: [String]? = nil
     var receiverCity: String? = nil
     var receiverAddress: String? = nil
     var receiverName: String? = nil

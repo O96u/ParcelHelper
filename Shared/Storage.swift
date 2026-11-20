@@ -111,6 +111,8 @@ import WidgetKit
                 if existing.arrivedAt == nil { existing.arrivedAt = parcel.arrivedAt }
                 if existing.srcApp == nil { existing.srcApp = parcel.srcApp }
                 if existing.source == nil { existing.source = parcel.source }
+                let allAccounts = Set((existing.linkedAccounts ?? []) + (parcel.linkedAccounts ?? []))
+                existing.linkedAccounts = allAccounts.isEmpty ? nil : allAccounts.sorted()
                 existing.createdAt = min(existing.createdAt, parcel.createdAt)
                 merged[i] = existing
             } else {
