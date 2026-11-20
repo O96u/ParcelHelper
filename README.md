@@ -85,7 +85,7 @@
 | `Resources/`                     | 图标、Info.plist 和签名能力配置                                          |
 | `ParcelHelper.xcodeproj/`        | 已提交的 Xcode 工程                                                      |
 | `scripts/create_dark_icon.swift` | 构建时生成深色 App 图标                                                  |
-| `docs/`                          | 签名说明、宣传图（`screenshots/`）及图标素材来源                         |
+| `docs/`                          | 签名说明、鸣谢（`ACKNOWLEDGMENTS.md`）、宣传图及图标素材来源               |
 | `Tests/`                         | 部分解析逻辑测试                                                         |
 
 界面以 SwiftUI 为主；网页登录、剪贴板、远程请求和通知等仍会使用 WebKit、UIKit、Foundation、UserNotifications、ActivityKit 等原生 API。
@@ -101,7 +101,16 @@
 - 软件按现状提供，可能存在同步遗漏、物流状态误判或平台授权失效。
 - 淘宝、京东、菜鸟、拼多多、丰巢、小米及快递公司名称和标识属于各自权利人；本项目不代表其官方立场。第三方图标等素材可能另受权利人许可约束。
 
-京东身份码视图参考 [HandyCode](https://github.com/xianhe51920/handycode) 的官方 WebView 和实时 SVG 实现，其 MIT 许可见 [HandyCode MIT 许可](docs/licenses/HandyCode-MIT.txt)。
+## 鸣谢
+
+ParcelHelper 在设计与实现中参考、借鉴了以下社区作品（感谢作者分享思路与代码）。本项目为独立 GPL 开源工程，与下述项目无隶属关系。
+
+| 项目 | 链接 | 本项目中的参考 |
+| --- | --- | --- |
+| Scripting 版「包裹助手」 | [Telegram 介绍帖](https://t.me/scripting_app/913) | 整体交互、短信解析与部分物流同步思路 |
+| [HandyCode](https://github.com/xianhe51920/handycode) | [GitHub](https://github.com/xianhe51920/handycode) | 拼多多小号关联大号收件手机号、京东官方身份码 WebView / 实时 SVG 等实现思路 |
+
+HandyCode 相关代码在 GPL 工程中的 MIT 片段见 [docs/licenses/HandyCode-MIT.txt](docs/licenses/HandyCode-MIT.txt)。
 
 ## 开源协议
 
