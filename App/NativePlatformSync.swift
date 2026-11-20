@@ -882,33 +882,6 @@ private enum SyncJSON {
                 "当前淘宝/菜鸟账号没有返回有效身份码。请确认所选默认账号，或稍后刷新重试")
         }
         let response = try await mtop(
-                "mtop.cainiao.nbpickup.identitycode.get",
-                data: ["appName": "GUOGUO", "verifyVersion": "V2"],
-                accountID: ParcelAccounts.activeID(for: "taobao"))
-            let content = identityData(response["data"])
-            let model = SyncJSON.dict(content["model"])
-            let details = model.isEmpty ? content : model
-            guard let code = cainiaoIdentityCode(response["data"]) else {
-                throw NativeSyncError.badResponse(
-                    "已检测到淘宝登录，但菜鸟未返回有效实名身份码。请在菜鸟官方 App 确认已开通身份码，再刷新重试")
-            }
-            let ttl = identityExpiry(response["data"]) ?? 300
-            guard ttl > 0 else {
-                throw NativeSyncError.badResponse("菜鸟身份码已过期，请刷新重试")
-            }
-            let seconds = min(max(30, ttl), 600)
-            let certifiedText = SyncJSON.first(details, ["certificated", "certified"])
-            let certified = certifiedText.isEmpty ? nil : certifiedText.lowercased() == "true"
-            let name = SyncJSON.first(details, ["fullname", "fullName"])
-            let maskedID = SyncJSON.first(details, ["idCardNumber", "id_card_number"])
-            return IdentityResult(code: code,
-                expiresAt: Date().addingTimeInterval(seconds),
-                certified: certified,
-                name: name.isEmpty ? nil : name,
-                maskedID: maskedID.isEmpty ? nil : maskedID,
-                mobile: nil)
-        }
-        let response = try await mtop(
             "mtop.cainiao.pickup.identity.getIdentityMessage", data: [:],
             accountID: ParcelAccounts.activeID(for: "taobao"))
         let content = identityData(response["data"])
