@@ -31,6 +31,21 @@ private struct WebShipment: Decodable {
 
     private init() {}
 
+    private func recordOutcome(platform: String, accountID: String?, success: Bool) {
+        guard let accountID else { return }
+        let prefix = "native.web.retry." + platform + "." + accountID
+        if success {
+            UserDefaults.standard.removeObject(forKey: prefix + ".failures")
+            UserDefaults.standard.removeObject(forKey: prefix + ".after")
+        } else {
+            let attempts = min(7, UserDefaults.standard.integer(forKey: prefix + ".failures") + 1)
+            UserDefaults.standard.set(attempts, forKey: prefix + ".failures")
+            let seconds = min(21_600.0, 300.0 * pow(2.0, Double(attempts - 1)))
+            UserDefaults.standard.set(Date().timeIntervalSince1970 +
+                seconds * Double.random(in: 0.8...1.2), forKey: prefix + ".after")
+        }
+    }
+
     func refreshAvailable() async {
         for platform in ["jd", "taobao", "pdd"] {
             for profile in await ParcelAccounts.authorizedAccounts(for: platform) {
@@ -49,6 +64,10 @@ private struct WebShipment: Decodable {
             return false
         }
         let selected = accountID ?? ParcelAccounts.activeID(for: platform)
+        let retryAfter = UserDefaults.standard.double(
+            forKey: "native.web.retry." + platform + "." + selected + ".after"
+        )
+        guard force || Date().timeIntervalSince1970 >= retryAfter else { return false }
         guard await ParcelAccounts.hasSession(platform, accountID: selected) else { return false }
         let key = "native.web.autosync.at." + platform + "." + selected
         let now = Date().timeIntervalSince1970
@@ -85,7 +104,7 @@ private struct WebShipment: Decodable {
         let requestNumber = sequence
         // Fail safely if the site never finishes navigation. A new run may retry.
         Task {
-            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            try? await Task.sleep(nanoseconds: 35_000_000_000)
             guard activePlatform == platform && activeAccountID == accountID &&
                   sequence == requestNumber else { return }
             if platform == "pdd" {
@@ -100,6 +119,7 @@ private struct WebShipment: Decodable {
                    expectedAccountID: String? = nil) {
         guard activePlatform == "pdd",
               expectedAccountID == nil || activeAccountID == expectedAccountID else { return }
+        recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
         if succeeded {
             UserDefaults.standard.set(Date().timeIntervalSince1970,
                                       forKey: "native.sync.success.pdd")
@@ -118,6 +138,7 @@ private struct WebShipment: Decodable {
                 expectedAccountID: String? = nil) {
         guard activePlatform == platform,
               expectedAccountID == nil || activeAccountID == expectedAccountID else { return }
+        recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
         let description: String
         if let failure {
             description = (platform == "jd" ? "京东" : "淘宝") + "自动同步： " + failure
