@@ -171,6 +171,7 @@ struct PlatformAccountsPage: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var authenticated: Set<String> = []
+    @State private var accountCounts: [String: Int] = [:]
     @State private var loginTarget: PlatformWebsite?
     @State private var finishedLogin: PlatformWebsite?
     @State private var revokeTarget: PlatformWebsite?
@@ -456,13 +457,16 @@ struct PlatformAccountsPage: View {
     }
     private func isAuthorized(_ platform: PlatformWebsite) -> Bool {
         switch platform.id {
-        case "fengchao": return NativeFengchao.hasSession
         case "mi": return NativeMiExpress.hasSession
-        default: return authenticated.contains(platform.id)
+        default: return (accountCounts[platform.id] ?? 0) > 0 ||
+                       authenticated.contains(platform.id)
         }
     }
     private func detailStatus(_ platform: PlatformWebsite, authorized: Bool) -> String {
         guard authorized else { return "未授权" }
+        if ["taobao", "cainiao", "jd", "pdd", "fengchao"].contains(platform.id) {
+            return "已授权 (accountCounts[platform.id] ?? 1) 个账号"
+        }
         let date = UserDefaults.standard.double(forKey: "native.sync.success." + platform.id)
         if date > 0 {
             return "已授权 · 上次同步 " +
@@ -473,42 +477,41 @@ struct PlatformAccountsPage: View {
     private func refresh() async {
         refreshVersion += 1
         var values: Set<String> = []
-        for platform in PlatformCatalog.rows where platform.login != nil {
-            if await PlatformSession.isLoggedIn(platform) { values.insert(platform.id) }
+        var counts: [String: Int] = [:]
+        for platform in PlatformCatalog.rows {
+            if ["taobao", "cainiao", "jd", "pdd", "fengchao"].contains(platform.id) {
+                let found = await ParcelAccounts.authorizedAccounts(for: platform.id)
+                counts[platform.id] = found.count
+                if !found.isEmpty { values.insert(platform.id) }
+            } else if platform.login != nil {
+                if await PlatformSession.isLoggedIn(platform) { values.insert(platform.id) }
+            }
         }
         authenticated = values
+        accountCounts = counts
     }
     private func syncAll() {
         guard !isSyncing else { return }
         isSyncing = true
         Task {
-            var reports: [String] = []
-            var successes = 0
-            for id in NativeParcelSync.platforms {
-                if id == "pdd" && !PddAccountProtection.webAccessAllowed { continue }
-                guard let platform = PlatformCatalog.rows.first(where: { $0.id == id }),
-                      isAuthorized(platform) else { continue }
-                do {
-                    let result = try await NativeParcelSync.run(id)
-                    reports.append(result.description)
-                    successes += 1
-                } catch {
-                    reports.append(platform.title + "：" + error.localizedDescription)
+            var reports = await NativeHomeRefresh.refresh(force: true)
+            var queued = 0
+            for platform in ["jd", "taobao", "pdd"] {
+                if platform == "pdd" && !PddAccountProtection.webAccessAllowed { continue }
+                for account in await ParcelAccounts.authorizedAccounts(for: platform) {
+                    if await NativeWebAutoSync.shared.request(platform, force: true,
+                                                               accountID: account.id) {
+                        queued += 1
+                    }
                 }
             }
-            if successes > 0 {
-                lastGlobalSync = Date().timeIntervalSince1970
-                UserDefaults.standard.set(lastGlobalSync, forKey: "native.account.lastSync")
-            }
-            for id in ["jd", "taobao", "pdd"] where authenticated.contains(id) {
-                let queued = await NativeWebAutoSync.shared.request(id, force: true)
-                if queued {
-                    reports.append((id == "jd" ? "京东" : (id == "pdd" ? "拼多多" : "淘宝")) + "：已开始读取购物订单")
-                }
-            }
+            if queued > 0 { reports.append("已安排 \(queued) 个账号的购物订单同步") }
             if reports.isEmpty { reports.append("尚无可自动同步的已授权账号") }
+            lastGlobalSync = Date().timeIntervalSince1970
+            UserDefaults.standard.set(lastGlobalSync, forKey: "native.account.lastSync")
             isSyncing = false
             notice = reports.joined(separator: "\n")
+            await refresh()
         }
     }
 }
