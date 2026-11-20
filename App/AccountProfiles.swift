@@ -149,26 +149,318 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
     }
 }
 
-/// The official Pinduoduo phone-binding screen. Linking another recipient's
-/// phone is performed only by the platform's own verification UI.
+/// Only the first-party Pinduoduo page can bind, rename, or unbind phones.
+/// This WebView uses the SMALL account's isolated WebKit data store. It never
+/// intercepts OTPs or sends a recipient's phone number through native APIs.
 private struct PddOfficialPhoneManager: UIViewRepresentable {
     let accountID: String
+    private static let page = URL(string: "https://m.pinduoduo.net/mdkd/cellPhoneList")!
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
         let view = WKWebView(frame: .zero, configuration: configuration)
+        view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
-        view.load(URLRequest(url: URL(string: "https://m.pinduoduo.net/mdkd/cellPhoneList")!))
+        view.load(URLRequest(url: Self.page))
         return view
     }
+
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
+        uiView.uiDelegate = nil
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        private var visitedLogin = false
+        private var resumedAfterLogin = false
+
+        func webView(_ webView: WKWebView,
+                     decidePolicyFor action: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            let scheme = action.request.url?.scheme?.lowercased()
+            // Keep official verification in this WebView, not in another app.
+            decisionHandler(
+                scheme == "https" || scheme == "http" || scheme == "about"
+                ? .allow : .cancel
+            )
+        }
+
+        func webView(_ webView: WKWebView,
+                     createWebViewWith configuration: WKWebViewConfiguration,
+                     for action: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard action.targetFrame == nil,
+                  let scheme = action.request.url?.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http" else { return nil }
+            webView.load(action.request)
+            return nil
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard let url = webView.url,
+                  let host = url.host?.lowercased(),
+                  host == "pinduoduo.net" || host.hasSuffix(".pinduoduo.net") ||
+                  host == "yangkeduo.com" || host.hasSuffix(".yangkeduo.com")
+            else { return }
+            if url.path.lowercased().contains("login") {
+                visitedLogin = true
+            } else if visitedLogin && !resumedAfterLogin &&
+                      (url.path == "/" || url.path == "/index.html") {
+                // The official login can land at its home page. Return once
+                // to phone management, never trap the user in a redirect loop.
+                resumedAfterLogin = true
+                webView.load(URLRequest(url: PddOfficialPhoneManager.page))
+            }
+        }
+    }
+}
+
+/// Native iOS presentation inspired by the Xiaomi account settings layout.
+/// The official Pinduoduo H5 handles consent, SMS verification and mutations.
+@MainActor private struct PddPhoneLinkPage: View {
+    let account: ParcelAccountProfile
+    @State private var phones: [NativeParcelSync.PddMobile] = []
+    @State private var loading = false
+    @State private var loaded = false
+    @State private var authorized = false
+    @State private var resultError: String?
+    @State private var officialPage = false
+    @State private var askWebConsent = false
+    @State private var syncing = false
+    @State private var notice: String?
+    @AppStorage("native.pdd.webAccessAllowed") private var webEnabled = false
+    private let blue = Color(red: 0.19, green: 0.49, blue: 0.96)
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionTitle("已授权的小号")
+                groupCard {
+                    HStack(spacing: 13) {
+                        Image("brand_pdd")
+                            .resizable().scaledToFill()
+                            .frame(width: 46, height: 46)
+                            .clipShape(RoundedRectangle(cornerRadius: 13))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(account.nickname)
+                                .font(.system(size: 17, weight: .semibold))
+                            Text(authorized ? "已授权" : "需要重新登录")
+                                .font(.system(size: 13))
+                                .foregroundStyle(authorized ? blue : .secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+
+                sectionTitle("收件手机号")
+                groupCard {
+                    HStack {
+                        Text("已关联手机号")
+                            .font(.system(size: 16, weight: .semibold))
+                        Spacer()
+                        Button {
+                            Task { await refresh() }
+                        } label: {
+                            if loading { ProgressView() }
+                            else { Image(systemName: "arrow.clockwise") }
+                        }
+                        .disabled(loading)
+                        .accessibilityLabel("刷新手机号")
+                        .tint(blue)
+                    }
+                    if loading && !loaded {
+                        ProgressView("正在读取手机号…")
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                    } else if !phones.isEmpty {
+                        ForEach(phones) { phone in
+                            Divider()
+                            HStack(spacing: 11) {
+                                Image(systemName: "iphone.gen3")
+                                    .foregroundStyle(blue)
+                                    .frame(width: 25)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(phone.alias.isEmpty ? phone.masked : phone.alias)
+                                        .font(.system(size: 15, weight: .medium))
+                                    if !phone.alias.isEmpty {
+                                        Text(phone.masked)
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                if phone.commonlyUsed {
+                                    Label("常用", systemImage: "checkmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    } else {
+                        Divider()
+                        Text(loaded ? "暂无可显示的关联手机号" : "尚未查询关联手机号")
+                            .foregroundStyle(.secondary).font(.subheadline)
+                    }
+                    if let resultError, !resultError.isEmpty {
+                        Text(resultError)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Button {
+                    if webEnabled { officialPage = true }
+                    else { askWebConsent = true }
+                } label: {
+                    Label("绑定 / 管理收件手机号", systemImage: "plus.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, minHeight: 57)
+                        .background(blue, in: RoundedRectangle(cornerRadius: 24))
+                }
+                .buttonStyle(.plain)
+                .disabled(!authorized)
+                .padding(.top, 16)
+
+                Text("使用小号进入拼多多官方页面，绑定主号的收件手机号。验证码、修改备注及解绑操作均由拼多多完成。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 12)
+
+                sectionTitle("同步")
+                groupCard {
+                    HStack(spacing: 12) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 20))
+                            .foregroundStyle(blue)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("上次同步")
+                            let value = UserDefaults.standard.double(
+                                forKey: "native.sync.success.pdd." + account.id)
+                            Text(value > 0
+                                 ? Date(timeIntervalSince1970: value)
+                                    .formatted(date: .numeric, time: .shortened)
+                                 : "无成功记录")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(syncing ? "同步中…" : "立即同步") {
+                            syncPackages()
+                        }
+                        .buttonStyle(.bordered).tint(blue)
+                        .disabled(syncing || !authorized || !webEnabled)
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 110)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle("拼多多收件手机号")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await refresh() }
+        .sheet(isPresented: $officialPage, onDismiss: {
+            Task { await refresh() }
+        }) {
+            NavigationStack {
+                PddOfficialPhoneManager(accountID: account.id)
+                    .navigationTitle("拼多多官方手机号管理")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") { officialPage = false }
+                        }
+                    }
+            }
+        }
+        .alert("开启拼多多网页访问？", isPresented: $askWebConsent) {
+            Button("开启并继续") {
+                webEnabled = true
+                officialPage = true
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("网页登录可能影响拼多多官方 App 的登录状态。手机号仍需在官方页面验证。")
+        }
+        .alert("拼多多", isPresented: Binding(
+            get: { notice != nil },
+            set: { if !$0 { notice = nil } }
+        )) {
+            Button("确定") { notice = nil }
+        } message: { Text(notice ?? "") }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 15)
+            .padding(.top, 27)
+            .padding(.bottom, 10)
+    }
+
+    private func groupCard<Content: View>(
+        @ViewBuilder _ content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 13, content: content)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 15)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 25, style: .continuous))
+    }
+
+    private func refresh() async {
+        guard !loading else { return }
+        loading = true
+        defer { loading = false; loaded = true }
+        authorized = await ParcelAccounts.hasSession("pdd", accountID: account.id)
+        guard authorized else {
+            phones = []
+            resultError = "小号登录已失效，请返回账号列表重新登录。"
+            return
+        }
+        guard webEnabled else {
+            phones = []
+            resultError = "网页访问已关闭，可在下方点击绑定按钮开启。"
+            return
+        }
+        do {
+            phones = try await NativeParcelSync.pddBoundMobiles(accountID: account.id)
+            resultError = nil
+        } catch {
+            phones = []
+            resultError = "绑定列表暂不可读取，可打开拼多多官方页面查看或管理。"
+        }
+    }
+
+    private func syncPackages() {
+        guard !syncing, authorized, webEnabled else { return }
+        syncing = true
+        Task {
+            defer { syncing = false }
+            do {
+                let response = try await NativeParcelSync.run(
+                    "pdd", force: true, accountID: account.id)
+                notice = response.description
+            } catch {
+                notice = "同步失败：" + error.localizedDescription
+            }
+        }
+    }
 }
 
 struct MultiAccountPage: View {
     let platformID: String
     @State private var revision = 0
     @State private var validAccounts: Set<String> = []
-    @State private var linkedPddPhones: [String: [NativeParcelSync.PddMobile]] = [:]
     @State private var loginAccount: ParcelAccountProfile?
     @State private var draftAccount: ParcelAccountProfile?
     @State private var loginError: String?
@@ -219,7 +511,7 @@ struct MultiAccountPage: View {
                 if kind == "pdd" {
                     Toggle("允许拼多多网页授权及同步", isOn: $pddWebEnabled)
                         .tint(.blue)
-                    Text("建议用小号登录，再通过官方页面关联大号收件手机号。网页登录可能让官方 App 退出。")
+                    Text("小号登录后可通过拼多多官方页面绑定收件手机号。")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else if kind == "taobao" {
                     Text("淘宝和菜鸟共用每个账号的登录环境；菜鸟身份码跟随当前默认账号。")
@@ -273,19 +565,7 @@ struct MultiAccountPage: View {
             Task { await reload() }
         }) { account in
             NavigationStack {
-                VStack(spacing: 8) {
-                    Text("请在拼多多官方页面添加并验证大号的收件手机号。ParcelHelper 不读取短信验证码。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .padding(.horizontal, 18).padding(.top, 10)
-                    PddOfficialPhoneManager(accountID: account.id)
-                }
-                .navigationTitle("关联大号收件手机号")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("完成") { managePhoneAccount = nil }
-                    }
-                }
+                PddPhoneLinkPage(account: account)
             }
         }
         .alert("修改账号备注", isPresented: Binding(
@@ -414,17 +694,25 @@ struct MultiAccountPage: View {
             }
             .font(.subheadline)
             .buttonStyle(.bordered)
-            if kind == "pdd" && pddWebEnabled && validAccounts.contains(account.id) {
-                if let mobiles = linkedPddPhones[account.id], !mobiles.isEmpty {
-                    Text("已关联：" + mobiles.map { $0.masked }.joined(separator: "、"))
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                Button("关联大号收件手机号（官方验证）") {
+            if kind == "pdd" && validAccounts.contains(account.id) {
+                Button {
                     managePhoneAccount = account
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "iphone.gen3")
+                            .font(.system(size: 16))
+                        Text("收件手机号管理")
+                            .font(.system(size: 15, weight: .medium))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .foregroundStyle(.blue)
+                    .frame(minHeight: 40)
+                    .contentShape(Rectangle())
                 }
-                .font(.subheadline)
-                .foregroundStyle(.blue)
+                .buttonStyle(.plain)
             }
             HStack {
                 Button("重命名") {
@@ -443,18 +731,14 @@ struct MultiAccountPage: View {
 
     private func reload() async {
         var found: Set<String> = []
-        var phones: [String: [NativeParcelSync.PddMobile]] = [:]
         for account in records {
             if await ParcelAccounts.hasSession(kind, accountID: account.id) {
                 found.insert(account.id)
-                if kind == "pdd" && PddAccountProtection.webAccessAllowed,
-                   let mobiles = try? await NativeParcelSync.pddBoundMobiles(accountID: account.id) {
-                    phones[account.id] = mobiles
-                }
             }
         }
+        // Do not probe each account's private phone-binding endpoint merely
+        // because the account list appeared. Query only on the detail page.
         validAccounts = found
-        linkedPddPhones = phones
         revision += 1
     }
 

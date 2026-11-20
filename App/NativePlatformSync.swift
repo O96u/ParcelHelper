@@ -367,23 +367,56 @@ private enum SyncJSON {
         let alias: String
         let commonlyUsed: Bool
     }
+    private static func maskedPddMobile(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let digits = trimmed.filter(\.isNumber)
+        if digits.count == 11, digits.hasPrefix("1") {
+            return String(digits.prefix(3)) + "****" + String(digits.suffix(4))
+        }
+        // The official API sometimes supplies an already-masked mobile.
+        if trimmed.contains("*") || trimmed.contains("＊") {
+            return String(trimmed.prefix(32))
+        }
+        return "已绑定手机号"
+    }
+
     static func pddBoundMobiles(accountID: String? = nil) async throws -> [PddMobile] {
-        let response = try await pddJSON("/api/apoc/express/detail", body: ["entry_source": 17], accountID: accountID)
+        // Read-only account detail endpoint. Binding/unbinding and SMS
+        // verification take place exclusively in the official H5 screen.
+        let response = try await pddJSON(
+            "/api/apoc/express/detail", body: ["entry_source": 17],
+            accountID: accountID)
         let result = SyncJSON.dict(response["result"])
         let data = SyncJSON.dict(response["data"])
-        let records = SyncJSON.list(result["new_binding_list"]).isEmpty
-            ? (SyncJSON.list(data["new_binding_list"]).isEmpty
-                ? SyncJSON.list(response["new_binding_list"])
-                : SyncJSON.list(data["new_binding_list"]))
-            : SyncJSON.list(result["new_binding_list"])
+        let layers = [response, result, data,
+                      SyncJSON.dict(result["data"]),
+                      SyncJSON.dict(data["data"])]
+        let keys = ["new_binding_list", "newBindingList", "binding_list",
+                    "bindingList", "mobile_list", "mobileList"]
+        var records: [[String: Any]]?
+        for layer in layers {
+            for key in keys {
+                if let list = layer[key] as? [[String: Any]] {
+                    records = list
+                    break
+                }
+            }
+            if records != nil { break }
+        }
+        guard let records else {
+            throw NativeSyncError.badResponse("拼多多未返回可识别的手机号列表")
+        }
         return records.compactMap { record -> PddMobile? in
-            let mobileID = SyncJSON.first(record, ["mobile_id", "mobileId"])
-            let masked = SyncJSON.first(record, ["mock_mobile", "mobile_des", "mobile_desc"])
-            if mobileID.isEmpty && masked.isEmpty { return nil }
-            return PddMobile(id: mobileID.isEmpty ? masked : mobileID,
-                             masked: masked.isEmpty ? "已绑定手机号" : masked,
-                             alias: SyncJSON.str(record["alias"]),
-                             commonlyUsed: record["commonly_used"] as? Bool == true)
+            let id = SyncJSON.first(record, ["mobile_id", "mobileId", "id"])
+            let rawPhone = SyncJSON.first(record, ["mock_mobile", "mobile_des",
+                                                   "mobile_desc", "masked_mobile", "mobile"])
+            guard !id.isEmpty || !rawPhone.isEmpty else { return nil }
+            let status = SyncJSON.first(record, ["commonly_used", "commonlyUsed",
+                                                  "is_default", "isDefault"]).lowercased()
+            return PddMobile(id: id.isEmpty ? rawPhone : id,
+                             masked: maskedPddMobile(rawPhone),
+                             alias: SyncJSON.first(record, ["alias", "remark", "note"]),
+                             commonlyUsed: status == "true" || status == "1")
         }
     }
 
