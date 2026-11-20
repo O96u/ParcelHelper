@@ -50,7 +50,7 @@ private struct PlatformWebsite: Identifiable {
     let home: URL?
 }
 
-private enum PlatformCatalog {
+enum PlatformCatalog {
     static let rows: [PlatformWebsite] = [
         .init(id: "taobao", title: "淘宝", login: URL(string: "https://login.taobao.com/member/login.jhtml"), validCookie: "unb", domain: "taobao.com", note: "网页登录", home: URL(string: "https://www.taobao.com/") ),
         .init(id: "cainiao", title: "菜鸟", login: URL(string: "https://login.taobao.com/member/login.jhtml"), validCookie: "unb", domain: "taobao.com", note: "网页登录", home: URL(string: "https://www.cainiao.com/") ),
@@ -366,6 +366,7 @@ struct PlatformAccountsPage: View {
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity)
+            if !["taobao", "jd", "pdd", "fengchao", "cainiao"].contains(platform.id) {
             Button {
                 if authorized { revokeTarget = platform }
                 else { authorize(platform) }
@@ -381,6 +382,7 @@ struct PlatformAccountsPage: View {
                     )
             }
             .buttonStyle(.plain)
+            }
 
         }
         .padding(.horizontal, 19)
@@ -389,7 +391,8 @@ struct PlatformAccountsPage: View {
 
     @ViewBuilder private func destination(for platform: PlatformWebsite) -> some View {
         switch platform.id {
-        case "fengchao": FengchaoAccountPage()
+        case "fengchao", "pdd", "taobao", "jd", "cainiao":
+            MultiAccountPage(platformID: platform.id)
         case "mi": XiaomiAccountPage()
         default: PlatformAccountDetail(platform: platform)
         }
@@ -803,18 +806,19 @@ private struct PlatformAccountDetail: View {
 
 // Auto-finish only after a first-party login credential can be verified.
 // A navigation event alone never counts as a successful login.
-private struct PlatformWebLogin: UIViewRepresentable {
+struct PlatformWebLogin: UIViewRepresentable {
     let url: URL
     let platformID: String
+    var accountID: String? = nil
     let onAuthenticated: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(platformID: platformID, onAuthenticated: onAuthenticated)
+        Coordinator(platformID: platformID, accountID: accountID, onAuthenticated: onAuthenticated)
     }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        config.websiteDataStore = ParcelAccounts.webStore(for: platformID, accountID: accountID)
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
@@ -836,13 +840,15 @@ private struct PlatformWebLogin: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKHTTPCookieStoreObserver {
         let platformID: String
+        let accountID: String?
         var onAuthenticated: () -> Void
         private var completed = false
         private var verification: Task<Void, Never>?
         private var didLoadPage = false
 
-        init(platformID: String, onAuthenticated: @escaping () -> Void) {
+        init(platformID: String, accountID: String?, onAuthenticated: @escaping () -> Void) {
             self.platformID = platformID
+            self.accountID = accountID
             self.onAuthenticated = onAuthenticated
         }
 
@@ -897,7 +903,7 @@ private struct PlatformWebLogin: UIViewRepresentable {
                     guard let self else { return }
                     if let token = value as? String, !token.isEmpty {
                         Task { @MainActor in
-                            PddSessionVault.save(token)
+                            PddSessionVault.save(token, for: self.accountID)
                             self.scheduleVerification()
                         }
                     } else {
@@ -916,7 +922,9 @@ private struct PlatformWebLogin: UIViewRepresentable {
                 catch { return }
                 guard let self, !Task.isCancelled, !self.completed else { return }
                 let ok: Bool
-                if self.platformID == "taobao" || self.platformID == "cainiao" {
+                if let accountID = self.accountID {
+                    ok = await ParcelAccounts.hasSession(self.platformID, accountID: accountID)
+                } else if self.platformID == "taobao" || self.platformID == "cainiao" {
                     ok = await PlatformSession.hasRawTaobaoSession()
                 } else if let p = PlatformCatalog.rows.first(where: { $0.id == self.platformID }) {
                     ok = await PlatformSession.isLoggedIn(p)
