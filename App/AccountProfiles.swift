@@ -161,6 +161,50 @@ private struct PddOfficialPhoneManager: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
+        // The official /mdkd/ H5 uses api.pinduoduo.com for business calls,
+        // while its login scripts also support Pinduoduo's own same-origin
+        // /proxy/api/ route. Keep this scoped to the official phone manager.
+        // No cookies, OTPs, or tokens are read by the compatibility script.
+        let sameOriginCompatibility = #"""
+        (() => {
+          if (window.top !== window ||
+              location.origin !== 'https://m.pinduoduo.net' ||
+              !location.pathname.startsWith('/mdkd/') ||
+              window.__parcelPddProxyReady) return;
+          window.__parcelPddProxyReady = true;
+          function route(url) {
+            try {
+              const u = new URL(String(url), location.href);
+              if (u.origin !== 'https://api.pinduoduo.com' ||
+                  !u.pathname.startsWith('/api/') || u.username || u.password) {
+                return url;
+              }
+              return location.origin + '/proxy/api' + u.pathname + u.search + u.hash;
+            } catch (_) { return url; }
+          }
+          const open = XMLHttpRequest.prototype.open;
+          XMLHttpRequest.prototype.open = function() {
+            const args = Array.from(arguments);
+            if (args.length > 1) args[1] = route(args[1]);
+            return open.apply(this, args);
+          };
+          if (typeof window.fetch === 'function') {
+            const fetch = window.fetch;
+            window.fetch = function(input, init) {
+              if (typeof Request !== 'undefined' && input instanceof Request) {
+                const mapped = route(input.url);
+                if (mapped !== input.url) input = new Request(mapped, input);
+              } else {
+                input = route(input);
+              }
+              return fetch.call(this, input, init);
+            };
+          }
+        })();
+        """#
+        configuration.userContentController.addUserScript(
+            WKUserScript(source: sameOriginCompatibility,
+                         injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
