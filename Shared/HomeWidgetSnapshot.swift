@@ -19,6 +19,8 @@ struct HomeWidgetSnapshot: Codable {
     var transitTotal: Int
     var lastSync: Date
     var showTransit: Bool
+    // Optional to keep snapshots produced by older versions decodable.
+    var refreshMinutes: Int? = nil
 
     static let empty = HomeWidgetSnapshot(
         pending: [], transit: [], pendingTotal: 0, transitTotal: 0,
