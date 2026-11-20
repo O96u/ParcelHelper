@@ -367,8 +367,8 @@ private enum SyncJSON {
         let alias: String
         let commonlyUsed: Bool
     }
-    static func pddBoundMobiles() async throws -> [PddMobile] {
-        let response = try await pddJSON("/api/apoc/express/detail", body: ["entry_source": 17])
+    static func pddBoundMobiles(accountID: String? = nil) async throws -> [PddMobile] {
+        let response = try await pddJSON("/api/apoc/express/detail", body: ["entry_source": 17], accountID: accountID)
         let result = SyncJSON.dict(response["result"])
         let data = SyncJSON.dict(response["data"])
         let records = SyncJSON.list(result["new_binding_list"]).isEmpty
@@ -387,11 +387,12 @@ private enum SyncJSON {
         }
     }
 
-    private static func pddJSON(_ path: String, body: [String: Any]? = nil, referer: String? = nil) async throws -> [String: Any] {
+    private static func pddJSON(_ path: String, body: [String: Any]? = nil, referer: String? = nil, accountID: String? = nil) async throws -> [String: Any] {
         guard PddAccountProtection.webAccessAllowed else {
             throw NativeSyncError.unavailable("已关闭拼多多网页访问，以免影响官方 App 登录。")
         }
-        let cookies = await WebCookieRequest.cookies(domain: "yangkeduo.com")
+        let selected = accountID ?? ParcelAccounts.activeID(for: "pdd")
+        let cookies = await WebCookieRequest.cookies(domain: "yangkeduo.com", accountID: selected)
         var headers: [String: String] = [
             "Referer": referer ?? "https://m.pinduoduo.net/mdkd/package?pr_page_from=scheme",
             "Content-Type": "application/json;charset=UTF-8",
@@ -401,7 +402,8 @@ private enum SyncJSON {
         if !cookies.isEmpty {
             headers["Cookie"] = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
         }
-        let token = cookies.first(where: { $0.name == "PDDAccessToken" })?.value ?? PddSessionVault.token
+        let token = cookies.first(where: { $0.name == "PDDAccessToken" })?.value ??
+                    PddSessionVault.token(for: selected)
         guard !token.isEmpty || !cookies.isEmpty else {
             throw NativeSyncError.noLogin("未找到拼多多有效网页登录会话")
         }
@@ -420,10 +422,10 @@ private enum SyncJSON {
         return json
     }
 
-    private static func pddPackages() async throws -> [NativeSyncParcel] {
+    private static func pddPackages(accountID: String) async throws -> [NativeSyncParcel] {
         let json = try await pddJSON("/api/express_trackbox/station/package",
                                      body: ["entry_source": "9", "dynamic_qrcode": false,
-                                            "install_token": "", "dp_source": "", "redirect_app": false])
+                                            "install_token": "", "dp_source": "", "redirect_app": false], accountID: accountID)
         let root = SyncJSON.dict(json["result"])
         let groups = SyncJSON.list(root["combine_list"])
         var output: [NativeSyncParcel] = []
@@ -433,6 +435,7 @@ private enum SyncJSON {
                        SyncJSON.list(group["list"]) : SyncJSON.list(group["combine_track_list"])
             for item in list {
                 var p = NativeSyncParcel(source: "pdd")
+                p.accountID = accountID
                 p.mailNo = SyncJSON.first(item, ["tracking_number", "mail_no"])
                 p.company = SyncJSON.first(item, ["shipping_name", "shipping_company",
                                                    "shipping_company_name", "express_company_name"])
@@ -447,7 +450,7 @@ private enum SyncJSON {
                     // Detailed route is fetched only for a small, bounded batch.
                     if output.count < 12 {
                         do {
-                            let (name, tracks, eta) = try await pddTrack(p.mailNo)
+                            let (name, tracks, eta) = try await pddTrack(p.mailNo, accountID: accountID)
                             if !name.isEmpty { p.company = name }
                             p.tracks = tracks
                             p.latest = tracks.first?.text ?? ""
@@ -464,7 +467,7 @@ private enum SyncJSON {
         return output
     }
 
-    private static func pddTrack(_ mail: String) async throws -> (String, [TrackNode], String) {
+    private static func pddTrack(_ mail: String, accountID: String? = nil) async throws -> (String, [TrackNode], String) {
         guard var parts = URLComponents(string: "https://api.pinduoduo.com/api/express/shipping/track") else {
             throw NativeSyncError.badResponse("运单接口不可用")
         }
@@ -472,7 +475,7 @@ private enum SyncJSON {
                             URLQueryItem(name: "entry_source", value: "9")]
         // Same request error handling as station API, but query is GET.
         let path = "/api/express/shipping/track?" + (parts.percentEncodedQuery ?? "")
-        let response = try await pddJSON(path)
+        let response = try await pddJSON(path, accountID: accountID)
         let shipping = SyncJSON.dict(response["shipping"])
         let nodes = SyncJSON.list(shipping["traces"]).compactMap { o -> TrackNode? in
             let text = SyncJSON.first(o, ["info", "desc"])
