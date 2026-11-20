@@ -28,6 +28,7 @@ private struct WebShipment: Decodable {
     @Published private(set) var sequence = 0
     private var pending: [String] = []
     private var isRunning = false
+    private var timeoutTask: Task<Void, Never>?
 
     private init() {}
 
@@ -101,10 +102,15 @@ private struct WebShipment: Decodable {
         activePlatform = platform
         activeAccountID = accountID
         let requestNumber = sequence
-        // Fail safely if the site never finishes navigation. A new run may retry.
-        Task {
-            try? await Task.sleep(nanoseconds: 35_000_000_000)
-            guard activePlatform == platform && activeAccountID == accountID &&
+        // Cancel the timeout worker as soon as the reader finishes, rather
+        // than leaving one sleeping task per completed platform/account.
+        timeoutTask?.cancel()
+        timeoutTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 35_000_000_000)
+            } catch { return }
+            guard let self,
+                  activePlatform == platform && activeAccountID == accountID &&
                   sequence == requestNumber else { return }
             if platform == "pdd" {
                 finishPdd("拼多多购物订单：网页读取超时，请稍后重试", succeeded: false)
@@ -120,6 +126,8 @@ private struct WebShipment: Decodable {
         guard activePlatform == "pdd",
               expectedAccountID == nil || activeAccountID == expectedAccountID,
               expectedSequence == nil || sequence == expectedSequence else { return }
+        timeoutTask?.cancel()
+        timeoutTask = nil
         recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
         if succeeded {
             let syncedAt = Date().timeIntervalSince1970
@@ -143,6 +151,8 @@ private struct WebShipment: Decodable {
         guard activePlatform == platform,
               expectedAccountID == nil || activeAccountID == expectedAccountID,
               expectedSequence == nil || sequence == expectedSequence else { return }
+        timeoutTask?.cancel()
+        timeoutTask = nil
         recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
         let description: String
         if let failure {
