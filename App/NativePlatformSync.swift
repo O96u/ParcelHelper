@@ -157,6 +157,55 @@ private enum SyncJSON {
     }
 }
 
+/// Refreshes the Taobao H5 MTOP token in the SELECTED account's isolated
+/// WebKit store. The Scripting reference reloads h5.m.taobao.com when the
+/// gateway rotates _m_h5_tk. This WebView never appears in the UI and does
+/// not inspect webpage contents, passwords, or identity codes.
+@MainActor private final class CainiaoMtopTokenRefresh: NSObject, WKNavigationDelegate {
+    private let webView: WKWebView
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(accountID: String) {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
+        webView = WKWebView(frame: .zero, configuration: config)
+        super.init()
+        webView.navigationDelegate = self
+    }
+
+    func run() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.continuation = continuation
+            webView.load(URLRequest(url: URL(string: "https://h5.m.taobao.com/")!))
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(8))
+                self?.finish()
+            }
+        }
+    }
+
+    private func finish() {
+        guard let continuation else { return }
+        self.continuation = nil
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        continuation.resume()
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        finish()
+    }
+    func webView(_ webView: WKWebView,
+                 didFailProvisionalNavigation navigation: WKNavigation!,
+                 withError error: Error) {
+        finish()
+    }
+    func webView(_ webView: WKWebView,
+                 didFail navigation: WKNavigation!, withError error: Error) {
+        finish()
+    }
+}
+
 @MainActor enum NativeParcelSync {
     static let platforms = ["pdd", "cainiao", "fengchao", "mi"]
     // Throttle user-triggered refreshes too: no bursts into private endpoints.
@@ -587,6 +636,16 @@ private enum SyncJSON {
                 await WebCookieRequest.cookieStore(accountID: selected).setCookie(cookie)
             }
             cookies = await WebCookieRequest.cookies(domain: "taobao.com", accountID: selected)
+            let refreshedToken = cookies.first(where: { $0.name == "_m_h5_tk" })?
+                .value.components(separatedBy: "_").first ?? ""
+            if refreshedToken.isEmpty || refreshedToken == token {
+                // URLSession and WKWebView use different cookie stores. Match
+                // the uploaded Scripting refreshTbToken() fallback by using
+                // this same account's WebKit profile to refresh H5 cookies.
+                await CainiaoMtopTokenRefresh(accountID: selected).run()
+                cookies = await WebCookieRequest.cookies(
+                    domain: "taobao.com", accountID: selected)
+            }
         }
         throw NativeSyncError.unavailable("菜鸟 MTOP 请求失败：\(lastFailure)")
     }
