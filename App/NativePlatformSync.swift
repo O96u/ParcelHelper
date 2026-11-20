@@ -238,6 +238,9 @@ private enum SyncJSON {
             else if id == "cainiao" { incoming = try await cainiaoPackages(accountID: selected) }
             else if id == "fengchao" { incoming = try await NativeFengchao.packages(accountID: selected) }
             else { incoming = try await NativeMiExpress.packages() }
+            // A background expiration must not merge stale results or update
+            // sync-success state after its parent task was cancelled.
+            try Task.checkCancellation()
             let count = merge(incoming)
             let result = NativeSyncResult(
                 name: id == "pdd" ? "拼多多驿站包裹" : (id == "cainiao" ? "菜鸟" : (id == "fengchao" ? "丰巢" : "小米")),
@@ -253,6 +256,13 @@ private enum SyncJSON {
             }
             return result
         } catch {
+            // Cancellation is a scheduler decision, not a provider failure.
+            // Propagate it so the background task can stop without poisoning
+            // the account's exponential backoff.
+            if error is CancellationError { throw error }
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain &&
+               nsError.code == NSURLErrorCancelled { throw error }
             // Account-scoped exponential backoff prevents a failing platform
             // from blocking unrelated accounts. Manual force bypasses it.
             let failures = min(7, UserDefaults.standard.integer(forKey: failuresKey) + 1)
@@ -1019,8 +1029,7 @@ private enum SyncJSON {
         if let activeRefresh {
             return await activeRefresh.value
         }
-        let configured = UserDefaults.standard.object(forKey: "native.refresh.app") as? Int ?? 15
-        let interval = TimeInterval(max(5, min(120, configured))) * 60
+        let interval = TimeInterval(RefreshPolicy.minutes) * 60
         let now = Date().timeIntervalSince1970
         guard force || now - lastStarted >= interval else { return [] }
 
@@ -1080,8 +1089,9 @@ private enum SyncJSON {
         }
 
         ParcelStore.shared.persist()
-        UserDefaults.standard.set(Date().timeIntervalSince1970,
-                                  forKey: "native.home.lastRefresh")
+        // Only record a successful foreground refresh if a provider actually
+        // succeeded. A failed or empty pass must not claim fresh logistics.
+        // Provider-specific native.sync.success.* keys remain authoritative.
         if force && !interrupted.isEmpty {
             results.append("部分平台的网络同步被中断（\(interrupted.joined(separator: "、"))），可稍后重试；已有包裹数据不会因此被删除")
         }
