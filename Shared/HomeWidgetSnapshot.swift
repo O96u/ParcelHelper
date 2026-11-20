@@ -86,16 +86,35 @@ enum HomeWidgetSharedStore {
         return copy
     }
 
+    /// Persist the latest snapshot, but only notify WidgetKit if visible parcel
+    /// information changed. A new lastSync timestamp alone is not a reason to
+    /// spend the system's widget reload budget.
+    static func writeWithChange(_ snapshot: HomeWidgetSnapshot) -> (saved: Bool, changed: Bool) {
+        guard let url = snapshotURL else { return (false, false) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(snapshot) else { return (false, false) }
+        let previous = (try? Data(contentsOf: url))
+            .flatMap { try? JSONDecoder().decode(HomeWidgetSnapshot.self, from: $0) }
+        var lhs = snapshot
+        var rhs = previous ?? .empty
+        lhs.lastSync = .distantPast
+        rhs.lastSync = .distantPast
+        let changed = previous == nil ||
+            (try? encoder.encode(lhs)) != (try? encoder.encode(rhs))
+        do {
+            if (try? Data(contentsOf: url)) != data {
+                try data.write(to: url, options: .atomic)
+            }
+            return (true, changed)
+        } catch {
+            return (false, false)
+        }
+    }
+
     @discardableResult
     static func write(_ snapshot: HomeWidgetSnapshot) -> Bool {
-        guard let url = snapshotURL,
-              let data = try? JSONEncoder().encode(snapshot) else { return false }
-        do {
-            try data.write(to: url, options: .atomic)
-            return true
-        } catch {
-            return false
-        }
+        writeWithChange(snapshot).saved
     }
 
     // AppIntent only writes a single operation. The main App remains the sole
