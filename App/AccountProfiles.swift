@@ -534,6 +534,7 @@ struct MultiAccountPage: View {
     let platformID: String
     @State private var revision = 0
     @State private var validAccounts: Set<String> = []
+    @State private var accountsLoaded = false
     @State private var loginAccount: ParcelAccountProfile?
     @State private var draftAccount: ParcelAccountProfile?
     @State private var loginError: String?
@@ -560,7 +561,22 @@ struct MultiAccountPage: View {
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .padding(.leading, 14)
-                ForEach(records) { account in
+                let visibleAccounts = records.filter {
+                    !accountsLoaded || !$0.isLegacy || validAccounts.contains($0.id)
+                }
+                if visibleAccounts.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.crop.circle.badge.plus")
+                            .foregroundStyle(.secondary)
+                        Text("暂无已授权账号")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity, minHeight: 80)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 25))
+                }
+                ForEach(visibleAccounts) { account in
                     accountCard(account)
                 }
                 Button {
@@ -828,6 +844,7 @@ struct MultiAccountPage: View {
         // Do not probe each account's private phone-binding endpoint merely
         // because the account list appeared. Query only on the detail page.
         validAccounts = found
+        accountsLoaded = true
         revision += 1
     }
 
