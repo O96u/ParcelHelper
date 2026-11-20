@@ -1,5 +1,22 @@
 import Foundation
 
+// Shared by app and Widget extension; the Widget only reads this setting
+// from its latest snapshot, never starts a network refresh.
+enum RefreshPolicy {
+    static var minutes: Int {
+        let configured = UserDefaults.standard.object(forKey: "native.refresh.app") as? Int ?? 15
+        return max(5, min(120, configured))
+    }
+
+    static func backgroundDelay(hasPending: Bool, hasActive: Bool) -> TimeInterval {
+        let preferred = TimeInterval(minutes * 60)
+        if hasPending { return max(30 * 60, preferred) }
+        if hasActive { return max(3 * 3600, preferred) }
+        return max(12 * 3600, preferred)
+    }
+}
+
+
 // A small, credential-free snapshot shared by the containing app and WidgetKit.
 // The signing tool must grant BOTH binaries the same App Group entitlement.
 struct HomeWidgetParcel: Codable, Identifiable, Hashable {
