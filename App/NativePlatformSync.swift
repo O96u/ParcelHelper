@@ -487,12 +487,13 @@ private enum SyncJSON {
                 SyncJSON.str(forecast["time_forecast_desc"]))
     }
 
-    private static func mtop(_ api: String, data: [String: Any]) async throws -> [String: Any] {
+    private static func mtop(_ api: String, data: [String: Any], accountID: String? = nil) async throws -> [String: Any] {
         let params = try JSONSerialization.data(withJSONObject: data, options: [.sortedKeys])
         guard let json = String(data: params, encoding: .utf8) else {
             throw NativeSyncError.badResponse("请求参数编码失败")
         }
-        var cookies = await WebCookieRequest.cookies(domain: "taobao.com")
+        let selected = accountID ?? ParcelAccounts.activeID(for: "taobao")
+        var cookies = await WebCookieRequest.cookies(domain: "taobao.com", accountID: selected)
         guard !cookies.isEmpty else { throw NativeSyncError.noLogin("请先登录淘宝/菜鸟") }
         var lastFailure = "接口请求失败"
         for attempt in 0..<2 {
@@ -514,7 +515,7 @@ private enum SyncJSON {
                 .init(name: "dataType", value: "json"),
                 .init(name: "data", value: json)
             ]
-            var headers = try await WebCookieRequest.headers(domain: "taobao.com")
+            var headers = try await WebCookieRequest.headers(domain: "taobao.com", accountID: selected)
             headers["Referer"] = "https://h5.m.taobao.com/"
             let (result, response) = try await WebCookieRequest.request(components.url!, headers: headers)
             let returned = (result["ret"] as? [String])?.first ?? ""
@@ -527,13 +528,15 @@ private enum SyncJSON {
                 out[String(describing: item.key)] = String(describing: item.value)
             }
             let fresh = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: components.url!)
-            for cookie in fresh { await WebCookieRequest.store.setCookie(cookie) }
-            cookies = await WebCookieRequest.cookies(domain: "taobao.com")
+            for cookie in fresh {
+                await WebCookieRequest.cookieStore(accountID: selected).setCookie(cookie)
+            }
+            cookies = await WebCookieRequest.cookies(domain: "taobao.com", accountID: selected)
         }
         throw NativeSyncError.unavailable("菜鸟 MTOP 请求失败：\(lastFailure)")
     }
 
-    private static func cainiaoPackages() async throws -> [NativeSyncParcel] {
+    private static func cainiaoPackages(accountID: String) async throws -> [NativeSyncParcel] {
         var out: [NativeSyncParcel] = []
         let api = "mtop.cainiao.lpc.packageservice.queryPdsPackageDataList"
         for page in 1...2 {
@@ -541,7 +544,7 @@ private enum SyncJSON {
                 "pageSize": 50, "currentPage": page,
                 "needTemporality": false,
                 "needDynInfo": "{'needFindTemporality':true,'needAppointment':true}"
-            ])
+            ], accountID: accountID)
             let outer = SyncJSON.dict(json["data"])
             let body = SyncJSON.dict(outer["data"]).isEmpty ? outer : SyncJSON.dict(outer["data"])
             let entries = SyncJSON.list(body["packages"])
@@ -553,6 +556,7 @@ private enum SyncJSON {
                 let items = SyncJSON.list(pkg["packageItem"])
                 let firstItem = items.first ?? [:]
                 var parcel = NativeSyncParcel(source: "cainiao")
+                parcel.accountID = accountID
                 parcel.mailNo = mail
                 let carrier = SyncJSON.dict(pkg["cpInfo"])
                 let logistics = SyncJSON.dict(pkg["logisticsCompany"])
@@ -581,7 +585,7 @@ private enum SyncJSON {
                 parcel.latest = upperStatus == "SIGN" ? "已签收" : status
                 parcel.arrived = !parcel.code.isEmpty
                 if out.count < 4 {
-                    if let detail = await cainiaoTrack(mail) {
+                    if let detail = await cainiaoTrack(mail, accountID: accountID) {
                         if !detail.company.isEmpty { parcel.company = detail.company }
                         if !detail.nodes.isEmpty {
                             parcel.tracks = detail.nodes
@@ -603,15 +607,15 @@ private enum SyncJSON {
     // Original utils/cainiao.ts: trackMailNo() with a PID query first, falling
     // back to carrier detection + queryalltrace. A failed trace lookup does not
     // invalidate the rest of the order-list import.
-    private static func cainiaoTrack(_ mail: String) async -> (company: String, nodes: [TrackNode])? {
+    private static func cainiaoTrack(_ mail: String, accountID: String? = nil) async -> (company: String, nodes: [TrackNode])? {
         var result: [String: Any]?
         do {
             result = try await mtop("mtop.cainiao.logisticsdetail.packages.pid.orderCode.mailNo.get",
-                                    data: ["mailNo": mail])
+                                    data: ["mailNo": mail], accountID: accountID)
         } catch {
             var companyCode = ""
             if let cp = try? await mtop("mtop.taobao.logisticsDetailTraceQueryService.queryCpByMailNo",
-                                         data: ["mailNo": mail]) {
+                                         data: ["mailNo": mail], accountID: accountID) {
                 let d = SyncJSON.dict(cp["data"])
                 let list = SyncJSON.list(d["result"])
                 companyCode = SyncJSON.first(list.first ?? [:], ["tpCode", "cpCode"])
@@ -623,7 +627,7 @@ private enum SyncJSON {
                 "isShowDeliveryProgress": true, "isShowStationProxyOrder": true,
                 "isShowServiceProvider": true, "isStandard": true,
                 "isUnique": true, "ignoreInvalidNode": true
-            ])
+            ], accountID: accountID)
         }
         guard let result else { return nil }
         let data = SyncJSON.dict(result["data"])
@@ -759,8 +763,9 @@ private enum SyncJSON {
     }
     static func hasIdentitySession(_ platform: String) async -> Bool {
         if platform == "pdd" {
-            let cookie = await WebCookieRequest.cookies(domain: "yangkeduo.com")
-            return !PddSessionVault.token.isEmpty ||
+            let cookie = await WebCookieRequest.cookies(domain: "yangkeduo.com",
+                                                        accountID: ParcelAccounts.activeID(for: "pdd"))
+            return !PddSessionVault.token(for: ParcelAccounts.activeID(for: "pdd")).isEmpty ||
                     cookie.contains { $0.name == "PDDAccessToken" && !$0.value.isEmpty }
         }
         return await hasTaobaoCookie()
@@ -777,7 +782,8 @@ private enum SyncJSON {
             let result = try await pddJSON(
                 "/api/express_trackbox/generate_identification_code",
                 body: ["entry_source": "APP"],
-                referer: "https://m.pinduoduo.net/mdkd/package?pr_page_from=scheme&tab=ID_CODE")
+                referer: "https://m.pinduoduo.net/mdkd/package?pr_page_from=scheme&tab=ID_CODE",
+                accountID: ParcelAccounts.activeID(for: "pdd"))
             let body = SyncJSON.dict(result["result"])
             let code = SyncJSON.str(body["identification_code"])
             guard !code.isEmpty else {
@@ -799,7 +805,8 @@ private enum SyncJSON {
         if platform == "cainiao" {
             let response = try await mtop(
                 "mtop.cainiao.nbpickup.identitycode.get",
-                data: ["appName": "GUOGUO", "verifyVersion": "V2"])
+                data: ["appName": "GUOGUO", "verifyVersion": "V2"],
+                accountID: ParcelAccounts.activeID(for: "taobao"))
             let content = identityData(response["data"])
             let model = SyncJSON.dict(content["model"])
             let details = model.isEmpty ? content : model
@@ -824,7 +831,8 @@ private enum SyncJSON {
                 mobile: nil)
         }
         let response = try await mtop(
-            "mtop.cainiao.pickup.identity.getIdentityMessage", data: [:])
+            "mtop.cainiao.pickup.identity.getIdentityMessage", data: [:],
+            accountID: ParcelAccounts.activeID(for: "taobao"))
         let content = identityData(response["data"])
         guard let code = identityCodeIn(content) else {
             throw NativeSyncError.badResponse("淘宝接口没有返回有效身份码")
