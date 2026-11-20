@@ -73,8 +73,7 @@ private struct WebShipment: Decodable {
         let now = Date().timeIntervalSince1970
         // Use the same foreground auto-refresh interval as the native
         // platform synchronizer; manual force-sync remains available.
-        let configured = UserDefaults.standard.object(forKey: "native.refresh.app") as? Int ?? 15
-        let interval = TimeInterval(max(5, min(120, configured))) * 60
+        let interval = TimeInterval(RefreshPolicy.minutes) * 60
         if !force && now - UserDefaults.standard.double(forKey: key) < interval {
             return false
         }
@@ -121,8 +120,10 @@ private struct WebShipment: Decodable {
               expectedAccountID == nil || activeAccountID == expectedAccountID else { return }
         recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
         if succeeded {
-            UserDefaults.standard.set(Date().timeIntervalSince1970,
+            let syncedAt = Date().timeIntervalSince1970
+            UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success.pdd")
+            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
         }
         UserDefaults.standard.set(message, forKey: "native.sync.result.pdd")
         if let accountID = activeAccountID {
@@ -147,8 +148,10 @@ private struct WebShipment: Decodable {
             let accountID = activeAccountID ?? ParcelAccounts.activeID(for: platform)
             for index in scoped.indices { scoped[index].accountID = accountID }
             let merged = NativeParcelSync.merge(scoped)
-            UserDefaults.standard.set(Date().timeIntervalSince1970,
+            let syncedAt = Date().timeIntervalSince1970
+            UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success." + platform)
+            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
             description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(packages.count) 件，导入或更新 \(merged) 件。"
         }
         UserDefaults.standard.set(description, forKey: "native.sync.result." + platform)
