@@ -154,7 +154,8 @@ import WidgetKit
             transit: Array(transit.prefix(6)).map(row),
             pendingTotal: pending.count, transitTotal: transit.count,
             lastSync: lastSync > 0 ? Date(timeIntervalSince1970: lastSync) : .distantPast,
-            showTransit: snapshot.preferences.widgetShowTransit)
+            showTransit: snapshot.preferences.widgetShowTransit,
+            refreshMinutes: RefreshPolicy.minutes)
     }
 
     func persist() {
