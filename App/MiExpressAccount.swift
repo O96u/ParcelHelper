@@ -641,7 +641,7 @@ struct XiaomiAccountPage: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
-        .confirmationDialog("解除小米授权？", isPresented: $askRevoke, titleVisibility: .visible) {
+        .alert("解除小米授权？", isPresented: $askRevoke) {
             Button("解除授权", role: .destructive) {
                 NativeMiExpress.clearSession()
                 authorized = false
@@ -649,11 +649,12 @@ struct XiaomiAccountPage: View {
                 notice = "已清除小米登录信息"
             }
             Button("取消", role: .cancel) {}
+        } message: {
+            Text("只清除小米账号登录信息，已导入的包裹不会删除。")
         }
-        .confirmationDialog("解绑此手机号？",
-                            isPresented: Binding(get: { unbindTarget != nil },
-                                                 set: { if !$0 { unbindTarget = nil } }),
-                            titleVisibility: .visible) {
+        .alert("解绑此手机号？",
+               isPresented: Binding(get: { unbindTarget != nil },
+                                    set: { if !$0 { unbindTarget = nil } })) {
             Button("解绑", role: .destructive) {
                 guard let target = unbindTarget else { return }
                 unbindTarget = nil

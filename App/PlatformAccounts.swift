@@ -465,7 +465,7 @@ struct PlatformAccountsPage: View {
     private func detailStatus(_ platform: PlatformWebsite, authorized: Bool) -> String {
         guard authorized else { return "未授权" }
         if ["taobao", "cainiao", "jd", "pdd", "fengchao"].contains(platform.id) {
-            return "已授权 (accountCounts[platform.id] ?? 1) 个账号"
+            return "已授权 \(accountCounts[platform.id] ?? 1) 个账号"
         }
         let date = UserDefaults.standard.double(forKey: "native.sync.success." + platform.id)
         if date > 0 {

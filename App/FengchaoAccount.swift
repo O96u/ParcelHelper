@@ -351,14 +351,15 @@ struct FengchaoAccountPage: View {
                 }
             }
         }
-        .confirmationDialog("解除丰巢授权？", isPresented: $revokeConfirmation,
-                            titleVisibility: .visible) {
+        .alert("解除丰巢授权？", isPresented: $revokeConfirmation) {
             Button("解除授权", role: .destructive) {
                 NativeFengchao.logout()
                 loggedIn = false
                 message = "丰巢授权已清除"
             }
             Button("取消", role: .cancel) {}
+        } message: {
+            Text("只清除丰巢账号登录信息，已导入的包裹不会删除。")
         }
         .alert("丰巢", isPresented: Binding(get: { message != nil },
                                           set: { if !$0 { message = nil } })) {

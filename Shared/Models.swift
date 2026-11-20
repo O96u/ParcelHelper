@@ -70,24 +70,26 @@ struct Parcel: Codable, Identifiable, Hashable {
     /// Prefer the most recent real tracking event to the platform's summary.
     /// This also corrects the status of parcels stored before an app update.
     var latestPickupConfirmed: Bool {
-        let latestNode = trackNodes.first?.text ?? ""
-        // A provider can return a new pickup event while its summary is stale.
-        return Self.confirmsRecipientPickup(latestNode) ||
-            Self.confirmsRecipientPickup(trackLatest ?? "")
+        // Providers use both newest-first and oldest-first timelines. A
+        // confirmed recipient collection may therefore be the last node.
+        Self.confirmsRecipientPickup(trackLatest ?? "") ||
+            trackNodes.contains { Self.confirmsRecipientPickup($0.text) }
     }
     var isDone: Bool { status == 2 || pickedByUser || latestPickupConfirmed }
     // The courier marked this package delivered, not necessarily picked up
     // personally. Do not conflate signature and user's pickup.
     var isSigned: Bool {
         guard !isDone else { return false }
-        let text = (trackLatest?.isEmpty == false ? trackLatest : trackNodes.first?.text) ?? ""
         let excluded = ["待签收", "等待签收", "签收中", "未签收", "代签收",
                         "代为签收", "驿站签收", "网点签收", "快递柜签收", "暂存签收"]
-        guard !excluded.contains(where: text.contains) else { return false }
         let signed = ["已签收", "签收成功", "已妥投", "本人签收",
                       "收件人签收", "已完成签收", "已送达收件人"]
-        return text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "SIGN" ||
-            signed.contains(where: text.contains)
+        // Also inspect route history when the summary has not caught up.
+        return ([trackLatest ?? ""] + trackNodes.map(\.text)).contains { text in
+            !excluded.contains(where: text.contains) &&
+                (text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "SIGN" ||
+                 signed.contains(where: text.contains))
+        }
     }
     var displayStatus: String {
         if isDone { return "已取件" }

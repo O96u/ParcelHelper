@@ -49,15 +49,31 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
         guard accounts(for: kind).contains(where: { $0.id == accountID }) else { return }
         UserDefaults.standard.set(accountID, forKey: "native.account.active." + kind)
     }
-    @discardableResult static func add(_ platform: String) -> ParcelAccountProfile {
+    // A new account is only a draft until the platform verifies its login.
+    // Closing the login sheet must never create an unauthorized account.
+    static func prepare(_ platform: String) -> ParcelAccountProfile {
         let kind = canonical(platform)
         let all = accounts(for: kind)
-        let profile = ParcelAccountProfile(id: UUID().uuidString, platform: kind,
-                                           nickname: "账号 \(all.count + 1)",
-                                           createdAt: Date().timeIntervalSince1970,
-                                           isLegacy: false)
-        write(saved + [profile])
-        return profile
+        return ParcelAccountProfile(id: UUID().uuidString, platform: kind,
+                                    nickname: "账号 \(all.count + 1)",
+                                    createdAt: Date().timeIntervalSince1970,
+                                    isLegacy: false)
+    }
+    static func commitIfAuthorized(_ draft: ParcelAccountProfile) async -> Bool {
+        guard !draft.isLegacy, platforms.contains(draft.platform),
+              await hasSession(draft.platform, accountID: draft.id) else { return false }
+        var list = saved
+        if !list.contains(where: { $0.id == draft.id }) {
+            list.append(draft)
+            write(list)
+        }
+        return true
+    }
+    static func discard(_ draft: ParcelAccountProfile) async {
+        guard !draft.isLegacy,
+              !saved.contains(where: { $0.id == draft.id }),
+              let uuid = UUID(uuidString: draft.id) else { return }
+        try? await WKWebsiteDataStore.remove(forIdentifier: uuid)
     }
     static func rename(_ id: String, platform: String, to name: String) {
         let clean = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(32))
@@ -90,8 +106,9 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
         if kind == "pdd" && !PddSessionVault.token(for: accountID).isEmpty { return true }
         let domain = kind == "taobao" ? "taobao.com" :
                      kind == "jd" ? "jd.com" : "yangkeduo.com"
+        // Gateway cookies alone are not proof of a completed Taobao login.
         let names: Set<String> = kind == "taobao" ?
-            ["unb", "tracknick", "cookie2", "_m_h5_tk"] :
+            ["unb", "tracknick"] :
             kind == "jd" ? ["pt_key"] : ["PDDAccessToken"]
         let cookies = await websiteDataStore(for: accountID).httpCookieStore.allCookies()
         return cookies.contains {
@@ -153,6 +170,8 @@ struct MultiAccountPage: View {
     @State private var validAccounts: Set<String> = []
     @State private var linkedPddPhones: [String: [NativeParcelSync.PddMobile]] = [:]
     @State private var loginAccount: ParcelAccountProfile?
+    @State private var draftAccount: ParcelAccountProfile?
+    @State private var loginError: String?
     @State private var managePhoneAccount: ParcelAccountProfile?
     @State private var renameAccount: ParcelAccountProfile?
     @State private var renameValue = ""
@@ -172,12 +191,16 @@ struct MultiAccountPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                Text("授权账号")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 14)
                 ForEach(records) { account in
                     accountCard(account)
                 }
                 Button {
-                    let account = ParcelAccounts.add(kind)
-                    revision += 1
+                    let account = ParcelAccounts.prepare(kind)
+                    draftAccount = account
                     if kind == "pdd" {
                         pendingPddAccount = account
                         pddConsent = true
@@ -186,9 +209,13 @@ struct MultiAccountPage: View {
                     }
                 } label: {
                     Label("添加其他账号", systemImage: "plus.circle.fill")
-                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .font(.system(size: 17, weight: .medium))
+                        .frame(maxWidth: .infinity, minHeight: 64)
+                        .foregroundStyle(.white)
+                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 26))
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.plain)
+                .disabled(loginAccount != nil || busy != nil)
                 if kind == "pdd" {
                     Toggle("允许拼多多网页授权及同步", isOn: $pddWebEnabled)
                         .tint(.blue)
@@ -207,29 +234,40 @@ struct MultiAccountPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await reload() }
         .sheet(item: $loginAccount, onDismiss: {
-            Task { await reload() }
+            let unfinished = draftAccount
+            draftAccount = nil
+            Task {
+                if let unfinished { await ParcelAccounts.discard(unfinished) }
+                await reload()
+            }
         }) { account in
             NavigationStack {
                 if kind == "fengchao" {
                     FengchaoSMSLoginPage(accountID: account.id) {
-                        loginAccount = nil
-                        Task { await reload() }
+                        finishLogin(account)
                     }
                 } else if let url = PlatformCatalog.rows.first(where: { $0.id == kind })?.login {
                     PlatformWebLogin(url: url, platformID: kind,
                                      accountID: account.id) {
-                        loginAccount = nil
-                        Task { await reload() }
+                        finishLogin(account)
                     }
                     .navigationTitle("登录 " + account.nickname)
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("取消") { loginAccount = nil }
+                        }
                         ToolbarItem(placement: .topBarTrailing) {
-                            Button("关闭") { loginAccount = nil }
+                            Button("完成授权") { finishLogin(account) }
                         }
                     }
                 }
             }
+            .alert("账号授权", isPresented: Binding(
+                get: { loginError != nil }, set: { if !$0 { loginError = nil } }
+            )) {
+                Button("确定") { loginError = nil }
+            } message: { Text(loginError ?? "") }
         }
         .sheet(item: $managePhoneAccount, onDismiss: {
             Task { await reload() }
@@ -263,9 +301,9 @@ struct MultiAccountPage: View {
             }
             Button("取消", role: .cancel) { renameAccount = nil }
         }
-        .confirmationDialog("解除账号授权？", isPresented: Binding(
+        .alert("解除账号授权？", isPresented: Binding(
             get: { removeAccount != nil }, set: { if !$0 { removeAccount = nil } }
-        ), titleVisibility: .visible) {
+        )) {
             Button("解除该账号授权", role: .destructive) {
                 guard let target = removeAccount else { return }
                 removeAccount = nil
@@ -277,6 +315,7 @@ struct MultiAccountPage: View {
                     } catch { notice = "删除账号数据失败：" + error.localizedDescription }
                 }
             }
+            Button("取消", role: .cancel) { removeAccount = nil }
         } message: {
             Text("只解除选中的账号，不删除已导入的包裹或其他账号。")
         }
@@ -286,7 +325,10 @@ struct MultiAccountPage: View {
                 pendingPddAccount = nil
                 UserDefaults.standard.set(true, forKey: PddAccountProtection.key)
             }
-            Button("取消", role: .cancel) { pendingPddAccount = nil }
+            Button("取消", role: .cancel) {
+                if pendingPddAccount?.id == draftAccount?.id { draftAccount = nil }
+                pendingPddAccount = nil
+            }
         } message: {
             Text("网页版登录可能使同一拼多多账号在官方 App 中退出。建议用小号登录。")
         }
@@ -299,11 +341,37 @@ struct MultiAccountPage: View {
 
     @State private var pendingPddAccount: ParcelAccountProfile?
 
+    private func finishLogin(_ account: ParcelAccountProfile) {
+        guard loginAccount?.id == account.id else { return }
+        Task { @MainActor in
+            let valid = await ParcelAccounts.hasSession(kind, accountID: account.id)
+            guard valid else {
+                loginError = "尚未验证登录成功。请先在平台页面完成登录，或点击取消放弃添加。"
+                return
+            }
+            if let draft = draftAccount, draft.id == account.id {
+                guard await ParcelAccounts.commitIfAuthorized(draft) else {
+                    loginError = "尚未取得有效登录会话，账号不会被保存。"
+                    return
+                }
+                // The newly authorized account should be used for identity
+                // codes rather than silently continuing with the old default.
+                ParcelAccounts.select(draft.id, for: kind)
+                draftAccount = nil
+                notice = "账号已授权并添加，已设为默认账号。"
+            }
+            loginAccount = nil
+            await reload()
+        }
+    }
+
     private func accountCard(_ account: ParcelAccountProfile) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "person.crop.circle.fill")
-                    .foregroundStyle(.blue).font(.system(size: 30))
+                Image("brand_" + kind)
+                    .resizable().scaledToFill()
+                    .frame(width: 45, height: 45)
+                    .clipShape(RoundedRectangle(cornerRadius: 13))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(account.nickname).font(.headline)
                     Text(validAccounts.contains(account.id) ? "已授权" : "未授权 / 需要验证")
@@ -370,7 +438,7 @@ struct MultiAccountPage: View {
         }
         .padding(16)
         .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 20))
+                    in: RoundedRectangle(cornerRadius: 25))
     }
 
     private func reload() async {
