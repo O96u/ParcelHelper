@@ -177,7 +177,12 @@ struct MultiAccountPage: View {
                 Button {
                     let account = ParcelAccounts.add(kind)
                     revision += 1
-                    loginAccount = account
+                    if kind == "pdd" {
+                        pendingPddAccount = account
+                        pddConsent = true
+                    } else {
+                        loginAccount = account
+                    }
                 } label: {
                     Label("添加其他账号", systemImage: "plus.circle.fill")
                         .frame(maxWidth: .infinity, minHeight: 56)
@@ -302,6 +307,14 @@ struct MultiAccountPage: View {
                         .font(.caption)
                         .foregroundStyle(validAccounts.contains(account.id) ?
                                          Color.green : Color.secondary)
+                    let key = "native.sync.success." +
+                              (kind == "taobao" ? "cainiao" : kind) + "." + account.id
+                    let updated = UserDefaults.standard.double(forKey: key)
+                    if updated > 0 {
+                        Text("上次同步 " + Date(timeIntervalSince1970: updated)
+                            .formatted(date: .omitted, time: .shortened))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if account.id == currentID {
