@@ -103,6 +103,29 @@ struct NativeTrackLookup {
     }
 
     static var isConfigured:Bool { !get("businessID").isEmpty && !get("apiKey").isEmpty }
+    // Login provenance is separate from API configuration. The official web
+    // login token and unmasked phone are never persisted.
+    static var hasOfficialLogin: Bool {
+        isConfigured && get("officialLogin") == "1"
+    }
+    static var maskedOfficialPhone: String {
+        hasOfficialLogin ? get("maskedOfficialPhone") : ""
+    }
+    static var accountStatus: String {
+        if hasOfficialLogin {
+            return maskedOfficialPhone.isEmpty
+                ? "官方账号已登录" : maskedOfficialPhone + " · 已登录"
+        }
+        return isConfigured ? "API 已配置" : "未授权"
+    }
+    static func rememberOfficialLogin(maskedPhone: String?) {
+        guard isConfigured else { return }
+        let phone = maskedPhone ?? ""
+        let valid = phone.range(of: #"^1[3-9][0-9]\*{4}[0-9]{4}$"#,
+                                options: .regularExpression) != nil
+        save("officialLogin", value: "1")
+        save("maskedOfficialPhone", value: valid ? phone : "")
+    }
     static func setCredential(businessID:String, apiKey:String) throws {
         let id = businessID.trimmingCharacters(in:.whitespacesAndNewlines)
         let key = apiKey.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -111,9 +134,11 @@ struct NativeTrackLookup {
             throw NativeSyncError.badResponse("请输入有效的快递鸟 EBusinessID 与 API Key")
         }
         save("businessID",value:id);save("apiKey",value:key)
+        save("officialLogin",value:"");save("maskedOfficialPhone",value:"")
     }
     static func clearCredential() {
         save("businessID",value:"");save("apiKey",value:"")
+        save("officialLogin",value:"");save("maskedOfficialPhone",value:"")
     }
     static func history() -> [String] {
         UserDefaults.standard.stringArray(forKey:"native.track.history") ?? []

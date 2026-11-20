@@ -1902,20 +1902,41 @@ struct CourierSettings: View {
     @State private var businessID = NativeTracking.get("businessID")
     @State private var key = NativeTracking.get("apiKey")
     @State private var configured = NativeTracking.isConfigured
+    @State private var loggedIn = NativeTracking.hasOfficialLogin
+    @State private var accountStatus = NativeTracking.accountStatus
     @State private var officialLogin = false
     @State private var notice: String?
 
     var body: some View {
         Form {
             Section {
+                Label {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(loggedIn ? "快递鸟账号" : (configured ? "快递鸟 API" : "快递鸟账号"))
+                            .foregroundStyle(.primary)
+                        Text(accountStatus)
+                            .font(.footnote)
+                            .foregroundStyle(loggedIn || configured ? accent : .secondary)
+                    }
+                } icon: {
+                    Image(systemName: loggedIn ? "checkmark.shield.fill" : "person.crop.circle")
+                        .foregroundStyle(loggedIn ? Color.green : accent)
+                }
                 Button {
                     officialLogin = true
                 } label: {
-                    Label("登录 / 注册快递鸟", systemImage: "person.crop.circle.badge.checkmark")
+                    Label(loggedIn ? "切换账号 / 重新登录" :
+                          (configured ? "登录 / 关联快递鸟账号" : "登录 / 注册快递鸟"),
+                          systemImage: "person.crop.circle.badge.checkmark")
                 }
                 .tint(accent)
-                Text("使用快递鸟官方网页完成手机号、验证码或滑块验证。登录成功后会尝试读取账号已创建的 API 密钥并保存到本机钥匙串；不收集账号密码。")
-                    .font(.footnote).foregroundStyle(.secondary)
+                if !configured {
+                    Text("完成官方登录后，可尝试读取 API 密钥并保存到本机钥匙串。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else if !loggedIn {
+                    Text("已有 API 配置。如需显示官方登录状态，请重新完成一次网页授权。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             } header: {
                 Text("官方账号授权")
             }
@@ -1928,6 +1949,8 @@ struct CourierSettings: View {
                     do {
                         try NativeTracking.setCredential(businessID: businessID, apiKey: key)
                         configured = true
+                        loggedIn = NativeTracking.hasOfficialLogin
+                        accountStatus = NativeTracking.accountStatus
                         notice = "密钥已安全保存到设备钥匙串"
                     } catch {
                         notice = error.localizedDescription
@@ -1938,10 +1961,13 @@ struct CourierSettings: View {
                     businessID = ""
                     key = ""
                     configured = false
+                    loggedIn = false
+                    accountStatus = NativeTracking.accountStatus
                     notice = "API 配置已清除"
                 }.disabled(!configured)
             }
             Section("状态") {
+                LabeledContent("账号授权", value: loggedIn ? "已登录" : "未检测到官方登录")
                 LabeledContent("查询服务", value: configured ? "已配置" : "尚未配置")
                 Text("登录或注册快递鸟本身不等于已开通查询 API；账号需要存在有效密钥。查询时优先复用已授权平台的物流数据，必要时使用快递鸟接口。")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -1954,8 +1980,10 @@ struct CourierSettings: View {
                     businessID = NativeTracking.get("businessID")
                     key = NativeTracking.get("apiKey")
                     configured = NativeTracking.isConfigured
+                    loggedIn = NativeTracking.hasOfficialLogin
+                    accountStatus = NativeTracking.accountStatus
                     officialLogin = false
-                    notice = "已从快递鸟账号取得 API 密钥并安全保存"
+                    notice = "快递鸟官方授权成功，API 密钥已安全保存"
                 }
             }
         }
@@ -1975,13 +2003,14 @@ private struct KdniaoOfficialLoginPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            KdniaoOfficialLoginWeb { token in
+            KdniaoOfficialLoginWeb { token, maskedPhone in
                 guard !exchanging else { return }
                 exchanging = true
                 status = "网页登录成功，正在读取账号 API 密钥…"
                 Task { @MainActor in
                     do {
                         try await NativeTracking.configureFromOfficialLogin(token: token)
+                        NativeTracking.rememberOfficialLogin(maskedPhone: maskedPhone)
                         onConfigured()
                     } catch {
                         status = error.localizedDescription
@@ -2006,7 +2035,7 @@ private struct KdniaoOfficialLoginPage: View {
 }
 
 private struct KdniaoOfficialLoginWeb: UIViewRepresentable {
-    let onToken: (String) -> Void
+    let onToken: (String, String?) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onToken: onToken) }
 
@@ -2030,9 +2059,46 @@ private struct KdniaoOfficialLoginWeb: UIViewRepresentable {
                                   data.accessToken || '').trim();
                 }
               }
-              if (token.length < 12 || window.__parcelKdnSent === token) return;
+              if (token.length < 12) return;
+              // Only read explicit account phone fields on the official site;
+              // the native app receives a masked value, never the raw number.
+              function maskPhone(value) {
+                var p = String(value || '').replace(/[\s-]/g,'').replace(/^\+?86/,'');
+                if (/^1[3-9]\d{9}$/.test(p)) return p.slice(0,3)+'****'+p.slice(-4);
+                if (/^1[3-9]\d\*{4}\d{4}$/.test(p)) return p;
+                return '';
+              }
+              function findPhone(obj,depth) {
+                if (!obj || typeof obj !== 'object' || depth > 4) return '';
+                var fields = ['mobile','mobilePhone','phone','phoneNumber',
+                              'userMobile','userPhone','loginPhone'];
+                for(var j=0;j<fields.length;j++) {
+                  var found = maskPhone(obj[fields[j]]);
+                  if(found) return found;
+                }
+                var nested = ['state','userInfo','user','profile','account','memberInfo'];
+                for(var k=0;k<nested.length;k++) {
+                  var inside = findPhone(obj[nested[k]],depth+1);
+                  if(inside) return inside;
+                }
+                return '';
+              }
+              var phone = '', keys = ['app-sso','userInfo','user-info','accountInfo'];
+              for(var i=0;i<keys.length && !phone;i++) {
+                try {
+                  var raw = localStorage.getItem(keys[i]);
+                  if(raw) phone = findPhone(JSON.parse(raw),0);
+                } catch(e) {}
+              }
+              if(!phone) {
+                window.__parcelKdnSeenAt = window.__parcelKdnSeenAt || Date.now();
+                if(Date.now() - window.__parcelKdnSeenAt < 1500) return;
+              }
+              if(window.__parcelKdnSent === token) return;
               window.__parcelKdnSent = token;
-              window.webkit.messageHandlers.kdniaoAuth.postMessage(token);
+              window.webkit.messageHandlers.kdniaoAuth.postMessage({
+                token:token, maskedPhone:phone
+              });
             } catch (e) {}
           }
           poll();
@@ -2063,17 +2129,21 @@ private struct KdniaoOfficialLoginWeb: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
-        var onToken: (String) -> Void
+        var onToken: (String, String?) -> Void
 
-        init(onToken: @escaping (String) -> Void) { self.onToken = onToken }
+        init(onToken: @escaping (String, String?) -> Void) { self.onToken = onToken }
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
             let host = message.frameInfo.securityOrigin.host.lowercased()
             guard (host == "kdniao.com" || host.hasSuffix(".kdniao.com")),
-                  let token = message.body as? String,
+                  let result = message.body as? [String: Any],
+                  let token = result["token"] as? String,
                   token.count >= 12, token.count < 4096 else { return }
-            onToken(token)
+            let masked = result["maskedPhone"] as? String
+            let valid = masked?.range(of: #"^1[3-9][0-9]\*{4}[0-9]{4}$"#,
+                                      options: .regularExpression) != nil
+            onToken(token, valid ? masked : nil)
         }
 
         func webView(_ webView: WKWebView,

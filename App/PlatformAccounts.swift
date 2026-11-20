@@ -219,12 +219,21 @@ struct PlatformAccountsPage: View {
                                 .resizable().scaledToFill()
                                 .frame(width: 42, height: 42)
                                 .clipShape(Circle())
-                            Text("快递鸟")
-                                .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("快递鸟")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(.primary)
+                                Text(NativeTracking.accountStatus)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(NativeTracking.isConfigured ? blue : .secondary)
+                                    .lineLimit(1)
+                            }
                             Spacer()
-                            Text(NativeTracking.isConfigured ? "已配置" : "未配置")
-                                .font(.caption)
-                                .foregroundStyle(NativeTracking.isConfigured ? blue : .secondary)
+                            if NativeTracking.isConfigured {
+                                Text("已配置")
+                                    .font(.caption)
+                                    .foregroundStyle(blue)
+                            }
 
                         }.padding(.horizontal, 19).frame(minHeight: 69)
                     }.buttonStyle(.plain)
