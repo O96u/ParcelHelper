@@ -235,16 +235,17 @@ struct JDIdentityPage: View {
             sessionValid = valid
             if !valid {
                 state = .loginRequired
-                } else if state == .loginRequired {
+                zoom = nil
+            } else if state == .loginRequired {
                 state = .loading
-                    refreshIndex &+= 1
+                refreshIndex &+= 1
             }
         }
     }
     private func reload() {
         guard !accountID.isEmpty else { return }
         state = .loading
-        expanded = false
+        zoom = nil
         refreshIndex &+= 1
         syncDefault()
     }
