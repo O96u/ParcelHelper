@@ -71,10 +71,8 @@ private enum JDIdentityState: Equatable {
 
 struct JDIdentityPage: View {
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.colorScheme) private var colorScheme
     @State private var accountID = ""
     @State private var state: JDIdentityState = .loading
-    @State private var expanded = false
     @State private var refreshIndex = 0
     @State private var sessionValid = false
     @State private var zoom: JDBarcodeImage?
@@ -84,114 +82,129 @@ struct JDIdentityPage: View {
     }
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 12) {
-                    Image("brand_jd")
-                        .resizable().scaledToFit().frame(width: 42, height: 42)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("京东官方身份码").font(.headline)
-                        Text("来自默认京东账号").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button {
-                        reload()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundStyle(accent).frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(state == .loading)
-                    .accessibilityLabel("刷新京东身份码")
-                }
+            VStack(alignment: .leading, spacing: 20) {
                 HStack {
-                    Label(accountName, systemImage: "person.crop.circle")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    Spacer()
+                    Label("默认账号：" + accountName, systemImage: "person.crop.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
                     NavigationLink {
                         MultiAccountPage(platformID: "jd")
                     } label: {
-                        Label("管理默认账号", systemImage: "person.2")
-                            .font(.subheadline)
+                        Text("管理默认账号").font(.subheadline)
                     }
+                    .tint(accent)
                 }
-                .tint(accent)
-                ZStack {
-                    if !accountID.isEmpty && sessionValid {
-                        JDIdentityWebView(
-                            accountID: accountID,
-                            refreshIndex: refreshIndex,
-                            dark: colorScheme == .dark,
-                            onUpdate: { newState, isExpanded in
-                                guard accountID == ParcelAccounts.activeID(for: "jd") else { return }
-                                state = newState
-                                expanded = isExpanded
-                                if newState != .ready { zoom = nil }
-                            },
-                            onZoom: { bitmap in
-                                guard state == .ready,
-                                      accountID == ParcelAccounts.activeID(for: "jd") else { return }
-                                zoom = JDBarcodeImage(bitmap: bitmap)
-                            })
-                        .id(accountID)
-                        .frame(height: expanded && state == .ready ? 390 : 265)
-                        .opacity(state == .ready ? 1 : 0.01)
-                        .allowsHitTesting(state == .ready)
-                        .accessibilityHidden(state != .ready)
-                    }
-                    if state != .ready {
-                        VStack(spacing: 14) {
-                            switch state {
-                            case .loading:
-                                ProgressView()
-                                Text("正在读取京东官方身份码…")
-                                    .foregroundStyle(.secondary)
-                            case .loginRequired:
-                                Image(systemName: "person.badge.key")
-                                    .font(.system(size: 35)).foregroundStyle(accent)
-                                Text("当前京东账号尚未授权").font(.headline)
-                                Text("请在账号授权页面完成登录，身份码页不处理登录。")
-                                    .font(.subheadline).foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.center)
-                                NavigationLink {
-                                    PlatformAccountsPage()
-                                } label: {
-                                    Text("前往账号授权")
-                                }
-                                .buttonStyle(.borderedProminent)
-                            case .failed(let reason):
-                                Image(systemName: "exclamationmark.circle")
-                                    .font(.system(size: 35)).foregroundStyle(.orange)
-                                Text(reason).font(.subheadline)
-                                    .multilineTextAlignment(.center)
-                                    .foregroundStyle(.secondary)
-                                Button("重新加载") { reload() }
-                                    .buttonStyle(.bordered)
-                            case .ready:
-                                EmptyView()
-                            }
+
+                VStack(spacing: 14) {
+                    HStack(spacing: 10) {
+                        Image("brand_jd")
+                            .resizable().scaledToFit()
+                            .frame(width: 34, height: 34)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("京东官方身份码")
+                                .font(.system(size: 17, weight: .semibold))
+                            Text("动态条形码")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 265)
-                        .padding(.horizontal, 20)
+                        Spacer()
+                        Button {
+                            reload()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(accent)
+                                .frame(width: 40, height: 40)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(state == .loading)
+                        .accessibilityLabel("刷新京东身份码")
+                    }
+
+                    ZStack {
+                        if !accountID.isEmpty && sessionValid {
+                            JDIdentityWebView(
+                                accountID: accountID,
+                                refreshIndex: refreshIndex,
+                                dark: false,
+                                onUpdate: { newState, _ in
+                                    guard accountID == ParcelAccounts.activeID(for: "jd") else { return }
+                                    state = newState
+                                    if newState != .ready { zoom = nil }
+                                },
+                                onZoom: { bitmap in
+                                    guard state == .ready,
+                                          accountID == ParcelAccounts.activeID(for: "jd") else { return }
+                                    zoom = JDBarcodeImage(bitmap: bitmap)
+                                }
+                            )
+                            .id(accountID)
+                            .frame(height: 265)
+                            .opacity(state == .ready ? 1 : 0)
+                            .allowsHitTesting(state == .ready)
+                            .accessibilityHidden(state != .ready)
+                        }
+                        if state != .ready {
+                            VStack(spacing: 14) {
+                                switch state {
+                                case .loading:
+                                    ProgressView()
+                                    Text("正在获取京东官方身份码…")
+                                        .font(.subheadline).foregroundStyle(.secondary)
+                                case .loginRequired:
+                                    Image(systemName: "person.badge.key")
+                                        .font(.system(size: 38)).foregroundStyle(accent)
+                                    Text("当前账号暂时无法获取身份码").font(.headline)
+                                    NavigationLink {
+                                        PlatformAccountsPage()
+                                    } label: {
+                                        Text("管理账号授权")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                case .failed(let reason):
+                                    Image(systemName: "exclamationmark.circle")
+                                        .font(.system(size: 38)).foregroundStyle(.orange)
+                                    Text(reason)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.center)
+                                    Button("重新获取") { reload() }
+                                        .buttonStyle(.bordered)
+                                case .ready:
+                                    EmptyView()
+                                }
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 265)
+                            .padding(.horizontal, 16)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 265)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 15))
+                    .clipShape(RoundedRectangle(cornerRadius: 15))
+
+                    if state == .ready {
+                        Text("点击条形码可全屏出示")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                .padding(18)
                 .frame(maxWidth: .infinity)
                 .background(Color(uiColor: .secondarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 22))
-                .clipShape(RoundedRectangle(cornerRadius: 22))
+                            in: RoundedRectangle(cornerRadius: 24))
             }
             .padding(.horizontal, 18)
-            .padding(.top, 20)
-            .padding(.bottom, 110)
+            .padding(.top, 22)
+            .padding(.bottom, 90)
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("京东身份码")
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(item: $zoom) { item in
-            JDBarcodeFullscreen(bitmap: item.bitmap, onClose: {
-                zoom = nil
-            })
+            JDBarcodeFullscreen(bitmap: item.bitmap, onClose: { zoom = nil })
         }
         .task { syncDefault() }
         .onAppear { syncDefault() }
@@ -201,16 +214,18 @@ struct JDIdentityPage: View {
         .task(id: accountID + ":" + String(refreshIndex)) {
             guard !accountID.isEmpty else { return }
             do { try await Task.sleep(for: .seconds(22)) } catch { return }
-            if state == .loading { state = .failed("京东身份码暂未加载成功，请刷新重试") }
+            if state == .loading {
+                state = .failed("京东身份码暂未加载成功，请刷新重试")
+            }
         }
     }
+
     private func syncDefault() {
         let selected = ParcelAccounts.activeID(for: "jd")
         if accountID != selected {
             accountID = selected
             sessionValid = false
             state = .loading
-            expanded = false
             refreshIndex = 0
         }
         Task { @MainActor in
@@ -220,11 +235,9 @@ struct JDIdentityPage: View {
             sessionValid = valid
             if !valid {
                 state = .loginRequired
-                expanded = false
-            } else if state == .loginRequired {
+                } else if state == .loginRequired {
                 state = .loading
-                expanded = false
-                refreshIndex &+= 1
+                    refreshIndex &+= 1
             }
         }
     }
