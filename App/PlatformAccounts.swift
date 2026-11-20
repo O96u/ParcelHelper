@@ -31,6 +31,49 @@ import Security
             kSecAttrService as String: service, kSecAttrAccount as String: "access"]
         SecItemDelete(q as CFDictionary)
     }
+    private static func accountKey(_ accountID: String?) -> String {
+        let id = accountID ?? ParcelAccounts.activeID(for: "pdd")
+        return id == ParcelAccounts.legacyID("pdd") ? "access" : "access:" + id
+    }
+    static func token(for accountID: String?) -> String {
+        let name = accountKey(accountID)
+        if name == "access" { return token }
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: name,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+    static func save(_ token: String, for accountID: String?) {
+        let name = accountKey(accountID)
+        if name == "access" { save(token); return }
+        guard (8...4096).contains(token.count) else { return }
+        clear(for: accountID)
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: name,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecValueData as String: Data(token.utf8)
+        ]
+        SecItemAdd(q as CFDictionary, nil)
+    }
+    static func clear(for accountID: String?) {
+        let name = accountKey(accountID)
+        if name == "access" { clear(); return }
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: name
+        ]
+        SecItemDelete(q as CFDictionary)
+    }
 }
 
 // Explicit opt-in: the H5 login can invalidate the official Pinduoduo App session.
@@ -40,7 +83,7 @@ import Security
     static var webAccessAllowed: Bool { UserDefaults.standard.bool(forKey: key) }
 }
 
-private struct PlatformWebsite: Identifiable {
+struct PlatformWebsite: Identifiable {
     let id: String
     let title: String
     let login: URL?
