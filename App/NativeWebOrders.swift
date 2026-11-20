@@ -115,9 +115,11 @@ private struct WebShipment: Decodable {
     }
 
     func finishPdd(_ message: String, succeeded: Bool,
-                   expectedAccountID: String? = nil) {
+                   expectedAccountID: String? = nil,
+                   expectedSequence: Int? = nil) {
         guard activePlatform == "pdd",
-              expectedAccountID == nil || activeAccountID == expectedAccountID else { return }
+              expectedAccountID == nil || activeAccountID == expectedAccountID,
+              expectedSequence == nil || sequence == expectedSequence else { return }
         recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
         if succeeded {
             let syncedAt = Date().timeIntervalSince1970
@@ -136,9 +138,11 @@ private struct WebShipment: Decodable {
     }
 
     func finish(_ platform: String, packages: [NativeSyncParcel], failure: String?,
-                expectedAccountID: String? = nil) {
+                expectedAccountID: String? = nil,
+                expectedSequence: Int? = nil) {
         guard activePlatform == platform,
-              expectedAccountID == nil || activeAccountID == expectedAccountID else { return }
+              expectedAccountID == nil || activeAccountID == expectedAccountID,
+              expectedSequence == nil || sequence == expectedSequence else { return }
         recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
         let description: String
         if let failure {
@@ -174,10 +178,15 @@ struct NativeWebAutoSyncHost: View {
             if let platform = sync.activePlatform,
                let accountID = sync.activeAccountID {
                 Group {
+                    // Capture this reader instance's generation, so a late
+                    // callback cannot accidentally complete a newer reader.
+                    let generation = sync.sequence
                     if platform == "pdd" {
                         PddOrdersAutoSyncReader(accountID: accountID) { message, succeeded in
                             Task { @MainActor in
-                                sync.finishPdd(message, succeeded: succeeded, expectedAccountID: accountID)
+                                sync.finishPdd(message, succeeded: succeeded,
+                                               expectedAccountID: accountID,
+                                               expectedSequence: generation)
                             }
                         }
                     } else {
@@ -186,7 +195,8 @@ struct NativeWebAutoSyncHost: View {
                         } onComplete: { packages, error in
                             Task { @MainActor in
                                 sync.finish(platform, packages: packages, failure: error,
-                                            expectedAccountID: accountID)
+                                            expectedAccountID: accountID,
+                                            expectedSequence: generation)
                             }
                         }
                     }
