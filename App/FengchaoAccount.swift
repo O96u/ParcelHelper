@@ -45,6 +45,19 @@ import Security
             ]
             SecItemDelete(q as CFDictionary)
         }
+        private static func accountKey(_ name: String, _ accountID: String?) -> String {
+            let id = accountID ?? ParcelAccounts.activeID(for: "fengchao")
+            return id == ParcelAccounts.legacyID("fengchao") ? name : id + ":" + name
+        }
+        static func get(_ name: String, accountID: String?) -> String {
+            get(accountKey(name, accountID))
+        }
+        static func set(_ name: String, _ value: String, accountID: String?) {
+            set(accountKey(name, accountID), value)
+        }
+        static func remove(_ name: String, accountID: String?) {
+            remove(accountKey(name, accountID))
+        }
     }
     private struct Challenge: Codable {
         var pubKey: String
@@ -54,6 +67,17 @@ import Security
     }
     static var hasSession: Bool { !SecureStore.get("token").isEmpty }
     static var accountMobile: String { SecureStore.get("mobile") }
+    static func accountMobile(for accountID: String?) -> String {
+        SecureStore.get("mobile", accountID: accountID)
+    }
+    static func hasSession(for accountID: String?) -> Bool {
+        !SecureStore.get("token", accountID: accountID).isEmpty
+    }
+    static func logout(for accountID: String?) {
+        for key in ["token", "mobile", "pending"] {
+            SecureStore.remove(key, accountID: accountID)
+        }
+    }
     static func logout() {
         for key in ["token", "mobile", "pending"] { SecureStore.remove(key) }
     }
@@ -135,7 +159,7 @@ import Security
         return ""
     }
 
-    static func sendCode(_ phone: String) async throws {
+    static func sendCode(_ phone: String, accountID: String? = nil) async throws {
         let mobile = phone.filter(\.isNumber)
         guard mobile.range(of: #"^1\d{10}$"#, options: .regularExpression) != nil else {
             throw NativeSyncError.badResponse("请输入正确的中国大陆手机号")
@@ -170,15 +194,15 @@ import Security
             throw NativeSyncError.unavailable("丰巢发送短信失败：" + field(send, "msg"))
         }
         let data = try JSONEncoder().encode(challenge)
-        SecureStore.set("pending", String(data: data, encoding: .utf8) ?? "")
-        SecureStore.set("mobile", mobile)
+        SecureStore.set("pending", String(data: data, encoding: .utf8) ?? "", accountID: accountID)
+        SecureStore.set("mobile", mobile, accountID: accountID)
     }
 
-    static func login(_ phone: String, smsCode: String) async throws {
+    static func login(_ phone: String, smsCode: String, accountID: String? = nil) async throws {
         let mobile = phone.filter(\.isNumber)
         let code = smsCode.filter(\.isNumber)
-        guard code.count >= 4 && mobile == accountMobile,
-              let pendingData = SecureStore.get("pending").data(using: .utf8),
+        guard code.count >= 4 && mobile == accountMobile(for: accountID),
+              let pendingData = SecureStore.get("pending", accountID: accountID).data(using: .utf8),
               let challenge = try? JSONDecoder().decode(Challenge.self, from: pendingData) else {
             throw NativeSyncError.badResponse("请先获取验证码，并确认手机号一致")
         }
@@ -200,18 +224,18 @@ import Security
         guard let token = response.value(forHTTPHeaderField: "Authorization"), !token.isEmpty else {
             throw NativeSyncError.noLogin("丰巢授权失败：" + field(result, "msg"))
         }
-        SecureStore.set("token", token)
-        SecureStore.remove("pending")
+        SecureStore.set("token", token, accountID: accountID)
+        SecureStore.remove("pending", accountID: accountID)
     }
 
-    static func packages() async throws -> [NativeSyncParcel] {
-        guard hasSession else { throw NativeSyncError.noLogin("请先完成丰巢短信授权") }
+    static func packages(accountID: String? = nil) async throws -> [NativeSyncParcel] {
+        guard hasSession(for: accountID) else { throw NativeSyncError.noLogin("请先完成丰巢短信授权") }
         let (result, response) = try await call(
             "/post/mobilePick/queryWaitPick",
             parameters: [.init(name: "channelCode", value: "ANDROID_FC_APP")],
-            token: SecureStore.get("token"))
+            token: SecureStore.get("token", accountID: accountID))
         guard success(result) else {
-            if response.statusCode == 401 { logout(); throw NativeSyncError.noLogin("丰巢登录已过期") }
+            if response.statusCode == 401 { logout(for: accountID); throw NativeSyncError.noLogin("丰巢登录已过期") }
             throw NativeSyncError.unavailable("丰巢查询失败：" + field(result, "msg"))
         }
         let data = result["data"] as? [String: Any] ?? [:]
@@ -224,6 +248,7 @@ import Security
                 let list = box["packages"] as? [[String: Any]] ?? []
                 for pkg in list {
                     var p = NativeSyncParcel(source: "fengchao")
+                    p.accountID = accountID ?? ParcelAccounts.activeID(for: "fengchao")
                     p.mailNo = field(pkg, "expressId")
                     p.code = field(pkg, "code")
                     p.company = field(pkg, "companyName")
@@ -353,10 +378,11 @@ struct FengchaoAccountPage: View {
     }
 }
 
-private struct FengchaoSMSLoginPage: View {
+struct FengchaoSMSLoginPage: View {
+    var accountID: String? = nil
     let onAuthorized: () -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var phone = NativeFengchao.accountMobile
+    @State private var phone = ""
     @State private var code = ""
     @State private var cooldown = 0
     @State private var busy = false
@@ -391,6 +417,7 @@ private struct FengchaoSMSLoginPage: View {
             }
         }
         .navigationTitle("授权丰巢")
+        .onAppear { phone = NativeFengchao.accountMobile(for: accountID) }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("取消") { dismiss() }
@@ -407,7 +434,7 @@ private struct FengchaoSMSLoginPage: View {
         Task {
             defer { busy = false }
             do {
-                try await NativeFengchao.sendCode(phone)
+                try await NativeFengchao.sendCode(phone, accountID: accountID)
                 message = "验证码已发送"
                 cooldown = 60
                 Task {
@@ -427,7 +454,7 @@ private struct FengchaoSMSLoginPage: View {
         Task {
             defer { busy = false }
             do {
-                try await NativeFengchao.login(phone, smsCode: code)
+                try await NativeFengchao.login(phone, smsCode: code, accountID: accountID)
                 onAuthorized()
             } catch {
                 message = error.localizedDescription
