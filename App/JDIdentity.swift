@@ -9,12 +9,18 @@ private struct JDBarcodeImage: Identifiable {
     let bitmap: UIImage
 }
 private struct JDBarcodeFullscreen: View {
-    @Environment(\.dismiss) private var dismiss
     let bitmap: UIImage
+    let onClose: () -> Void
+
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
-                Color.white.ignoresSafeArea()
+            ZStack(alignment: .topTrailing) {
+                // Every empty point is a valid exit, not just a small icon.
+                Color.white
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onClose)
+
                 Image(uiImage: bitmap)
                     .resizable()
                     .interpolation(.high)
@@ -23,24 +29,37 @@ private struct JDBarcodeFullscreen: View {
                            height: min(geometry.size.width * 0.58, 240))
                     .rotationEffect(.degrees(90))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark")
-                                .font(.headline).foregroundStyle(.black)
-                                .frame(width: 44, height: 44)
-                                .background(Color.black.opacity(0.06), in: Circle())
-                        }
-                    }
-                    Spacer()
-                    Text("京东官方动态条形码")
-                        .font(.caption).foregroundStyle(.gray)
+                    .allowsHitTesting(false)
+
+                Button(action: onClose) {
+                    Label("关闭", systemImage: "xmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 16)
+                        .frame(height: 44)
+                        .background(Color(white: 0.93), in: Capsule())
                 }
-                .padding(24)
+                .buttonStyle(.plain)
+                .accessibilityLabel("关闭京东条形码")
+                // The close control is anchored at the top, within the safe
+                // area, and is never rotated together with the barcode.
+                .padding(.trailing, 18)
+                .padding(.top, 12)
+                .zIndex(10)
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 32).onEnded { value in
+                    // Support a rightward back swipe and downward dismiss.
+                    if value.translation.width > 80 || value.translation.height > 100 {
+                        onClose()
+                    }
+                }
+            )
         }
         .preferredColorScheme(.light)
+        .statusBarHidden(false)
     }
 }
 private enum JDIdentityState: Equatable {
@@ -170,7 +189,9 @@ struct JDIdentityPage: View {
         .navigationTitle("京东身份码")
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(item: $zoom) { item in
-            JDBarcodeFullscreen(bitmap: item.bitmap)
+            JDBarcodeFullscreen(bitmap: item.bitmap, onClose: {
+                zoom = nil
+            })
         }
         .task { syncDefault() }
         .onAppear { syncDefault() }
