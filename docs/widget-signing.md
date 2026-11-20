@@ -21,6 +21,8 @@ ParcelHelper 现已包含两种不同的 WidgetKit 内容：
 
 要使用桌面小组件，**需要在 GitHub 手动构建时输入自己证书允许的 App Groups**。成功签名的小组件不必使用仓库示例组。
 
+图文教程（含截图）：[置顶 Issue #2](https://github.com/O96u/ParcelHelper/issues/2) · 图源 [docs/guide/widget-self-sign](https://github.com/O96u/ParcelHelper/tree/main/docs/guide/widget-self-sign)
+
 1. 打开 [Build ParcelHelper IPA](https://github.com/O96u/ParcelHelper/actions/workflows/build-ipa.yml)，点击 **Run workflow**。
 2. 在 `widget_group` 中填入**你自己签名描述文件列出的** `group.xxx`，点击运行。不要照抄他人或无关应用的 Group。
 3. 下载生成的 IPA，使用 LCSign 等签名工具保留 Widget 扩展，并确认主 App、Widget 使用同一个被允许的 App Group。
