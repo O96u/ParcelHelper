@@ -157,7 +157,9 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
 /// intercepts OTPs or sends a recipient's phone number through native APIs.
 private struct PddOfficialPhoneManager: UIViewRepresentable {
     let accountID: String
+    var useIdentityEntry: Bool = false
     private static let page = URL(string: "https://m.pinduoduo.net/mdkd/cellPhoneList")!
+    private static let identityEntry = URL(string: "https://m.pinduoduo.net/mdkd/package?tab=ID_CODE")!
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -212,7 +214,7 @@ private struct PddOfficialPhoneManager: UIViewRepresentable {
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
-        view.load(URLRequest(url: Self.page))
+        view.load(URLRequest(url: useIdentityEntry ? Self.identityEntry : Self.page))
         return view
     }
 
@@ -280,6 +282,7 @@ private struct PddOfficialPhoneManager: UIViewRepresentable {
     @State private var resultError: String?
     @State private var officialPage = false
     @State private var officialRevision = 0
+    @State private var useIdentityEntry = false
     @State private var askWebConsent = false
     @State private var syncing = false
     @State private var notice: String?
@@ -418,8 +421,22 @@ private struct PddOfficialPhoneManager: UIViewRepresentable {
             Task { await refresh() }
         }) {
             NavigationStack {
-                PddOfficialPhoneManager(accountID: account.id)
-                    .id(officialRevision)
+                VStack(spacing: 0) {
+                    PddOfficialPhoneManager(accountID: account.id,
+                                            useIdentityEntry: useIdentityEntry)
+                        .id("\(officialRevision)-\(useIdentityEntry)")
+                    Button {
+                        useIdentityEntry.toggle()
+                        officialRevision += 1
+                    } label: {
+                        Text(useIdentityEntry ? "返回手机号管理" : "页面无法加载？从身份码入口进入")
+                            .font(.footnote)
+                            .frame(maxWidth: .infinity, minHeight: 42)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground))
+                }
                     .navigationTitle("拼多多官方手机号管理")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
