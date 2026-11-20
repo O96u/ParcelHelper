@@ -1,9 +1,21 @@
 Run: https://github.com/O96u/ParcelHelper/actions/runs/44666367435
 Commit: caa75619970df014a0647330df10cbf9b1c3fe78
 Ref: refs/heads/main
-Date: 2026-11-20T03:16:00Z
+Date: 2026-11-20T04:16:32Z
 
 Error excerpts:
-670:/Users/runner/work/ParcelHelper/ParcelHelper/App/FengchaoAccount.swift:49:50: error: call to main actor-isolated static method 'activeID(for:)' in a synchronous nonisolated context
-676:/Users/runner/work/ParcelHelper/ParcelHelper/App/FengchaoAccount.swift:50:41: error: call to main actor-isolated static method 'legacyID' in a synchronous nonisolated context
-756:** BUILD FAILED **
+429:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:915:9: error: expected declaration
+435:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:915:14: error: consecutive declarations on a line must be separated by ';'
+439:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:915:49: error: consecutive declarations on a line must be separated by ';'
+443:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:915:50: error: expected declaration
+449:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:919:9: error: expected declaration
+455:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:926:12: error: static methods may only be declared on a type
+459:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:942:1: error: extraneous '}' at top level
+510:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:915:9: error: Expected declaration
+516:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:915:14: error: Consecutive declarations on a line must be separated by ';'
+520:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:915:49: error: Consecutive declarations on a line must be separated by ';'
+524:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:915:50: error: Expected declaration
+530:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:919:9: error: Expected declaration
+536:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:926:12: error: Static methods may only be declared on a type
+540:/Users/runner/work/ParcelHelper/ParcelHelper/App/NativePlatformSync.swift:942:1: error: Extraneous '}' at top level
+548:** BUILD FAILED **
