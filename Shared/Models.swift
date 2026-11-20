@@ -58,7 +58,9 @@ struct Parcel: Codable, Identifiable, Hashable {
         let terms = ["您已取件", "您已取走", "用户已取", "用户取件成功",
                      "取件成功", "取件完成", "完成取件", "已取走",
                      "包裹已取走", "已被取走", "已领取", "已被领取",
-                     "本人签收", "收件人已取", "收件人取件", "已从驿站取出"]
+                     "本人签收", "收件人已取", "收件人取件", "已从驿站取出",
+                     "已从代收点取出", "已从快递柜取出", "已从自提点取出",
+                     "快件已取出签收", "包裹已取出签收", "取出并签收"]
         return terms.contains(where: text.contains)
     }
 
@@ -66,8 +68,9 @@ struct Parcel: Codable, Identifiable, Hashable {
     /// This also corrects the status of parcels stored before an app update.
     var latestPickupConfirmed: Bool {
         let latestNode = trackNodes.first?.text ?? ""
-        let newest = !latestNode.isEmpty ? latestNode : (trackLatest ?? "")
-        return Self.confirmsRecipientPickup(newest)
+        // A provider can return a new pickup event while its summary is stale.
+        return Self.confirmsRecipientPickup(latestNode) ||
+            Self.confirmsRecipientPickup(trackLatest ?? "")
     }
     var isDone: Bool { status == 2 || pickedByUser || latestPickupConfirmed }
     // The courier marked this package delivered, not necessarily picked up

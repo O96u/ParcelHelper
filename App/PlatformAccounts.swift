@@ -165,18 +165,6 @@ struct PlatformAccountsPage: View {
                             in: RoundedRectangle(cornerRadius: 27, style: .continuous))
                 .padding(.horizontal, 18)
 
-                Text("拼多多网页登录可能导致官方 App 退出。为保护官方 App，拼多多网页同步默认关闭，需主动确认才能启用。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 33)
-                    .padding(.top, 10)
-
-                Text("淘宝与菜鸟共用登录会话，可分别停用订单和取件码来源。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 33)
-                    .padding(.top, 11)
-
                 Text("同步")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
@@ -231,7 +219,7 @@ struct PlatformAccountsPage: View {
                                 .resizable().scaledToFill()
                                 .frame(width: 42, height: 42)
                                 .clipShape(Circle())
-                            Text("快递鸟（查单兜底）")
+                            Text("快递鸟")
                                 .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
                             Spacer()
                             Text(NativeTracking.isConfigured ? "已配置" : "未配置")
@@ -269,7 +257,7 @@ struct PlatformAccountsPage: View {
                 }
                 if await PlatformSession.isLoggedIn(platform) {
                     if platform.id == "pdd" {
-                        notice = "拼多多网页会话已保存。为避免反复登录，未自动打开购物订单页；可在拼多多账号详情手动同步。网页登录仍可能使官方 App 退出。"
+                        notice = "拼多多已授权，可在账号详情手动同步订单。"
                     } else if platform.id == "taobao" || platform.id == "jd" {
                         let started = await NativeWebAutoSync.shared.request(platform.id, force: true)
                         notice = started
@@ -307,7 +295,7 @@ struct PlatformAccountsPage: View {
                 }
             }
         }
-        .alert("拼多多网页登录可能让官方 App 退出", isPresented: $showPddLoginWarning) {
+        .alert("拼多多授权提醒", isPresented: $showPddLoginWarning) {
             Button("仍要网页登录") {
                 UserDefaults.standard.set(true, forKey: PddAccountProtection.key)
                 if let pdd = PlatformCatalog.rows.first(where: { $0.id == "pdd" }) {
@@ -317,7 +305,7 @@ struct PlatformAccountsPage: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("拼多多可能在网页和官方 App 之间限制同一账号的登录会话。继续授权有可能让官方 App 下线，ParcelHelper 无法绕过服务端限制。取消则不会启动拼多多网页登录。")
+            Text("网页登录可能使官方拼多多 App 退出。")
         }
         .alert(
             "确认解除授权？",
@@ -515,7 +503,7 @@ private struct PlatformAccountDetail: View {
                     card {
                         Toggle("允许拼多多网页授权及同步", isOn: $pddWebAccessAllowed)
                             .tint(blue)
-                        Text("默认关闭，以免影响官方拼多多 App 登录。开启后可能因平台服务端会话互斥使官方 App 退出。关闭只停止 ParcelHelper 的后续访问，不会恢复已失效的官方会话。")
+                        Text("默认关闭；开启网页登录可能导致官方拼多多 App 退出。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -616,7 +604,7 @@ private struct PlatformAccountDetail: View {
                 if authorized {
                     switch platform.id {
                     case "pdd":
-                        resultNotice = "拼多多网页授权完成。为避免重复打开网页登录页，没有立即读取订单；可在账号详情手动同步。官方 App 仍有可能被服务端挤下线。"
+                        resultNotice = "拼多多已授权，可手动同步订单。"
                     case "taobao", "jd":
                         let queued = await NativeWebAutoSync.shared.request(platform.id, force: true)
                         resultNotice = queued
@@ -673,14 +661,14 @@ private struct PlatformAccountDetail: View {
                 }
             }
         }
-        .alert("拼多多网页登录可能让官方 App 退出", isPresented: $showPddLoginWarning) {
+        .alert("拼多多授权提醒", isPresented: $showPddLoginWarning) {
             Button("仍要网页登录") {
                 pddWebAccessAllowed = true
                 loginPresented = true
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("同一拼多多账号在网页登录后，官方 App 可能因服务器会话互斥被迫退出。继续授权无法保证两个客户端同时在线。")
+            Text("网页登录可能使官方拼多多 App 退出。")
         }
         .alert("解除 " + platform.title + " 授权？",
                isPresented: $showRevokeConfirmation) {

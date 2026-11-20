@@ -637,6 +637,47 @@ private enum SyncJSON {
         var maskedID: String?
         var mobile: String?
     }
+    // Accept identity codes in verified Cainiao fields across nested H5 shapes.
+    // Do not substitute an order number, pickup code, or fabricated barcode.
+    private static func cainiaoIdentityCode(_ value: Any?, depth: Int = 0) -> String? {
+        guard depth < 8 else { return nil }
+        if let dict = value as? [String: Any] {
+            let fields = ["identityCode", "identity_code", "identityCodeValue",
+                          "realNameIdentityCode", "realnameIdentityCode",
+                          "barCode", "barcode", "qrCode", "qrcode"]
+            for field in fields {
+                guard let raw = dict[field] else { continue }
+                let code = SyncJSON.str(raw)
+                if code.range(of: #"^[A-Za-z0-9_-]{6,64}$"#,
+                              options: .regularExpression) != nil,
+                   !["unknown", "invalid", "null", "undefined"].contains(code.lowercased()) {
+                    return code
+                }
+                if let result = cainiaoIdentityCode(raw, depth: depth + 1) {
+                    return result
+                }
+            }
+            for field in ["model", "data", "result", "identityInfo",
+                          "identity", "identityCodeInfo", "body", "value"] {
+                if let result = cainiaoIdentityCode(dict[field], depth: depth + 1) {
+                    return result
+                }
+            }
+        } else if let list = value as? [Any] {
+            for item in list {
+                if let result = cainiaoIdentityCode(item, depth: depth + 1) {
+                    return result
+                }
+            }
+        } else if let raw = value as? String,
+                  (raw.hasPrefix("{") || raw.hasPrefix("[")),
+                  let data = raw.data(using: .utf8),
+                  let decoded = try? JSONSerialization.jsonObject(with: data) {
+            return cainiaoIdentityCode(decoded, depth: depth + 1)
+        }
+        return nil
+    }
+
     private static func identityData(_ value: Any?) -> [String: Any] {
         let direct = SyncJSON.dict(value)
         let nested = SyncJSON.dict(direct["data"])
@@ -672,6 +713,9 @@ private enum SyncJSON {
                         Double(SyncJSON.str(raw)) ?? 0
                 if n > 0 {
                     // Original Scripting handles second and millisecond durations.
+                    let now = Date().timeIntervalSince1970
+                    if n > 1_000_000_000_000 { return max(0, n / 1000 - now) }
+                    if n > 1_000_000_000 { return max(0, n - now) }
                     return n > 1_000_000 ? n / 1000 : n
                 }
             }
@@ -737,19 +781,25 @@ private enum SyncJSON {
                 data: ["appName": "GUOGUO", "verifyVersion": "V2"])
             let content = identityData(response["data"])
             let model = SyncJSON.dict(content["model"])
-            let code = SyncJSON.str(model["identityCode"])
-            guard !code.isEmpty else {
-                throw NativeSyncError.badResponse("菜鸟接口没有返回实名身份码")
+            let details = model.isEmpty ? content : model
+            guard let code = cainiaoIdentityCode(response["data"]) else {
+                throw NativeSyncError.badResponse(
+                    "已检测到淘宝登录，但菜鸟未返回有效实名身份码。请在菜鸟官方 App 确认已开通身份码，再刷新重试")
             }
-            let seconds = max(60, Double(SyncJSON.str(model["expireTime"])) ?? 600)
-            let certified = SyncJSON.str(model["certificated"]) == "true"
+            let ttl = identityExpiry(response["data"]) ?? 300
+            guard ttl > 0 else {
+                throw NativeSyncError.badResponse("菜鸟身份码已过期，请刷新重试")
+            }
+            let seconds = min(max(30, ttl), 600)
+            let certifiedText = SyncJSON.first(details, ["certificated", "certified"])
+            let certified = certifiedText.isEmpty ? nil : certifiedText.lowercased() == "true"
+            let name = SyncJSON.first(details, ["fullname", "fullName"])
+            let maskedID = SyncJSON.first(details, ["idCardNumber", "id_card_number"])
             return IdentityResult(code: code,
                 expiresAt: Date().addingTimeInterval(seconds),
                 certified: certified,
-                name: SyncJSON.str(model["fullname"]).isEmpty ? nil :
-                      SyncJSON.str(model["fullname"]),
-                maskedID: SyncJSON.str(model["idCardNumber"]).isEmpty ? nil :
-                          SyncJSON.str(model["idCardNumber"]),
+                name: name.isEmpty ? nil : name,
+                maskedID: maskedID.isEmpty ? nil : maskedID,
                 mobile: nil)
         }
         let response = try await mtop(
