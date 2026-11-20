@@ -1,7 +1,9 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/44437003963
-Commit: b988775d9e699f871f9234413b0e253b562258ab
-Ref: refs/tags/v1.2.0
-Date: 2026-11-19T01:27:47Z
+Run: https://github.com/O96u/ParcelHelper/actions/runs/44666367435
+Commit: caa75619970df014a0647330df10cbf9b1c3fe78
+Ref: refs/heads/main
+Date: 2026-11-20T03:16:00Z
 
 Error excerpts:
-No xcodebuild.log: failure happened before/during another step.
+670:/Users/runner/work/ParcelHelper/ParcelHelper/App/FengchaoAccount.swift:49:50: error: call to main actor-isolated static method 'activeID(for:)' in a synchronous nonisolated context
+676:/Users/runner/work/ParcelHelper/ParcelHelper/App/FengchaoAccount.swift:50:41: error: call to main actor-isolated static method 'legacyID' in a synchronous nonisolated context
+756:** BUILD FAILED **
