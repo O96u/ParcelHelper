@@ -755,7 +755,8 @@ private enum SyncJSON {
         return nil
     }
     private static func hasTaobaoCookie() async -> Bool {
-        let cookies = await WebCookieRequest.cookies(domain: "taobao.com")
+        let cookies = await WebCookieRequest.cookies(
+            domain: "taobao.com", accountID: ParcelAccounts.activeID(for: "taobao"))
         return cookies.contains {
             ["unb", "tracknick", "cookie2", "_m_h5_tk"].contains($0.name) &&
             !$0.value.isEmpty
@@ -906,32 +907,34 @@ private enum SyncJSON {
         var interrupted: [String] = []
 
         for id in NativeParcelSync.platforms {
-            // Skip sessions that have not been authorized.
-            if id == "mi" && !NativeMiExpress.hasSession { continue }
+            if id == "mi" {
+                guard NativeMiExpress.hasSession else { continue }
+                do {
+                    let result = try await NativeParcelSync.run("mi", force: force)
+                    results.append(result.description)
+                } catch {
+                    if force { results.append("小米：" + error.localizedDescription) }
+                }
+                continue
+            }
             if id == "cainiao" &&
                 (UserDefaults.standard.object(forKey: "native.platform.enabled.cainiao") as? Bool) == false {
                 continue
             }
-            if id == "fengchao" && !NativeFengchao.hasSession { continue }
-            if id == "pdd" {
-                guard PddAccountProtection.webAccessAllowed else { continue }
-                let cookies = await WebCookieRequest.cookies(domain: "yangkeduo.com")
-                if PddSessionVault.token.isEmpty && cookies.isEmpty { continue }
-            }
-            if id == "cainiao" {
-                let cookies = await WebCookieRequest.cookies(domain: "taobao.com")
-                if cookies.isEmpty { continue }
-            }
-            do {
-                let result = try await NativeParcelSync.run(id, force: force)
-                results.append(result.description)
-            } catch {
-                if isCancelledRequest(error) {
-                    // A cancellation is not an auth error or an empty parcel
-                    // list. Do not show four misleading '已取消' entries.
-                    interrupted.append(id)
-                } else if force {
-                    results.append("\(id)：\(error.localizedDescription)")
+            if id == "pdd" && !PddAccountProtection.webAccessAllowed { continue }
+            let kind = id == "cainiao" ? "taobao" : id
+            let accounts = await ParcelAccounts.authorizedAccounts(for: kind)
+            for account in accounts {
+                do {
+                    let result = try await NativeParcelSync.run(id, force: force,
+                                                                 accountID: account.id)
+                    results.append(account.nickname + " · " + result.description)
+                } catch {
+                    if isCancelledRequest(error) {
+                        interrupted.append(id)
+                    } else if force {
+                        results.append(account.nickname + "：" + error.localizedDescription)
+                    }
                 }
             }
         }
