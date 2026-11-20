@@ -167,6 +167,22 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
     }
 }
 
+// One preference for foreground, background policy and WidgetKit snapshots.
+// This number is a minimum *request* interval, never an iOS wake guarantee.
+enum RefreshPolicy {
+    static var minutes: Int {
+        let configured = UserDefaults.standard.object(forKey: "native.refresh.app") as? Int ?? 15
+        return max(5, min(120, configured))
+    }
+
+    static func backgroundDelay(hasPending: Bool, hasActive: Bool) -> TimeInterval {
+        let preferred = TimeInterval(minutes * 60)
+        if hasPending { return max(30 * 60, preferred) }
+        if hasActive { return max(3 * 3600, preferred) }
+        return max(12 * 3600, preferred)
+    }
+}
+
 // BGAppRefresh is an opportunistic, API-only task. It must never construct a
 // hidden WKWebView or promise 15-minute background polling.
 private final class ParcelBGTaskCompletion {
@@ -202,8 +218,10 @@ private final class ParcelBGTaskCompletion {
         let parcels = ParcelStore.shared.snapshot.parcels.filter {
             $0.type == "delivery" && !$0.isDone && !$0.isSigned && $0.closed == nil
         }
-        let interval: TimeInterval = parcels.contains(where: { $0.isPending })
-            ? 30 * 60 : (parcels.isEmpty ? 12 * 3600 : 3 * 3600)
+        let interval = RefreshPolicy.backgroundDelay(
+            hasPending: parcels.contains(where: { $0.isPending }),
+            hasActive: !parcels.isEmpty
+        )
         let request = BGAppRefreshTaskRequest(identifier: identifier)
         request.earliestBeginDate = Date().addingTimeInterval(interval)
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
@@ -223,8 +241,20 @@ private final class ParcelBGTaskCompletion {
             let succeeded = await refreshEligibleAccounts()
             completion.finish(task, success: succeeded && !Task.isCancelled)
         }
+        // A soft execution budget independent of the system's hard expiry.
+        // URLSession cancellation is cooperative; NativeParcelSync checks
+        // cancellation before it touches the authoritative parcel store.
+        let watchdog = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 19_000_000_000)
+                guard !Task.isCancelled else { return }
+                work.cancel()
+                completion.finish(task, success: false)
+            } catch { }
+        }
         task.expirationHandler = {
             work.cancel()
+            watchdog.cancel()
             completion.finish(task, success: false)
         }
     }
@@ -239,7 +269,7 @@ private final class ParcelBGTaskCompletion {
         // These providers use standalone native API/Keychain paths. Cainiao's
         // MTOP fallback can create a WKWebView, while Taobao/JD/PDD order
         // reading uses WebKit; none of those are invoked in this background task.
-        let deadline = Date().addingTimeInterval(18)
+        let deadline = Date().addingTimeInterval(16)
         var attempted = 0
         if NativeMiExpress.hasSession && Date() < deadline {
             let last = UserDefaults.standard.double(forKey: "native.sync.success.mi")
