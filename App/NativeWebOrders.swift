@@ -96,8 +96,10 @@ private struct WebShipment: Decodable {
         }
     }
 
-    func finishPdd(_ message: String, succeeded: Bool) {
-        guard activePlatform == "pdd" else { return }
+    func finishPdd(_ message: String, succeeded: Bool,
+                   expectedAccountID: String? = nil) {
+        guard activePlatform == "pdd",
+              expectedAccountID == nil || activeAccountID == expectedAccountID else { return }
         if succeeded {
             UserDefaults.standard.set(Date().timeIntervalSince1970,
                                       forKey: "native.sync.success.pdd")
@@ -112,8 +114,10 @@ private struct WebShipment: Decodable {
         DispatchQueue.main.async { [weak self] in self?.startNext() }
     }
 
-    func finish(_ platform: String, packages: [NativeSyncParcel], failure: String?) {
-        guard activePlatform == platform else { return }
+    func finish(_ platform: String, packages: [NativeSyncParcel], failure: String?,
+                expectedAccountID: String? = nil) {
+        guard activePlatform == platform,
+              expectedAccountID == nil || activeAccountID == expectedAccountID else { return }
         let description: String
         if let failure {
             description = (platform == "jd" ? "京东" : "淘宝") + "自动同步： " + failure
@@ -143,20 +147,22 @@ struct NativeWebAutoSyncHost: View {
 
     var body: some View {
         Group {
-            if let platform = sync.activePlatform {
+            if let platform = sync.activePlatform,
+               let accountID = sync.activeAccountID {
                 Group {
                     if platform == "pdd" {
-                        PddOrdersAutoSyncReader(accountID: sync.activeAccountID) { message, succeeded in
+                        PddOrdersAutoSyncReader(accountID: accountID) { message, succeeded in
                             Task { @MainActor in
-                                sync.finishPdd(message, succeeded: succeeded)
+                                sync.finishPdd(message, succeeded: succeeded, expectedAccountID: accountID)
                             }
                         }
                     } else {
-                        NativeWebOrderReader(platform: platform, accountID: sync.activeAccountID) { _ in
+                        NativeWebOrderReader(platform: platform, accountID: accountID) { _ in
                             // Progress is available in the explicit manual sync screen.
                         } onComplete: { packages, error in
                             Task { @MainActor in
-                                sync.finish(platform, packages: packages, failure: error)
+                                sync.finish(platform, packages: packages, failure: error,
+                                            expectedAccountID: accountID)
                             }
                         }
                     }
