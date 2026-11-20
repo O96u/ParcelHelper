@@ -167,22 +167,6 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
     }
 }
 
-// One preference for foreground, background policy and WidgetKit snapshots.
-// This number is a minimum *request* interval, never an iOS wake guarantee.
-enum RefreshPolicy {
-    static var minutes: Int {
-        let configured = UserDefaults.standard.object(forKey: "native.refresh.app") as? Int ?? 15
-        return max(5, min(120, configured))
-    }
-
-    static func backgroundDelay(hasPending: Bool, hasActive: Bool) -> TimeInterval {
-        let preferred = TimeInterval(minutes * 60)
-        if hasPending { return max(30 * 60, preferred) }
-        if hasActive { return max(3 * 3600, preferred) }
-        return max(12 * 3600, preferred)
-    }
-}
-
 // BGAppRefresh is an opportunistic, API-only task. It must never construct a
 // hidden WKWebView or promise 15-minute background polling.
 private final class ParcelBGTaskCompletion {
