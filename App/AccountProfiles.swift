@@ -113,7 +113,9 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
         let cookies = await websiteDataStore(for: accountID).httpCookieStore.allCookies()
         return cookies.contains {
             names.contains($0.name) && !$0.value.isEmpty &&
-            ($0.domain == domain || $0.domain.hasSuffix("." + domain)) &&
+            ($0.domain == domain || $0.domain.hasSuffix("." + domain) ||
+             (kind == "pdd" && ($0.domain == "pinduoduo.net" ||
+                                  $0.domain.hasSuffix(".pinduoduo.net")))) &&
             ($0.expiresDate == nil || $0.expiresDate! > Date())
         }
     }

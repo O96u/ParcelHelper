@@ -944,7 +944,8 @@ struct PlatformWebLogin: UIViewRepresentable {
             didLoadPage = true
             if platformID == "pdd",
                let host = webView.url?.host,
-               host == "yangkeduo.com" || host.hasSuffix(".yangkeduo.com") {
+               (host == "yangkeduo.com" || host.hasSuffix(".yangkeduo.com") ||
+                host == "pinduoduo.net" || host.hasSuffix(".pinduoduo.net")) {
                 webView.evaluateJavaScript(Self.pddTokenScript) { [weak self] value, _ in
                     guard let self else { return }
                     if let token = value as? String, !token.isEmpty {
