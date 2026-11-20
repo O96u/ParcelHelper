@@ -457,7 +457,7 @@ private struct JDIdentityWebView: UIViewRepresentable {
       'use strict';
       if (window.top!==window || location.origin!=='https://convenient-h5.jd.com' ||
           location.pathname!=='/identityCode') return;
-      var state={pending:false,failed:false,generated:0};
+      var state={pending:false,failed:false,generated:0,code:''};
       window.PHJDRequest=state;
       var xhrOpen=XMLHttpRequest.prototype.open;
       var xhrSend=XMLHttpRequest.prototype.send;
@@ -473,7 +473,7 @@ private struct JDIdentityWebView: UIViewRepresentable {
       };
       XMLHttpRequest.prototype.send=function(){
         if(matched.get(this)){
-          state.pending=true;state.failed=false;
+          state.pending=true;state.failed=false;state.code='';
           if(state.changed)state.changed();
           this.addEventListener('loadend',function(){
             var response;
@@ -484,6 +484,11 @@ private struct JDIdentityWebView: UIViewRepresentable {
                (Number(response.errorCode)===0 || Number(response.code)===1) &&
                data && typeof data.identityCode==='string' && data.identityCode.length>0;
             state.pending=false;state.failed=!success;
+            // Display only the genuine identityCode returned by the
+            // authenticated JD identity endpoint, without bridging it to Swift.
+            var raw=success?data.identityCode:'';
+            state.code=(typeof raw==='string' &&
+                        /^[A-Za-z0-9_-]{4,64}$/.test(raw)) ? raw : '';
             if(success)state.generated=Date.now();
             if(state.changed)state.changed();
           },{once:true});
@@ -498,7 +503,7 @@ private struct JDIdentityWebView: UIViewRepresentable {
       'use strict';
       if(window.top!==window || location.origin!=='https://convenient-h5.jd.com' ||
          location.pathname!=='/identityCode' || window.PHJDIdentity) return;
-      var requests=window.PHJDRequest||{pending:false,failed:false,generated:0};
+      var requests=window.PHJDRequest||{pending:false,failed:false,generated:0,code:''};
       var style=document.createElement('style');
       style.textContent=[
         'html,body{margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important}',
@@ -509,7 +514,9 @@ private struct JDIdentityWebView: UIViewRepresentable {
         '#ph-jd-phone{font-size:16px;line-height:24px;margin:2px 0 15px}',
         '#ph-jd-barcode{display:block;width:100%;background:white;padding:12px;border-radius:12px;outline:none;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}',
         '#ph-jd-barcode svg{width:100%;height:90px;display:block;pointer-events:none;user-select:none;-webkit-user-select:none}',
-        '#ph-jd-note{font-size:12px;color:#7a8290;margin:13px 0 0}',
+        '#ph-jd-code{font-size:14px;line-height:20px;letter-spacing:0.3px;color:#343b49;overflow-wrap:anywhere;margin:6px 0 0}',
+        '#ph-jd-code:empty{display:none}',
+        '#ph-jd-note{font-size:12px;color:#7a8290;margin:11px 0 0}',
         'html[data-ph-jd-dark] #ph-jd{color:#f0f2f7}',
         'html[data-ph-jd-dark] #ph-jd-note{color:#9da6b7}',
         '@media(prefers-reduced-motion:reduce){#ph-jd-inner{transition:none}}'
@@ -519,9 +526,11 @@ private struct JDIdentityWebView: UIViewRepresentable {
       var inner=document.createElement('div');inner.id='ph-jd-inner';
       var phone=document.createElement('p');phone.id='ph-jd-phone';
       var barcode=document.createElement('div');barcode.id='ph-jd-barcode';
+      var codeLabel=document.createElement('p');codeLabel.id='ph-jd-code';
       var note=document.createElement('p');note.id='ph-jd-note';
       barcode.tabIndex=0;barcode.setAttribute('role','button');
-      inner.appendChild(phone);inner.appendChild(barcode);inner.appendChild(note);
+      inner.appendChild(phone);inner.appendChild(barcode);
+      inner.appendChild(codeLabel);inner.appendChild(note);
       mount.appendChild(inner);
       (document.body||document.documentElement).appendChild(mount);
       var ready=false,expanded=false,last='',signature='',observer,observed;
@@ -548,9 +557,11 @@ private struct JDIdentityWebView: UIViewRepresentable {
                     !!mobile && !!mobile.textContent.trim();
         var expired=requests.generated && Date.now()-requests.generated >= 20*60*1000;
         if(requests.failed||expired){
+          codeLabel.textContent='';
           mount.style.visibility='hidden';ready=false;emit(requests.failed?'failed':'expired');return;
         }
         if(requests.pending||busy||!hasCode){
+          codeLabel.textContent='';
           mount.style.visibility='hidden';ready=false;emit('loading');return;
         }
         var next=svg.outerHTML+mobile.textContent;
@@ -559,6 +570,9 @@ private struct JDIdentityWebView: UIViewRepresentable {
           phone.textContent=mobile.textContent.trim().replace(/(1\d{2})\d{4}(\d{4})/g,'$1****$2');
           barcode.replaceChildren(svg.cloneNode(true));
         }
+        // No guesswork from the SVG or masked phone number. Some JD
+        // responses do not include a short readable code; hide it then.
+        codeLabel.textContent=requests.code ? '身份码编号：'+requests.code : '';
         var hint=root.querySelector('.content-right > div');
         note.textContent=hint && /分钟.*更新/.test(hint.textContent)?
             hint.textContent.trim():'官方动态条形码 · 点击放大';
@@ -582,7 +596,8 @@ private struct JDIdentityWebView: UIViewRepresentable {
           var root=document.getElementById('root');
           var button=root&&root.querySelector('.refresh');
           if(!button)return false;
-          requests.pending=true;requests.failed=false;
+          requests.pending=true;requests.failed=false;requests.code='';
+          codeLabel.textContent='';
           mount.style.visibility='hidden';ready=false;expanded=false;
           mount.classList.remove('expanded');last='';emit('loading');
           button.click();
