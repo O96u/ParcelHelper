@@ -221,8 +221,14 @@ private enum SyncJSON {
         }
         let selected = accountID ?? ParcelAccounts.activeID(for: id)
         let key = "native.sync.at." + id + "." + selected
+        let retryKey = "native.sync.retryAfter." + id + "." + selected
+        let failuresKey = "native.sync.failures." + id + "." + selected
+        let now = Date().timeIntervalSince1970
+        if !force && now < UserDefaults.standard.double(forKey: retryKey) {
+            throw NativeSyncError.unavailable("账号正在等待失败退避，稍后会自动再试")
+        }
         let last = UserDefaults.standard.double(forKey: key)
-        if !force && Date().timeIntervalSince1970 - last < minGap {
+        if !force && now - last < minGap {
             throw NativeSyncError.unavailable("请求过于频繁，请稍后再试")
         }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: key)
@@ -240,11 +246,31 @@ private enum SyncJSON {
             UserDefaults.standard.set(result.description, forKey: "native.sync.result." + id + "." + selected)
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success." + id)
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success." + id + "." + selected)
+            UserDefaults.standard.removeObject(forKey: retryKey)
+            UserDefaults.standard.removeObject(forKey: failuresKey)
             if ParcelStore.shared.snapshot.preferences.liveActivityEnabled {
                 await LiveActivityCoordinator.update(with: ParcelStore.shared.snapshot.parcels)
             }
             return result
         } catch {
+            // Account-scoped exponential backoff prevents a failing platform
+            // from blocking unrelated accounts. Manual force bypasses it.
+            let failures = min(7, UserDefaults.standard.integer(forKey: failuresKey) + 1)
+            UserDefaults.standard.set(failures, forKey: failuresKey)
+            let isAuthFailure: Bool
+            if let nativeError = error as? NativeSyncError {
+                switch nativeError {
+                case .noLogin, .verify: isAuthFailure = true
+                default: isAuthFailure = false
+                }
+            } else {
+                isAuthFailure = false
+            }
+            let base = min(21_600.0, 300.0 * pow(2.0, Double(failures - 1)))
+            let delay = isAuthFailure ? 24 * 3600.0 :
+                base * Double.random(in: 0.8...1.2)
+            UserDefaults.standard.set(Date().timeIntervalSince1970 + delay,
+                                      forKey: retryKey)
             let detail = error.localizedDescription
             UserDefaults.standard.set(detail, forKey: "native.sync.result." + id)
             UserDefaults.standard.set(detail, forKey: "native.sync.result." + id + "." + selected)
