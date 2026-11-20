@@ -221,10 +221,6 @@ struct IdentityDetailPage: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var identity: NativeParcelSync.IdentityResult?
     @State private var identityAccountID = ""
-    @State private var cainiaoPageVersion = 0
-    @State private var cainiaoRequiresAuthorization = false
-    @State private var cainiaoCodeReady = false
-    @State private var cainiaoLoadFailed = false
     @State private var now = Date()
     @State private var fetching = false
     @State private var authorized = false
@@ -281,103 +277,22 @@ struct IdentityDetailPage: View {
                         Text("管理默认账号").font(.subheadline)
                     }
                 }
-                if !authorized && platform != "cainiao" {
+                if !authorized {
                     VStack(spacing: 15) {
                         Image(systemName: "person.badge.key")
                             .font(.system(size: 44)).foregroundStyle(blue)
-                        Text("登录后自动读取" + title + "身份码")
+                        Text("当前账号暂时无法获取身份码")
                             .font(.headline)
                         NavigationLink {
                             PlatformAccountsPage()
                         } label: {
-                            Text("前往账号授权").frame(maxWidth: .infinity)
+                            Text("管理账号授权").frame(maxWidth: .infinity)
                         }.buttonStyle(.borderedProminent)
                     }
                     .padding(24)
                     .frame(maxWidth: .infinity)
                     .background(Color(uiColor: .secondarySystemGroupedBackground),
                                 in: RoundedRectangle(cornerRadius: 23))
-                } else if platform == "cainiao" {
-                    VStack(alignment: .leading, spacing: 15) {
-                        HStack {
-                            Label("菜鸟身份码", systemImage: "barcode")
-                                .font(.system(size: 17, weight: .semibold))
-                            Spacer()
-                            Button {
-                                cainiaoCodeReady = false
-                                cainiaoRequiresAuthorization = false
-                                cainiaoLoadFailed = false
-                                cainiaoPageVersion += 1
-                                Task { await refresh() }
-                            } label: {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 17, weight: .medium))
-                            }
-                            .tint(blue)
-                            .accessibilityLabel("刷新菜鸟身份码")
-                        }
-                        if !authorized {
-                            cainiaoStatus(
-                                symbol: "person.crop.circle.badge.questionmark",
-                                title: "暂无可用身份码",
-                                message: "请在账号授权中完成当前账号的验证。")
-                        } else {
-                            ZStack {
-                                CainiaoOfficialIdentityWebView(
-                                    accountID: ParcelAccounts.activeID(for: "taobao"),
-                                    ready: $cainiaoCodeReady,
-                                    requiresAuthorization: $cainiaoRequiresAuthorization,
-                                    loadFailed: $cainiaoLoadFailed)
-                                    .id("\(ParcelAccounts.activeID(for: "taobao"))-\(cainiaoPageVersion)")
-                                    .frame(height: 390)
-                                    // Web login forms are never visible. Reveal
-                                    // only after the official barcode has loaded.
-                                    .opacity(cainiaoCodeReady && !cainiaoRequiresAuthorization ? 1 : 0)
-                                    .allowsHitTesting(cainiaoCodeReady && !cainiaoRequiresAuthorization)
-                                    .accessibilityHidden(!cainiaoCodeReady || cainiaoRequiresAuthorization)
-                                if !cainiaoCodeReady {
-                                    if cainiaoRequiresAuthorization {
-                                        cainiaoStatus(
-                                            symbol: "exclamationmark.shield",
-                                            title: "身份码需要重新验证",
-                                            message: "当前网页会话无法获取身份码，请在账号授权中处理。")
-                                    } else if cainiaoLoadFailed {
-                                        VStack(spacing: 13) {
-                                            Image(systemName: "wifi.exclamationmark")
-                                                .font(.system(size: 32))
-                                                .foregroundStyle(.secondary)
-                                            Text("暂未获取到身份码")
-                                                .font(.headline)
-                                            Button("重新获取") {
-                                                cainiaoLoadFailed = false
-                                                cainiaoPageVersion += 1
-                                            }
-                                            .buttonStyle(.borderedProminent)
-                                        }
-                                        .frame(maxWidth: .infinity)
-                                    } else {
-                                        VStack(spacing: 14) {
-                                            ProgressView()
-                                            Text("正在获取官方身份码…")
-                                                .foregroundStyle(.secondary)
-                                                .font(.subheadline)
-                                        }
-                                        .frame(maxWidth: .infinity)
-                                    }
-                                }
-                            }
-                            .frame(height: 390)
-                            .background(Color(uiColor: .tertiarySystemGroupedBackground),
-                                        in: RoundedRectangle(cornerRadius: 18))
-                            .clipShape(RoundedRectangle(cornerRadius: 18))
-                        }
-                        Text("仅显示菜鸟官方有效身份码，账号授权操作与此页面分离。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(16)
-                    .background(Color(uiColor: .secondarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 24))
                 } else {
                     VStack(spacing: 14) {
                         if let img = barcode {
@@ -409,7 +324,7 @@ struct IdentityDetailPage: View {
                                 .frame(width: 210, height: 210)
                         }
                         if fetching {
-                            ProgressView("正在从平台获取身份码…")
+                            ProgressView(platform == "cainiao" ? "正在读取菜鸟官方身份码…" : "正在从平台获取身份码…")
                         } else if let _ = validCode {
                             Text("点条码或二维码可全屏出示")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -420,7 +335,7 @@ struct IdentityDetailPage: View {
                             Text(identity == nil ? "尚未取得有效身份码" : "身份码已过期，请刷新")
                                 .font(.subheadline).foregroundStyle(.orange)
                         }
-                        if identity?.certified != nil {
+                        if platform != "cainiao" && identity?.certified != nil {
                             Label(identity?.certified == true ? "已实名认证" : "未完成实名认证",
                                   systemImage: identity?.certified == true ? "checkmark.shield" : "exclamationmark.shield")
                                 .font(.caption)
@@ -431,18 +346,7 @@ struct IdentityDetailPage: View {
                     .frame(maxWidth: .infinity)
                     .background(Color(uiColor: .secondarySystemGroupedBackground),
                                 in: RoundedRectangle(cornerRadius: 24))
-                    if let identity, platform == "cainiao" {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("实名信息").font(.headline)
-                            LabeledContent("姓名", value: identity.name ?? "未返回")
-                            LabeledContent("证件号", value: identity.maskedID ?? "未返回")
-                            LabeledContent("认证状态", value:
-                                identity.certified == true ? "已实名" : "未实名")
-                        }
-                        .padding(18)
-                        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                                    in: RoundedRectangle(cornerRadius: 22))
-                    } else if let mobile = identity?.mobile, platform == "pdd" {
+                    if let mobile = identity?.mobile, platform == "pdd" {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("取件人").font(.headline)
                             LabeledContent("绑定手机号", value: mobile)
@@ -523,30 +427,6 @@ struct IdentityDetailPage: View {
             Button("确定") { notice = nil }
         } message: { Text(notice ?? "") }
     }
-    private func cainiaoStatus(symbol: String, title: String,
-                               message: String) -> some View {
-        VStack(spacing: 13) {
-            Image(systemName: symbol)
-                .font(.system(size: 32))
-                .foregroundStyle(.secondary)
-            Text(title)
-                .font(.system(size: 17, weight: .semibold))
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            NavigationLink {
-                MultiAccountPage(platformID: "taobao")
-            } label: {
-                Text("管理账号授权")
-                    .frame(maxWidth: .infinity, minHeight: 43)
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity)
-    }
-
     @MainActor private func refresh() async {
         guard !fetching else { return }
         fetching = true
@@ -559,17 +439,6 @@ struct IdentityDetailPage: View {
         authorized = await NativeParcelSync.hasIdentitySession(platform)
         guard requestedAccountID == ParcelAccounts.activeID(for: platform) else {
             identity = nil
-            return
-        }
-        if platform == "cainiao" {
-            // Cainiao identity readiness is determined by a real barcode
-            // inside the H5, not the presence of login cookies.
-            identity = nil
-            failure = nil
-            if !authorized {
-                cainiaoCodeReady = false
-                cainiaoRequiresAuthorization = false
-            }
             return
         }
         guard authorized else {
@@ -596,178 +465,6 @@ struct IdentityDetailPage: View {
     }
 }
 
-
-private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
-    let accountID: String
-    @Binding var ready: Bool
-    @Binding var requiresAuthorization: Bool
-    @Binding var loadFailed: Bool
-
-    private static let identityURL = URL(
-        string: "https://page.cainiao.com/cn-app-web/identity-code/index.html#/")!
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(ready: $ready, requiresAuthorization: $requiresAuthorization,
-                    loadFailed: $loadFailed)
-    }
-
-    func makeUIView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
-        // Reveal ONLY the official barcode image. Even if H5 renders an
-        // account form later, its other content remains hidden.
-        let isolateBarcode = #"""
-        (() => {
-          if (location.hostname !== 'page.cainiao.com') return;
-          const style = document.createElement('style');
-          style.textContent = `
-            html[data-ph-identity-ready="1"] body * {
-              visibility: hidden !important;
-            }
-            html[data-ph-identity-ready="1"] #auth-code-id {
-              visibility: visible !important;
-              position: fixed !important;
-              top: 115px !important;
-              left: 5% !important;
-              width: 90% !important;
-              height: 135px !important;
-              object-fit: contain !important;
-              z-index: 2147483647 !important;
-              background: white !important;
-            }
-          `;
-          (document.head || document.documentElement).appendChild(style);
-        })();
-        """#
-        config.userContentController.addUserScript(
-            WKUserScript(source: isolateBarcode, injectionTime: .atDocumentStart,
-                         forMainFrameOnly: true))
-        let view = WKWebView(frame: .zero, configuration: config)
-        view.navigationDelegate = context.coordinator
-        view.uiDelegate = context.coordinator
-        view.allowsBackForwardNavigationGestures = false
-        view.load(URLRequest(url: Self.identityURL))
-        return view
-    }
-
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
-
-    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
-        coordinator.generation += 1
-        uiView.stopLoading()
-        uiView.navigationDelegate = nil
-        uiView.uiDelegate = nil
-    }
-
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
-        let ready: Binding<Bool>
-        let requiresAuthorization: Binding<Bool>
-        let loadFailed: Binding<Bool>
-        var generation = 0
-
-        init(ready: Binding<Bool>, requiresAuthorization: Binding<Bool>,
-             loadFailed: Binding<Bool>) {
-            self.ready = ready
-            self.requiresAuthorization = requiresAuthorization
-            self.loadFailed = loadFailed
-        }
-
-        private func isLoginURL(_ url: URL) -> Bool {
-            guard let host = url.host?.lowercased() else { return false }
-            return host.hasPrefix("login.") || host.hasPrefix("passport.") ||
-                url.path.lowercased().contains("/login")
-        }
-
-        func webView(_ webView: WKWebView,
-                     decidePolicyFor action: WKNavigationAction,
-                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            if action.targetFrame?.isMainFrame != false,
-               let url = action.request.url, isLoginURL(url) {
-                ready.wrappedValue = false
-                requiresAuthorization.wrappedValue = true
-                decisionHandler(.cancel)
-                return
-            }
-            decisionHandler(.allow)
-        }
-
-        func webView(_ webView: WKWebView,
-                     createWebViewWith configuration: WKWebViewConfiguration,
-                     for action: WKNavigationAction,
-                     windowFeatures: WKWindowFeatures) -> WKWebView? {
-            if let url = action.request.url, isLoginURL(url) {
-                ready.wrappedValue = false
-                requiresAuthorization.wrappedValue = true
-            }
-            return nil
-        }
-
-        func webView(_ webView: WKWebView,
-                     didStartProvisionalNavigation navigation: WKNavigation!) {
-            generation += 1
-            ready.wrappedValue = false
-            loadFailed.wrappedValue = false
-        }
-
-        func webView(_ webView: WKWebView,
-                     didFinish navigation: WKNavigation!) {
-            let version = generation
-            // Hide everything until the actual Cainiao barcode image exists.
-            for delay in [0.2, 0.8, 1.6, 3.0, 5.0, 8.0, 12.0] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    [weak self, weak webView] in
-                    guard let self, let webView, version == self.generation else { return }
-                    let probe = #"""
-                    (() => {
-                      const host = location.hostname.toLowerCase();
-                      if (host.startsWith('login.') || host.startsWith('passport.')) return 'auth';
-                      if (host !== 'page.cainiao.com') return 'loading';
-                      const text = (document.body && document.body.innerText || '').slice(0, 1500);
-                      if (/您需要登录才能继续访问|请先登录|账号密码登录|获取验证码/.test(text))
-                        return 'auth';
-                      const code = document.getElementById('auth-code-id');
-                      const box = code && code.getBoundingClientRect();
-                      if (box && box.width > 0 && box.height > 0 &&
-                          code.complete && code.naturalWidth > 0) return 'ready';
-                      return 'loading';
-                    })()
-                    """#
-                    webView.evaluateJavaScript(probe) { result, _ in
-                        guard version == self.generation, let phase = result as? String else { return }
-                        if phase == "auth" {
-                            self.ready.wrappedValue = false
-                            self.requiresAuthorization.wrappedValue = true
-                        } else if phase == "ready" {
-                            // Isolate the barcode before making the WebView
-                            // visible in SwiftUI.
-                            webView.evaluateJavaScript(
-                                "document.documentElement.setAttribute('data-ph-identity-ready','1')"
-                            ) { _, error in
-                                guard version == self.generation, error == nil else { return }
-                                self.requiresAuthorization.wrappedValue = false
-                                self.loadFailed.wrappedValue = false
-                                self.ready.wrappedValue = true
-                            }
-                        } else if delay == 12 && !self.ready.wrappedValue &&
-                                  !self.requiresAuthorization.wrappedValue {
-                            self.loadFailed.wrappedValue = true
-                        }
-                    }
-                }
-            }
-        }
-
-        func webView(_ webView: WKWebView,
-                     didFailProvisionalNavigation navigation: WKNavigation!,
-                     withError error: Error) {
-            ready.wrappedValue = false
-            // Cancellation is expected when a login redirect is blocked.
-            if (error as NSError).code != NSURLErrorCancelled {
-                loadFailed.wrappedValue = true
-            }
-        }
-    }
-}
 
 private struct IdentityFullScreenCode: View {
     @Environment(\.dismiss) private var dismiss

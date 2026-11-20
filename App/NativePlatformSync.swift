@@ -828,6 +828,9 @@ private enum SyncJSON {
             return !PddSessionVault.token(for: ParcelAccounts.activeID(for: "pdd")).isEmpty ||
                     cookie.contains { $0.name == "PDDAccessToken" && !$0.value.isEmpty }
         }
+        // Scripting checks saved Taobao cookies, while the MTOP response
+        // itself verifies whether the actual identity code is available.
+        if platform == "cainiao" { return await hasTaobaoCookie() }
         return await ParcelAccounts.hasSession(
             "taobao", accountID: ParcelAccounts.activeID(for: "taobao"))
     }
@@ -864,44 +867,24 @@ private enum SyncJSON {
                 mobile: mobileText.isEmpty ? nil : mobileText)
         }
         if platform == "cainiao" {
-            let api = "mtop.cainiao.nbpickup.identitycode.get"
-            let active = ParcelAccounts.activeID(for: "taobao")
-            // A legacy H5 endpoint accepts different verification parameters
-            // depending on the current session. Only use actual codes returned
-            // by the same Cainiao identity API, never fabricate a QR code.
-            let variants: [[String: Any]] = [
-                ["appName": "GUOGUO", "verifyVersion": "V2"],
-                ["appName": "GUOGUO"],
-                ["appName": "GUOGUO", "verifyVersion": "V1"]
-            ]
-            var latestError: Error?
-            for data in variants {
-                do {
-                    let response = try await mtop(api, data: data, accountID: active)
-                    guard let code = cainiaoIdentityCode(response["data"]) else { continue }
-                    let content = identityData(response["data"])
-                    let model = SyncJSON.dict(content["model"])
-                    let details = model.isEmpty ? content : model
-                    let ttl = identityExpiry(response["data"]) ?? 300
-                    guard ttl > 0 else { continue }
-                    let seconds = min(max(30, ttl), 600)
-                    let certifiedText = SyncJSON.first(details, ["certificated", "certified"])
-                    let certified = certifiedText.isEmpty ? nil : certifiedText.lowercased() == "true"
-                    let name = SyncJSON.first(details, ["fullname", "fullName"])
-                    let maskedID = SyncJSON.first(details, ["idCardNumber", "id_card_number"])
-                    return IdentityResult(code: code,
-                        expiresAt: Date().addingTimeInterval(seconds),
-                        certified: certified,
-                        name: name.isEmpty ? nil : name,
-                        maskedID: maskedID.isEmpty ? nil : maskedID,
-                        mobile: nil)
-                } catch {
-                    latestError = error
-                }
+            // Matches the uploaded Scripting utils/identity.ts exactly:
+            // the genuine code comes from Taobao-cookie MTOP, NOT an H5 page.
+            let response = try await mtop(
+                "mtop.cainiao.nbpickup.identitycode.get",
+                data: ["appName": "GUOGUO", "verifyVersion": "V2"],
+                accountID: ParcelAccounts.activeID(for: "taobao"))
+            let model = SyncJSON.dict(identityData(response["data"])["model"])
+            let code = SyncJSON.str(model["identityCode"])
+            guard !code.isEmpty, code.count <= 1024 else {
+                throw NativeSyncError.badResponse(
+                    "菜鸟接口未返回有效身份码，请稍后重试或检查当前授权账号")
             }
-            if let latestError { throw latestError }
-            throw NativeSyncError.badResponse(
-                "当前淘宝/菜鸟账号没有返回有效身份码。请确认所选默认账号，或稍后刷新重试")
+            // The reference implementation treats expireTime as seconds.
+            let ttl = max(60, Double(SyncJSON.str(model["expireTime"])) ?? 600)
+            return IdentityResult(
+                code: code,
+                expiresAt: Date().addingTimeInterval(ttl),
+                certified: nil, name: nil, maskedID: nil, mobile: nil)
         }
         let response = try await mtop(
             "mtop.cainiao.pickup.identity.getIdentityMessage", data: [:],
