@@ -154,7 +154,8 @@ import WidgetKit
             transit: Array(transit.prefix(6)).map(row),
             pendingTotal: pending.count, transitTotal: transit.count,
             lastSync: lastSync > 0 ? Date(timeIntervalSince1970: lastSync) : .distantPast,
-            showTransit: snapshot.preferences.widgetShowTransit)
+            showTransit: snapshot.preferences.widgetShowTransit,
+            refreshMinutes: RefreshPolicy.minutes)
     }
 
     func persist() {
@@ -180,9 +181,12 @@ import WidgetKit
             do {
                 let data = try JSONEncoder().encode(current)
                 try data.write(to: destination, options: .atomic)
-                if HomeWidgetSharedStore.write(widgetSnapshot) {
+                let published = HomeWidgetSharedStore.writeWithChange(widgetSnapshot)
+                if published.saved {
                     HomeWidgetSharedStore.clearPicked(widgetOps)
-                    WidgetCenter.shared.reloadTimelines(ofKind: HomeWidgetSharedStore.kind)
+                    if published.changed {
+                        WidgetCenter.shared.reloadTimelines(ofKind: HomeWidgetSharedStore.kind)
+                    }
                 }
             } catch {
                 print("ParcelStore save failed: \(error)")

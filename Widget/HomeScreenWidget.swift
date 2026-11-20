@@ -23,8 +23,22 @@ struct ParcelHomeProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<ParcelHomeEntry>) -> Void) {
-        completion(Timeline(entries: [load()],
-                            policy: .after(Date().addingTimeInterval(1800))))
+        let entry = load()
+        // This only re-reads the App Group snapshot. It does not fetch data
+        // or launch the containing app; iOS can defer this date.
+        // Use the app's configured preference exported in the snapshot.
+        // WidgetKit may defer the resulting timeline date.
+        let preferred = TimeInterval(max(5, min(120, entry.model.refreshMinutes ?? 15))) * 60
+        let interval: TimeInterval
+        if entry.model.pendingTotal > 0 {
+            interval = max(30 * 60, preferred)
+        } else if entry.model.transitTotal > 0 {
+            interval = max(3 * 60 * 60, preferred)
+        } else {
+            interval = max(12 * 60 * 60, preferred)
+        }
+        completion(Timeline(entries: [entry],
+                            policy: .after(Date().addingTimeInterval(interval))))
     }
 
     private func load() -> ParcelHomeEntry {

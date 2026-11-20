@@ -1,5 +1,22 @@
 import Foundation
 
+// Shared by app and Widget extension; the Widget only reads this setting
+// from its latest snapshot, never starts a network refresh.
+enum RefreshPolicy {
+    static var minutes: Int {
+        let configured = UserDefaults.standard.object(forKey: "native.refresh.app") as? Int ?? 15
+        return max(5, min(120, configured))
+    }
+
+    static func backgroundDelay(hasPending: Bool, hasActive: Bool) -> TimeInterval {
+        let preferred = TimeInterval(minutes * 60)
+        if hasPending { return max(30 * 60, preferred) }
+        if hasActive { return max(3 * 3600, preferred) }
+        return max(12 * 3600, preferred)
+    }
+}
+
+
 // A small, credential-free snapshot shared by the containing app and WidgetKit.
 // The signing tool must grant BOTH binaries the same App Group entitlement.
 struct HomeWidgetParcel: Codable, Identifiable, Hashable {
@@ -19,6 +36,8 @@ struct HomeWidgetSnapshot: Codable {
     var transitTotal: Int
     var lastSync: Date
     var showTransit: Bool
+    // Optional to keep snapshots produced by older versions decodable.
+    var refreshMinutes: Int? = nil
 
     static let empty = HomeWidgetSnapshot(
         pending: [], transit: [], pendingTotal: 0, transitTotal: 0,
@@ -86,16 +105,35 @@ enum HomeWidgetSharedStore {
         return copy
     }
 
+    /// Persist the latest snapshot, but only notify WidgetKit if visible parcel
+    /// information changed. A new lastSync timestamp alone is not a reason to
+    /// spend the system's widget reload budget.
+    static func writeWithChange(_ snapshot: HomeWidgetSnapshot) -> (saved: Bool, changed: Bool) {
+        guard let url = snapshotURL else { return (false, false) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(snapshot) else { return (false, false) }
+        let previous = (try? Data(contentsOf: url))
+            .flatMap { try? JSONDecoder().decode(HomeWidgetSnapshot.self, from: $0) }
+        var lhs = snapshot
+        var rhs = previous ?? .empty
+        lhs.lastSync = .distantPast
+        rhs.lastSync = .distantPast
+        let changed = previous == nil ||
+            (try? encoder.encode(lhs)) != (try? encoder.encode(rhs))
+        do {
+            if (try? Data(contentsOf: url)) != data {
+                try data.write(to: url, options: .atomic)
+            }
+            return (true, changed)
+        } catch {
+            return (false, false)
+        }
+    }
+
     @discardableResult
     static func write(_ snapshot: HomeWidgetSnapshot) -> Bool {
-        guard let url = snapshotURL,
-              let data = try? JSONEncoder().encode(snapshot) else { return false }
-        do {
-            try data.write(to: url, options: .atomic)
-            return true
-        } catch {
-            return false
-        }
+        writeWithChange(snapshot).saved
     }
 
     // AppIntent only writes a single operation. The main App remains the sole

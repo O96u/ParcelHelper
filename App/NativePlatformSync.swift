@@ -221,8 +221,14 @@ private enum SyncJSON {
         }
         let selected = accountID ?? ParcelAccounts.activeID(for: id)
         let key = "native.sync.at." + id + "." + selected
+        let retryKey = "native.sync.retryAfter." + id + "." + selected
+        let failuresKey = "native.sync.failures." + id + "." + selected
+        let now = Date().timeIntervalSince1970
+        if !force && now < UserDefaults.standard.double(forKey: retryKey) {
+            throw NativeSyncError.unavailable("账号正在等待失败退避，稍后会自动再试")
+        }
         let last = UserDefaults.standard.double(forKey: key)
-        if !force && Date().timeIntervalSince1970 - last < minGap {
+        if !force && now - last < minGap {
             throw NativeSyncError.unavailable("请求过于频繁，请稍后再试")
         }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: key)
@@ -232,19 +238,51 @@ private enum SyncJSON {
             else if id == "cainiao" { incoming = try await cainiaoPackages(accountID: selected) }
             else if id == "fengchao" { incoming = try await NativeFengchao.packages(accountID: selected) }
             else { incoming = try await NativeMiExpress.packages() }
+            // A background expiration must not merge stale results or update
+            // sync-success state after its parent task was cancelled.
+            try Task.checkCancellation()
             let count = merge(incoming)
             let result = NativeSyncResult(
                 name: id == "pdd" ? "拼多多驿站包裹" : (id == "cainiao" ? "菜鸟" : (id == "fengchao" ? "丰巢" : "小米")),
                 found: incoming.count, imported: count, errors: [])
             UserDefaults.standard.set(result.description, forKey: "native.sync.result." + id)
             UserDefaults.standard.set(result.description, forKey: "native.sync.result." + id + "." + selected)
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success." + id)
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "native.sync.success." + id + "." + selected)
+            let syncedAt = Date().timeIntervalSince1970
+            UserDefaults.standard.set(syncedAt, forKey: "native.sync.success." + id)
+            UserDefaults.standard.set(syncedAt, forKey: "native.sync.success." + id + "." + selected)
+            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
+            UserDefaults.standard.removeObject(forKey: retryKey)
+            UserDefaults.standard.removeObject(forKey: failuresKey)
             if ParcelStore.shared.snapshot.preferences.liveActivityEnabled {
                 await LiveActivityCoordinator.update(with: ParcelStore.shared.snapshot.parcels)
             }
             return result
         } catch {
+            // Cancellation is a scheduler decision, not a provider failure.
+            // Propagate it so the background task can stop without poisoning
+            // the account's exponential backoff.
+            if error is CancellationError { throw error }
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain &&
+               nsError.code == NSURLErrorCancelled { throw error }
+            // Account-scoped exponential backoff prevents a failing platform
+            // from blocking unrelated accounts. Manual force bypasses it.
+            let failures = min(7, UserDefaults.standard.integer(forKey: failuresKey) + 1)
+            UserDefaults.standard.set(failures, forKey: failuresKey)
+            let isAuthFailure: Bool
+            if let nativeError = error as? NativeSyncError {
+                switch nativeError {
+                case .noLogin, .verify: isAuthFailure = true
+                default: isAuthFailure = false
+                }
+            } else {
+                isAuthFailure = false
+            }
+            let base = min(21_600.0, 300.0 * pow(2.0, Double(failures - 1)))
+            let delay = isAuthFailure ? 24 * 3600.0 :
+                base * Double.random(in: 0.8...1.2)
+            UserDefaults.standard.set(Date().timeIntervalSince1970 + delay,
+                                      forKey: retryKey)
             let detail = error.localizedDescription
             UserDefaults.standard.set(detail, forKey: "native.sync.result." + id)
             UserDefaults.standard.set(detail, forKey: "native.sync.result." + id + "." + selected)
@@ -993,8 +1031,7 @@ private enum SyncJSON {
         if let activeRefresh {
             return await activeRefresh.value
         }
-        let configured = UserDefaults.standard.object(forKey: "native.refresh.app") as? Int ?? 15
-        let interval = TimeInterval(max(5, min(120, configured))) * 60
+        let interval = TimeInterval(RefreshPolicy.minutes) * 60
         let now = Date().timeIntervalSince1970
         guard force || now - lastStarted >= interval else { return [] }
 
@@ -1054,8 +1091,9 @@ private enum SyncJSON {
         }
 
         ParcelStore.shared.persist()
-        UserDefaults.standard.set(Date().timeIntervalSince1970,
-                                  forKey: "native.home.lastRefresh")
+        // Only record a successful foreground refresh if a provider actually
+        // succeeded. A failed or empty pass must not claim fresh logistics.
+        // Provider-specific native.sync.success.* keys remain authoritative.
         if force && !interrupted.isEmpty {
             results.append("部分平台的网络同步被中断（\(interrupted.joined(separator: "、"))），可稍后重试；已有包裹数据不会因此被删除")
         }

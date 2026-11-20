@@ -28,8 +28,24 @@ private struct WebShipment: Decodable {
     @Published private(set) var sequence = 0
     private var pending: [String] = []
     private var isRunning = false
+    private var timeoutTask: Task<Void, Never>?
 
     private init() {}
+
+    private func recordOutcome(platform: String, accountID: String?, success: Bool) {
+        guard let accountID else { return }
+        let prefix = "native.web.retry." + platform + "." + accountID
+        if success {
+            UserDefaults.standard.removeObject(forKey: prefix + ".failures")
+            UserDefaults.standard.removeObject(forKey: prefix + ".after")
+        } else {
+            let attempts = min(7, UserDefaults.standard.integer(forKey: prefix + ".failures") + 1)
+            UserDefaults.standard.set(attempts, forKey: prefix + ".failures")
+            let seconds = min(21_600.0, 300.0 * pow(2.0, Double(attempts - 1)))
+            UserDefaults.standard.set(Date().timeIntervalSince1970 +
+                seconds * Double.random(in: 0.8...1.2), forKey: prefix + ".after")
+        }
+    }
 
     func refreshAvailable() async {
         for platform in ["jd", "taobao", "pdd"] {
@@ -49,13 +65,16 @@ private struct WebShipment: Decodable {
             return false
         }
         let selected = accountID ?? ParcelAccounts.activeID(for: platform)
+        let retryAfter = UserDefaults.standard.double(
+            forKey: "native.web.retry." + platform + "." + selected + ".after"
+        )
+        guard force || Date().timeIntervalSince1970 >= retryAfter else { return false }
         guard await ParcelAccounts.hasSession(platform, accountID: selected) else { return false }
         let key = "native.web.autosync.at." + platform + "." + selected
         let now = Date().timeIntervalSince1970
         // Use the same foreground auto-refresh interval as the native
         // platform synchronizer; manual force-sync remains available.
-        let configured = UserDefaults.standard.object(forKey: "native.refresh.app") as? Int ?? 15
-        let interval = TimeInterval(max(5, min(120, configured))) * 60
+        let interval = TimeInterval(RefreshPolicy.minutes) * 60
         if !force && now - UserDefaults.standard.double(forKey: key) < interval {
             return false
         }
@@ -83,10 +102,15 @@ private struct WebShipment: Decodable {
         activePlatform = platform
         activeAccountID = accountID
         let requestNumber = sequence
-        // Fail safely if the site never finishes navigation. A new run may retry.
-        Task {
-            try? await Task.sleep(nanoseconds: 60_000_000_000)
-            guard activePlatform == platform && activeAccountID == accountID &&
+        // Cancel the timeout worker as soon as the reader finishes, rather
+        // than leaving one sleeping task per completed platform/account.
+        timeoutTask?.cancel()
+        timeoutTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 35_000_000_000)
+            } catch { return }
+            guard let self,
+                  activePlatform == platform && activeAccountID == accountID &&
                   sequence == requestNumber else { return }
             if platform == "pdd" {
                 finishPdd("拼多多购物订单：网页读取超时，请稍后重试", succeeded: false)
@@ -97,12 +121,19 @@ private struct WebShipment: Decodable {
     }
 
     func finishPdd(_ message: String, succeeded: Bool,
-                   expectedAccountID: String? = nil) {
+                   expectedAccountID: String? = nil,
+                   expectedSequence: Int? = nil) {
         guard activePlatform == "pdd",
-              expectedAccountID == nil || activeAccountID == expectedAccountID else { return }
+              expectedAccountID == nil || activeAccountID == expectedAccountID,
+              expectedSequence == nil || sequence == expectedSequence else { return }
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
         if succeeded {
-            UserDefaults.standard.set(Date().timeIntervalSince1970,
+            let syncedAt = Date().timeIntervalSince1970
+            UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success.pdd")
+            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
         }
         UserDefaults.standard.set(message, forKey: "native.sync.result.pdd")
         if let accountID = activeAccountID {
@@ -115,9 +146,14 @@ private struct WebShipment: Decodable {
     }
 
     func finish(_ platform: String, packages: [NativeSyncParcel], failure: String?,
-                expectedAccountID: String? = nil) {
+                expectedAccountID: String? = nil,
+                expectedSequence: Int? = nil) {
         guard activePlatform == platform,
-              expectedAccountID == nil || activeAccountID == expectedAccountID else { return }
+              expectedAccountID == nil || activeAccountID == expectedAccountID,
+              expectedSequence == nil || sequence == expectedSequence else { return }
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
         let description: String
         if let failure {
             description = (platform == "jd" ? "京东" : "淘宝") + "自动同步： " + failure
@@ -126,8 +162,10 @@ private struct WebShipment: Decodable {
             let accountID = activeAccountID ?? ParcelAccounts.activeID(for: platform)
             for index in scoped.indices { scoped[index].accountID = accountID }
             let merged = NativeParcelSync.merge(scoped)
-            UserDefaults.standard.set(Date().timeIntervalSince1970,
+            let syncedAt = Date().timeIntervalSince1970
+            UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success." + platform)
+            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
             description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(packages.count) 件，导入或更新 \(merged) 件。"
         }
         UserDefaults.standard.set(description, forKey: "native.sync.result." + platform)
@@ -150,10 +188,15 @@ struct NativeWebAutoSyncHost: View {
             if let platform = sync.activePlatform,
                let accountID = sync.activeAccountID {
                 Group {
+                    // Capture this reader instance's generation, so a late
+                    // callback cannot accidentally complete a newer reader.
+                    let generation = sync.sequence
                     if platform == "pdd" {
                         PddOrdersAutoSyncReader(accountID: accountID) { message, succeeded in
                             Task { @MainActor in
-                                sync.finishPdd(message, succeeded: succeeded, expectedAccountID: accountID)
+                                sync.finishPdd(message, succeeded: succeeded,
+                                               expectedAccountID: accountID,
+                                               expectedSequence: generation)
                             }
                         }
                     } else {
@@ -162,7 +205,8 @@ struct NativeWebAutoSyncHost: View {
                         } onComplete: { packages, error in
                             Task { @MainActor in
                                 sync.finish(platform, packages: packages, failure: error,
-                                            expectedAccountID: accountID)
+                                            expectedAccountID: accountID,
+                                            expectedSequence: generation)
                             }
                         }
                     }
