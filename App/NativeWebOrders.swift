@@ -24,6 +24,7 @@ private struct WebShipment: Decodable {
 @MainActor final class NativeWebAutoSync: ObservableObject {
     static let shared = NativeWebAutoSync()
     @Published private(set) var activePlatform: String?
+    @Published private(set) var activeAccountID: String?
     @Published private(set) var sequence = 0
     private var pending: [String] = []
     private var isRunning = false
@@ -32,12 +33,14 @@ private struct WebShipment: Decodable {
 
     func refreshAvailable() async {
         for platform in ["jd", "taobao", "pdd"] {
-            _ = await request(platform)
+            for profile in await ParcelAccounts.authorizedAccounts(for: platform) {
+                _ = await request(platform, accountID: profile.id)
+            }
         }
     }
 
     @discardableResult
-    func request(_ platform: String, force: Bool = false) async -> Bool {
+    func request(_ platform: String, force: Bool = false, accountID: String? = nil) async -> Bool {
         guard platform == "jd" || platform == "taobao" || platform == "pdd" else { return false }
         // Never open a hidden Pinduoduo H5 order page without explicit opt-in.
         guard platform != "pdd" || PddAccountProtection.webAccessAllowed else { return false }
@@ -45,17 +48,9 @@ private struct WebShipment: Decodable {
            (UserDefaults.standard.object(forKey: "native.platform.enabled.taobao") as? Bool) == false {
             return false
         }
-        let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        let marker = platform == "jd" ? "pt_key" : (platform == "pdd" ? "PDDAccessToken" : "unb")
-        let domain = platform == "jd" ? "jd.com" : (platform == "pdd" ? "yangkeduo.com" : "taobao.com")
-        let authorized = cookies.contains { cookie in
-            (cookie.name == marker || (platform == "taobao" && cookie.name == "tracknick"))
-                && !cookie.value.isEmpty
-                && (cookie.domain == domain || cookie.domain.hasSuffix("." + domain))
-                && (cookie.expiresDate == nil || cookie.expiresDate! > Date())
-        } || (platform == "pdd" && !PddSessionVault.token.isEmpty)
-        guard authorized else { return false }
-        let key = "native.web.autosync.at." + platform
+        let selected = accountID ?? ParcelAccounts.activeID(for: platform)
+        guard await ParcelAccounts.hasSession(platform, accountID: selected) else { return false }
+        let key = "native.web.autosync.at." + platform + "." + selected
         let now = Date().timeIntervalSince1970
         // Use the same foreground auto-refresh interval as the native
         // platform synchronizer; manual force-sync remains available.
@@ -64,16 +59,20 @@ private struct WebShipment: Decodable {
         if !force && now - UserDefaults.standard.double(forKey: key) < interval {
             return false
         }
-        if activePlatform == platform || pending.contains(platform) { return true }
+        let job = platform + "|" + selected
+        if (activePlatform == platform && activeAccountID == selected) ||
+            pending.contains(job) { return true }
         UserDefaults.standard.set(now, forKey: key)
-        pending.append(platform)
+        pending.append(job)
         startNext()
         return true
     }
 
     private func startNext() {
         guard activePlatform == nil, !pending.isEmpty else { return }
-        let platform = pending.removeFirst()
+        let job = pending.removeFirst().components(separatedBy: "|")
+        guard job.count == 2 else { startNext(); return }
+        let platform = job[0], accountID = job[1]
         // Consent may have been revoked while this reader was queued.
         if platform == "pdd" && !PddAccountProtection.webAccessAllowed {
             startNext()
@@ -82,11 +81,13 @@ private struct WebShipment: Decodable {
         sequence += 1
         isRunning = true
         activePlatform = platform
+        activeAccountID = accountID
         let requestNumber = sequence
         // Fail safely if the site never finishes navigation. A new run may retry.
         Task {
             try? await Task.sleep(nanoseconds: 60_000_000_000)
-            guard activePlatform == platform && sequence == requestNumber else { return }
+            guard activePlatform == platform && activeAccountID == accountID &&
+                  sequence == requestNumber else { return }
             if platform == "pdd" {
                 finishPdd("拼多多购物订单：网页读取超时，请稍后重试", succeeded: false)
             } else {
@@ -102,7 +103,11 @@ private struct WebShipment: Decodable {
                                       forKey: "native.sync.success.pdd")
         }
         UserDefaults.standard.set(message, forKey: "native.sync.result.pdd")
+        if let accountID = activeAccountID {
+            UserDefaults.standard.set(message, forKey: "native.sync.result.pdd." + accountID)
+        }
         activePlatform = nil
+        activeAccountID = nil
         isRunning = false
         DispatchQueue.main.async { [weak self] in self?.startNext() }
     }
@@ -113,13 +118,20 @@ private struct WebShipment: Decodable {
         if let failure {
             description = (platform == "jd" ? "京东" : "淘宝") + "自动同步： " + failure
         } else {
-            let merged = NativeParcelSync.merge(packages)
+            var scoped = packages
+            let accountID = activeAccountID ?? ParcelAccounts.activeID(for: platform)
+            for index in scoped.indices { scoped[index].accountID = accountID }
+            let merged = NativeParcelSync.merge(scoped)
             UserDefaults.standard.set(Date().timeIntervalSince1970,
                                       forKey: "native.sync.success." + platform)
             description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(packages.count) 件，导入或更新 \(merged) 件。"
         }
         UserDefaults.standard.set(description, forKey: "native.sync.result." + platform)
+        if let accountID = activeAccountID {
+            UserDefaults.standard.set(description, forKey: "native.sync.result." + platform + "." + accountID)
+        }
         activePlatform = nil
+        activeAccountID = nil
         isRunning = false
         // Defer the next WebKit update until the previous reader has disappeared.
         DispatchQueue.main.async { [weak self] in self?.startNext() }
@@ -134,13 +146,13 @@ struct NativeWebAutoSyncHost: View {
             if let platform = sync.activePlatform {
                 Group {
                     if platform == "pdd" {
-                        PddOrdersAutoSyncReader { message, succeeded in
+                        PddOrdersAutoSyncReader(accountID: sync.activeAccountID) { message, succeeded in
                             Task { @MainActor in
                                 sync.finishPdd(message, succeeded: succeeded)
                             }
                         }
                     } else {
-                        NativeWebOrderReader(platform: platform) { _ in
+                        NativeWebOrderReader(platform: platform, accountID: sync.activeAccountID) { _ in
                             // Progress is available in the explicit manual sync screen.
                         } onComplete: { packages, error in
                             Task { @MainActor in
@@ -161,6 +173,7 @@ struct NativeWebAutoSyncHost: View {
 
 struct NativeWebOrderPage: View {
     let platform: String
+    var accountID: String? = nil
     let onFinish: (String) -> Void
     @State private var detail = "正在访问订单列表…"
     @State private var received = false
@@ -171,7 +184,7 @@ struct NativeWebOrderPage: View {
                 Text(detail).font(.footnote).lineLimit(3)
                 Spacer()
             }.padding(12)
-            NativeWebOrderReader(platform: platform) { progress in
+            NativeWebOrderReader(platform: platform, accountID: accountID) { progress in
                 detail = progress
             } onComplete: { packages, failure in
                 Task { @MainActor in
@@ -180,7 +193,10 @@ struct NativeWebOrderPage: View {
                     if let failure {
                         detail = failure
                     } else {
-                        let count = NativeParcelSync.merge(packages)
+                        var scoped = packages
+                        let selected = accountID ?? ParcelAccounts.activeID(for: platform)
+                        for index in scoped.indices { scoped[index].accountID = selected }
+                        let count = NativeParcelSync.merge(scoped)
                         UserDefaults.standard.set(Date().timeIntervalSince1970,
                                                   forKey: "native.sync.success." + platform)
                         detail = "\(platform == "jd" ? "京东" : "淘宝")：读取 \(packages.count) 件有效物流包裹，导入或更新 \(count) 件。"
@@ -207,15 +223,16 @@ struct NativeWebOrderPage: View {
 
 private struct NativeWebOrderReader: UIViewRepresentable {
     let platform: String
+    var accountID: String? = nil
     let onProgress: (String) -> Void
     let onComplete: ([NativeSyncParcel], String?) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(platform: platform, onProgress: onProgress, onComplete: onComplete)
+        Coordinator(platform: platform, accountID: accountID, onProgress: onProgress, onComplete: onComplete)
     }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        config.websiteDataStore = ParcelAccounts.webStore(for: platform, accountID: accountID)
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
@@ -230,6 +247,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         enum Stage { case orderList, tracking }
         let platform: String
+        let accountID: String?
         let onProgress: (String) -> Void
         let onComplete: ([NativeSyncParcel], String?) -> Void
         var stage = Stage.orderList
@@ -241,9 +259,11 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var usedJDFallback = false
         var emptyReadAttempts = 0
 
-        init(platform: String, onProgress: @escaping (String) -> Void,
+        init(platform: String, accountID: String?,
+             onProgress: @escaping (String) -> Void,
              onComplete: @escaping ([NativeSyncParcel], String?) -> Void) {
             self.platform = platform
+            self.accountID = accountID
             self.onProgress = onProgress
             self.onComplete = onComplete
         }
@@ -354,6 +374,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                    shipment.mail.range(of: #"^[A-Za-z0-9-]{8,40}$"#, options: .regularExpression) != nil {
                     let order = self.orders[self.position]
                     var item = NativeSyncParcel(source: self.platform)
+                    item.accountID = self.accountID ?? ""
                     item.orderID = order.id
                     item.mailNo = shipment.mail
                     item.company = shipment.company
