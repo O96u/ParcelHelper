@@ -882,10 +882,10 @@ private enum SyncJSON {
     }
     static func hasIdentitySession(_ platform: String) async -> Bool {
         if platform == "pdd" {
-            let cookie = await WebCookieRequest.cookies(domain: "yangkeduo.com",
-                                                        accountID: ParcelAccounts.activeID(for: "pdd"))
-            return !PddSessionVault.token(for: ParcelAccounts.activeID(for: "pdd")).isEmpty ||
-                    cookie.contains { $0.name == "PDDAccessToken" && !$0.value.isEmpty }
+            // Use the same account-scoped authorization rule as the settings:
+            // small-account H5 credentials may be on pinduoduo.net.
+            return await ParcelAccounts.hasSession(
+                "pdd", accountID: ParcelAccounts.activeID(for: "pdd"))
         }
         // Scripting checks saved Taobao cookies, while the MTOP response
         // itself verifies whether the actual identity code is available.
