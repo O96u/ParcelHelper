@@ -160,6 +160,7 @@ struct MultiAccountPage: View {
     @State private var busy: String?
     @State private var notice: String?
     @State private var pddConsent = false
+    @AppStorage("native.pdd.webAccessAllowed") private var pddWebEnabled = false
 
     private var kind: String { ParcelAccounts.canonical(platformID) }
     private var title: String {
@@ -189,7 +190,9 @@ struct MultiAccountPage: View {
                 }
                 .buttonStyle(.borderedProminent)
                 if kind == "pdd" {
-                    Text("建议使用拼多多小号网页登录，再通过官方「关联大号收件手机号」验证大号号码，读取该号码可查询的待取包裹。网页授权可能使同一账号的官方 App 退出。")
+                    Toggle("允许拼多多网页授权及同步", isOn: $pddWebEnabled)
+                        .tint(.blue)
+                    Text("建议用小号登录，再通过官方页面关联大号收件手机号。网页登录可能让官方 App 退出。")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else if kind == "taobao" {
                     Text("淘宝和菜鸟共用每个账号的登录环境；菜鸟身份码跟随当前默认账号。")
@@ -343,7 +346,7 @@ struct MultiAccountPage: View {
             }
             .font(.subheadline)
             .buttonStyle(.bordered)
-            if kind == "pdd" && validAccounts.contains(account.id) {
+            if kind == "pdd" && pddWebEnabled && validAccounts.contains(account.id) {
                 if let mobiles = linkedPddPhones[account.id], !mobiles.isEmpty {
                     Text("已关联：" + mobiles.map { $0.masked }.joined(separator: "、"))
                         .font(.caption).foregroundStyle(.secondary)
