@@ -3,6 +3,7 @@ import UIKit
 import CryptoKit
 import AppIntents
 import UserNotifications
+import BackgroundTasks
 
 /// A newly copied pickup SMS is recognized on foreground entry. iOS may show
 /// its own Paste permission prompt; we never silently persist clipboard text.
@@ -86,6 +87,7 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                      didFinishLaunchingWithOptions launchOptions:
                         [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        ParcelBackgroundRefresh.register()
         return true
     }
 
@@ -119,6 +121,7 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                 .task {
                     // Reconcile any widget "marked picked" actions on launch.
                     store.persist()
+                    ParcelBackgroundRefresh.scheduleNext()
                     clipboardMonitor.checkOnForeground()
                     // Foreground-only update checks never sign or install an IPA.
                     Task { await ParcelUpdateCenter.shared.checkOnLaunch() }
@@ -128,6 +131,7 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         store.persist()
+                        ParcelBackgroundRefresh.scheduleNext()
                         clipboardMonitor.checkOnForeground()
                         Task {
                             _ = await NativeHomeRefresh.refresh()
@@ -160,5 +164,102 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                     }
                 }
         }
+    }
+}
+
+// BGAppRefresh is an opportunistic, API-only task. It must never construct a
+// hidden WKWebView or promise 15-minute background polling.
+private final class ParcelBGTaskCompletion {
+    private let lock = NSLock()
+    private var finished = false
+
+    func finish(_ task: BGTask, success: Bool) {
+        lock.lock()
+        let shouldFinish = !finished
+        finished = true
+        lock.unlock()
+        if shouldFinish { task.setTaskCompleted(success: success) }
+    }
+}
+
+@MainActor enum ParcelBackgroundRefresh {
+    private static let identifier = "com.muxui.ParcelHelper.refresh"
+
+    nonisolated static func register() {
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: "com.muxui.ParcelHelper.refresh",
+            using: nil
+        ) { task in
+            guard let refresh = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            Task { @MainActor in handle(refresh) }
+        }
+    }
+
+    static func scheduleNext() {
+        let parcels = ParcelStore.shared.snapshot.parcels.filter {
+            $0.type == "delivery" && !$0.isDone && !$0.isSigned && $0.closed == nil
+        }
+        let interval: TimeInterval = parcels.contains(where: { $0.isPending })
+            ? 30 * 60 : (parcels.isEmpty ? 12 * 3600 : 3 * 3600)
+        let request = BGAppRefreshTaskRequest(identifier: identifier)
+        request.earliestBeginDate = Date().addingTimeInterval(interval)
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            NSLog("ParcelHelper BGAppRefresh schedule failed: %@", String(describing: error))
+        }
+    }
+
+    private static func handle(_ task: BGAppRefreshTask) {
+        // Schedule the successor before network work, because iOS can
+        // terminate the current execution at any time.
+        scheduleNext()
+        let completion = ParcelBGTaskCompletion()
+        let work = Task { @MainActor in
+            let succeeded = await refreshEligibleAccounts()
+            completion.finish(task, success: succeeded && !Task.isCancelled)
+        }
+        task.expirationHandler = {
+            work.cancel()
+            completion.finish(task, success: false)
+        }
+    }
+
+    private static func refreshEligibleAccounts() async -> Bool {
+        // Preserve battery and avoid work when the user has no active parcels.
+        guard !ProcessInfo.processInfo.isLowPowerModeEnabled else { return true }
+        guard ParcelStore.shared.snapshot.parcels.contains(where: {
+            $0.type == "delivery" && !$0.isDone && !$0.isSigned && $0.closed == nil
+        }) else { return true }
+
+        // These providers use standalone native API/Keychain paths. Cainiao's
+        // MTOP fallback can create a WKWebView, while Taobao/JD/PDD order
+        // reading uses WebKit; none of those are invoked in this background task.
+        let deadline = Date().addingTimeInterval(18)
+        var attempted = 0
+        if NativeMiExpress.hasSession && Date() < deadline {
+            let last = UserDefaults.standard.double(forKey: "native.sync.success.mi")
+            if Date().timeIntervalSince1970 - last >= 3600 {
+                attempted += 1
+                _ = try? await NativeParcelSync.run("mi")
+            }
+        }
+        if Task.isCancelled { return false }
+
+        let accounts = await ParcelAccounts.authorizedAccounts(for: "fengchao")
+        for account in accounts {
+            guard !Task.isCancelled, Date() < deadline, attempted < 2 else { break }
+            let last = UserDefaults.standard.double(
+                forKey: "native.sync.success.fengchao." + account.id
+            )
+            guard Date().timeIntervalSince1970 - last >= 1800 else { continue }
+            attempted += 1
+            _ = try? await NativeParcelSync.run("fengchao", accountID: account.id)
+        }
+        return !Task.isCancelled
     }
 }
