@@ -131,8 +131,10 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
         if account.platform == "pdd" { PddSessionVault.clear(for: account.id) }
         if account.isLegacy {
             // Leave other platforms' default WebKit data intact.
-            let domains = account.platform == "taobao" ? ["taobao.com"] :
-                          account.platform == "jd" ? ["jd.com"] : ["yangkeduo.com", "pinduoduo.net"]
+            let domains = account.platform == "taobao"
+                ? ["taobao.com", "cainiao.com"]
+                : account.platform == "jd" ? ["jd.com"]
+                : ["yangkeduo.com", "pinduoduo.net"]
             let store = WKWebsiteDataStore.default().httpCookieStore
             let cookies = await store.allCookies()
             for cookie in cookies where domains.contains(where: {

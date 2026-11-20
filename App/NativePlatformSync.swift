@@ -437,7 +437,17 @@ private enum SyncJSON {
             throw NativeSyncError.unavailable("已关闭拼多多网页访问，以免影响官方 App 登录。")
         }
         let selected = accountID ?? ParcelAccounts.activeID(for: "pdd")
-        let cookies = await WebCookieRequest.cookies(domain: "yangkeduo.com", accountID: selected)
+        // Pinduoduo serves its H5 on both yangkeduo.com and pinduoduo.net.
+        // A newly authorized small account may only have cookies from the
+        // latter. Keep cookies strictly within the selected WebKit profile.
+        let oldCookies = await WebCookieRequest.cookies(domain: "yangkeduo.com",
+                                                         accountID: selected)
+        let modernCookies = await WebCookieRequest.cookies(domain: "pinduoduo.net",
+                                                            accountID: selected)
+        var cookieNames = Set<String>()
+        let cookies = (modernCookies + oldCookies).filter {
+            cookieNames.insert($0.name).inserted
+        }
         var headers: [String: String] = [
             "Referer": referer ?? "https://m.pinduoduo.net/mdkd/package?pr_page_from=scheme",
             "Content-Type": "application/json;charset=UTF-8",
