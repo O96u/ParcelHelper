@@ -873,12 +873,12 @@ private enum SyncJSON {
         return nil
     }
     private static func hasTaobaoCookie() async -> Bool {
+        // Scripting tbHasLogin() checks for the presence of stored Taobao
+        // cookies; their names vary between Taobao login methods. The signed
+        // MTOP response, not a hardcoded cookie-name list, decides validity.
         let cookies = await WebCookieRequest.cookies(
             domain: "taobao.com", accountID: ParcelAccounts.activeID(for: "taobao"))
-        return cookies.contains {
-            ["unb", "tracknick", "cookie2", "_m_h5_tk"].contains($0.name) &&
-            !$0.value.isEmpty
-        }
+        return cookies.contains { !$0.name.isEmpty && !$0.value.isEmpty }
     }
     static func hasIdentitySession(_ platform: String) async -> Bool {
         if platform == "pdd" {
