@@ -223,6 +223,8 @@ struct IdentityDetailPage: View {
     @State private var identity: NativeParcelSync.IdentityResult?
     @State private var identityAccountID = ""
     @State private var cainiaoPageVersion = 0
+    @State private var cainiaoNeedsWebLogin = false
+    @State private var cainiaoOpenLogin = false
     @State private var now = Date()
     @State private var fetching = false
     @State private var authorized = false
@@ -279,7 +281,7 @@ struct IdentityDetailPage: View {
                         Text("管理默认账号").font(.subheadline)
                     }
                 }
-                if !authorized {
+                if !authorized && platform != "cainiao" {
                     VStack(spacing: 15) {
                         Image(systemName: "person.badge.key")
                             .font(.system(size: 44)).foregroundStyle(blue)
@@ -296,26 +298,66 @@ struct IdentityDetailPage: View {
                     .background(Color(uiColor: .secondarySystemGroupedBackground),
                                 in: RoundedRectangle(cornerRadius: 23))
                 } else if platform == "cainiao" {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 15) {
                         HStack {
-                            Text("菜鸟官方身份码")
-                                .font(.headline)
+                            Label("菜鸟官方身份码", systemImage: "barcode")
+                                .font(.system(size: 17, weight: .semibold))
                             Spacer()
                             Button {
+                                cainiaoOpenLogin = false
+                                cainiaoNeedsWebLogin = false
                                 cainiaoPageVersion += 1
                             } label: {
-                                Label("刷新", systemImage: "arrow.clockwise")
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 17, weight: .medium))
                             }
-                            .font(.subheadline)
+                            .accessibilityLabel("刷新菜鸟身份码")
+                            .tint(blue)
                         }
-                        CainiaoOfficialIdentityWebView(
-                            accountID: ParcelAccounts.activeID(for: "taobao"))
-                            .id("\(ParcelAccounts.activeID(for: "taobao"))-\(cainiaoPageVersion)")
-                            .frame(height: 560)
-                            .background(Color.white,
-                                        in: RoundedRectangle(cornerRadius: 15))
-                            .clipShape(RoundedRectangle(cornerRadius: 15))
-                        Text("身份码由菜鸟官方网页实时生成。若页面要求重新登录或绑定手机号，请按官方提示完成。")
+                        if cainiaoNeedsWebLogin && !cainiaoOpenLogin {
+                            VStack(spacing: 13) {
+                                Image(systemName: "person.crop.circle.badge.exclamationmark")
+                                    .font(.system(size: 34))
+                                    .foregroundStyle(.orange)
+                                Text("菜鸟网页需要重新验证")
+                                    .font(.system(size: 17, weight: .semibold))
+                                Text("此账号虽然保存在本机，但菜鸟官方页面未接受当前登录会话。请在同一账号环境中完成验证。")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                Button("登录当前账号") {
+                                    cainiaoOpenLogin = true
+                                    cainiaoPageVersion += 1
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 245)
+                            .padding(16)
+                            .background(Color(uiColor: .tertiarySystemGroupedBackground),
+                                        in: RoundedRectangle(cornerRadius: 18))
+                        } else {
+                            CainiaoOfficialIdentityWebView(
+                                accountID: ParcelAccounts.activeID(for: "taobao"),
+                                showLogin: cainiaoOpenLogin,
+                                needsLogin: $cainiaoNeedsWebLogin)
+                                .id("\(ParcelAccounts.activeID(for: "taobao"))-\(cainiaoPageVersion)-\(cainiaoOpenLogin)")
+                                .frame(height: cainiaoOpenLogin ? 500 : 440)
+                                .background(Color.white,
+                                            in: RoundedRectangle(cornerRadius: 15))
+                                .clipShape(RoundedRectangle(cornerRadius: 15))
+                            if cainiaoOpenLogin {
+                                Button {
+                                    cainiaoOpenLogin = false
+                                    cainiaoNeedsWebLogin = false
+                                    cainiaoPageVersion += 1
+                                } label: {
+                                    Label("验证完成，返回身份码", systemImage: "checkmark.circle")
+                                        .frame(maxWidth: .infinity, minHeight: 42)
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                        Text("使用当前淘宝 / 菜鸟账号的独立网页会话，身份码由菜鸟官方实时生成，不使用模拟条码。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(16)
@@ -480,14 +522,14 @@ struct IdentityDetailPage: View {
             identity = nil
             return
         }
-        guard authorized else {
+        if platform == "cainiao" {
+            // Cookie markers are not proof that the Cainiao H5 SSO is valid.
+            // Always open the official page and let it verify the session.
             identity = nil
             failure = nil
             return
         }
-        if platform == "cainiao" {
-            // Cainiao's official H5 creates the actual scannable image. The
-            // older native MTOP result is not interchangeable with that image.
+        guard authorized else {
             identity = nil
             failure = nil
             return
@@ -514,17 +556,90 @@ struct IdentityDetailPage: View {
 
 private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
     let accountID: String
+    let showLogin: Bool
+    @Binding var needsLogin: Bool
+
+    private static let identityPage = URL(
+        string: "https://page.cainiao.com/cn-app-web/identity-code/index.html#/")!
+    private static let loginPage = URL(
+        string: "https://login.taobao.com/member/login.jhtml")!
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(needsLogin: $needsLogin, showingLogin: showLogin)
+    }
+
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
         let view = WKWebView(frame: .zero, configuration: config)
+        view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
-        // Mirrors the entry used by handycode: show the real official barcode.
-        let url = URL(string: "https://page.cainiao.com/cn-app-web/identity-code/index.html#/")!
-        view.load(URLRequest(url: url))
+        view.load(URLRequest(url: showLogin ? Self.loginPage : Self.identityPage))
         return view
     }
+
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
+        uiView.uiDelegate = nil
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        var needsLogin: Binding<Bool>
+        let showingLogin: Bool
+
+        init(needsLogin: Binding<Bool>, showingLogin: Bool) {
+            self.needsLogin = needsLogin
+            self.showingLogin = showingLogin
+        }
+
+        func webView(_ webView: WKWebView,
+                     createWebViewWith configuration: WKWebViewConfiguration,
+                     for action: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard action.targetFrame == nil,
+                  let url = action.request.url,
+                  ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+            webView.load(action.request)
+            return nil
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard !showingLogin else { return }
+            let url = webView.url
+            // The official H5 can render a login form inside its main page
+            // without redirecting. Inspect only a boolean status, never form
+            // values, barcodes, tokens or personal data.
+            for delay in [0.2, 1.2, 3.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
+                    guard let self, let webView, webView.url == url else { return }
+                    let probe = #"""
+                    (() => {
+                      const host = location.hostname;
+                      if (/^(login|passport)\./i.test(host)) return 'login';
+                      if (location.hostname !== 'page.cainiao.com') return 'loading';
+                      const image = document.getElementById('auth-code-id');
+                      if (image && image.complete && image.naturalWidth > 0) return 'ready';
+                      const page = (document.body && document.body.innerText || '').slice(0, 800);
+                      return /您需要登录才能继续访问|请先登录|账号密码登录|获取验证码/.test(page)
+                          ? 'login' : 'loading';
+                    })()
+                    """#
+                    webView.evaluateJavaScript(probe) { result, _ in
+                        guard let state = result as? String else { return }
+                        if state == "login" {
+                            self.needsLogin.wrappedValue = true
+                        } else if state == "ready" {
+                            self.needsLogin.wrappedValue = false
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 private struct IdentityFullScreenCode: View {

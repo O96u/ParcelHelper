@@ -425,16 +425,32 @@ private struct PddOfficialPhoneManager: UIViewRepresentable {
                     PddOfficialPhoneManager(accountID: account.id,
                                             useIdentityEntry: useIdentityEntry)
                         .id("\(officialRevision)-\(useIdentityEntry)")
-                    Button {
-                        useIdentityEntry.toggle()
-                        officialRevision += 1
-                    } label: {
-                        Text(useIdentityEntry ? "返回手机号管理" : "页面无法加载？从身份码入口进入")
-                            .font(.footnote)
-                            .frame(maxWidth: .infinity, minHeight: 42)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 9) {
+                        Text("如果官方网页一直加载，可以切换入口或重新加载")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            Button {
+                                officialRevision += 1
+                            } label: {
+                                Label("重新加载", systemImage: "arrow.clockwise")
+                                    .frame(maxWidth: .infinity, minHeight: 42)
+                            }
+                            .buttonStyle(.bordered)
+                            Button {
+                                useIdentityEntry.toggle()
+                                officialRevision += 1
+                            } label: {
+                                Label(useIdentityEntry ? "手机号管理" : "身份码入口",
+                                      systemImage: "arrow.left.arrow.right")
+                                    .frame(maxWidth: .infinity, minHeight: 42)
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.blue)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                     .background(Color(uiColor: .secondarySystemGroupedBackground))
                 }
                     .navigationTitle("拼多多官方手机号管理")
@@ -759,7 +775,7 @@ struct MultiAccountPage: View {
                     .clipShape(RoundedRectangle(cornerRadius: 13))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(account.nickname).font(.headline)
-                    Text(validAccounts.contains(account.id) ? "已授权" : "未授权 / 需要验证")
+                    Text(validAccounts.contains(account.id) ? "已授权" : "需要重新登录")
                         .font(.caption)
                         .foregroundStyle(validAccounts.contains(account.id) ?
                                          Color.green : Color.secondary)
@@ -778,27 +794,59 @@ struct MultiAccountPage: View {
                 }
             }
             Divider()
-            HStack(spacing: 12) {
-                Button("登录") {
+            HStack(spacing: 10) {
+                Button {
                     if kind == "pdd" {
                         pendingPddAccount = account
                         pddConsent = true
                     } else {
                         loginAccount = account
                     }
+                } label: {
+                    Label(validAccounts.contains(account.id) ? "重新登录" : "登录",
+                          systemImage: "person.crop.circle")
                 }
-                Button("设为默认") {
-                    ParcelAccounts.select(account.id, for: kind)
-                    revision += 1
-                }
-                .disabled(account.id == currentID)
-                Button(busy == account.id ? "同步中" : "同步") {
+                .buttonStyle(.bordered)
+                Button {
                     Task { await syncAccount(account) }
+                } label: {
+                    Label(busy == account.id ? "同步中" : "同步",
+                          systemImage: "arrow.clockwise")
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled(busy != nil || !validAccounts.contains(account.id))
+                Spacer(minLength: 0)
+                Menu {
+                    if account.id != currentID {
+                        Button {
+                            ParcelAccounts.select(account.id, for: kind)
+                            revision += 1
+                        } label: {
+                            Label("设为默认", systemImage: "checkmark.circle")
+                        }
+                    }
+                    Button {
+                        renameAccount = account
+                        renameValue = account.nickname
+                    } label: {
+                        Label("修改备注", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        removeAccount = account
+                    } label: {
+                        Label("解除授权", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 21))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 35, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("账号更多操作")
             }
             .font(.subheadline)
-            .buttonStyle(.bordered)
+            .controlSize(.regular)
             if kind == "pdd" && validAccounts.contains(account.id) {
                 Button {
                     managePhoneAccount = account
@@ -819,15 +867,6 @@ struct MultiAccountPage: View {
                 }
                 .buttonStyle(.plain)
             }
-            HStack {
-                Button("重命名") {
-                    renameAccount = account
-                    renameValue = account.nickname
-                }
-                Spacer()
-                Button("解除授权", role: .destructive) { removeAccount = account }
-            }
-            .font(.caption)
         }
         .padding(16)
         .background(Color(uiColor: .secondarySystemGroupedBackground),
