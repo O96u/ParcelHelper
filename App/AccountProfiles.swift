@@ -33,8 +33,10 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
     static func accounts(for platform: String) -> [ParcelAccountProfile] {
         let kind = canonical(platform)
         guard platforms.contains(kind) else { return [] }
+        let legacyName = UserDefaults.standard.string(
+            forKey: "native.account.legacy.name." + kind) ?? "原有账号"
         let legacy = ParcelAccountProfile(id: legacyID(kind), platform: kind,
-                                          nickname: "原有账号", createdAt: 0, isLegacy: true)
+                                          nickname: legacyName, createdAt: 0, isLegacy: true)
         return [legacy] + saved.filter { $0.platform == kind }
     }
     static func activeID(for platform: String) -> String {
@@ -60,6 +62,11 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
     static func rename(_ id: String, platform: String, to name: String) {
         let clean = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(32))
         guard !clean.isEmpty else { return }
+        if id == legacyID(platform) {
+            UserDefaults.standard.set(clean,
+                forKey: "native.account.legacy.name." + canonical(platform))
+            return
+        }
         var all = saved
         guard let index = all.firstIndex(where: { $0.id == id && $0.platform == canonical(platform) })
         else { return }
@@ -144,6 +151,7 @@ struct MultiAccountPage: View {
     let platformID: String
     @State private var revision = 0
     @State private var validAccounts: Set<String> = []
+    @State private var linkedPddPhones: [String: [NativeParcelSync.PddMobile]] = [:]
     @State private var loginAccount: ParcelAccountProfile?
     @State private var managePhoneAccount: ParcelAccountProfile?
     @State private var renameAccount: ParcelAccountProfile?
@@ -215,7 +223,9 @@ struct MultiAccountPage: View {
                 }
             }
         }
-        .sheet(item: $managePhoneAccount) { account in
+        .sheet(item: $managePhoneAccount, onDismiss: {
+            Task { await reload() }
+        }) { account in
             NavigationStack {
                 VStack(spacing: 8) {
                     Text("请在拼多多官方页面添加并验证大号的收件手机号。ParcelHelper 不读取短信验证码。")
@@ -248,7 +258,7 @@ struct MultiAccountPage: View {
         .confirmationDialog("解除账号授权？", isPresented: Binding(
             get: { removeAccount != nil }, set: { if !$0 { removeAccount = nil } }
         ), titleVisibility: .visible) {
-            Button("解除授权并删除该账号", role: .destructive) {
+            Button("解除该账号授权", role: .destructive) {
                 guard let target = removeAccount else { return }
                 removeAccount = nil
                 Task {
@@ -290,7 +300,8 @@ struct MultiAccountPage: View {
                     Text(account.nickname).font(.headline)
                     Text(validAccounts.contains(account.id) ? "已授权" : "未授权 / 需要验证")
                         .font(.caption)
-                        .foregroundStyle(validAccounts.contains(account.id) ? .green : .secondary)
+                        .foregroundStyle(validAccounts.contains(account.id) ?
+                                         Color.green : Color.secondary)
                 }
                 Spacer()
                 if account.id == currentID {
@@ -320,6 +331,11 @@ struct MultiAccountPage: View {
             .font(.subheadline)
             .buttonStyle(.bordered)
             if kind == "pdd" && validAccounts.contains(account.id) {
+                if let mobiles = linkedPddPhones[account.id], !mobiles.isEmpty {
+                    Text("已关联：" + mobiles.map { $0.masked }.joined(separator: "、"))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
                 Button("关联大号收件手机号（官方验证）") {
                     managePhoneAccount = account
                 }
@@ -327,11 +343,9 @@ struct MultiAccountPage: View {
                 .foregroundStyle(.blue)
             }
             HStack {
-                if !account.isLegacy {
-                    Button("重命名") {
-                        renameAccount = account
-                        renameValue = account.nickname
-                    }
+                Button("重命名") {
+                    renameAccount = account
+                    renameValue = account.nickname
                 }
                 Spacer()
                 Button("解除授权", role: .destructive) { removeAccount = account }
@@ -345,12 +359,18 @@ struct MultiAccountPage: View {
 
     private func reload() async {
         var found: Set<String> = []
+        var phones: [String: [NativeParcelSync.PddMobile]] = [:]
         for account in records {
             if await ParcelAccounts.hasSession(kind, accountID: account.id) {
                 found.insert(account.id)
+                if kind == "pdd" && PddAccountProtection.webAccessAllowed,
+                   let mobiles = try? await NativeParcelSync.pddBoundMobiles(accountID: account.id) {
+                    phones[account.id] = mobiles
+                }
             }
         }
         validAccounts = found
+        linkedPddPhones = phones
         revision += 1
     }
 
