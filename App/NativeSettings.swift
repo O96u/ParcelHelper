@@ -109,6 +109,7 @@ struct IdentitySettingsPage: View {
     @AppStorage("native.id.taobao.enabled") private var taobao = true
     @AppStorage("native.id.cainiao.enabled") private var cainiao = true
     @AppStorage("native.id.pdd.enabled") private var pdd = true
+    @AppStorage("native.id.jd.enabled") private var jd = true
     @State private var hasSession: [String: Bool] = [:]
     @State private var alert: String?
     @State private var destination: IdentityRoute?
@@ -119,8 +120,9 @@ struct IdentitySettingsPage: View {
                 row("淘宝", "taobao", enabled: $taobao)
                 row("菜鸟", "cainiao", enabled: $cainiao)
                 row("拼多多", "pdd", enabled: $pdd)
+                row("京东", "jd", enabled: $jd)
             } header: { Text("快捷入口设置") } footer: {
-                Text("身份码直接从已登录平台读取。淘宝与菜鸟共用淘宝登录，但二维码互不相同；关闭其中一项不会解除授权。")
+                Text("身份码只展示各平台默认账号的真实出码。淘宝与菜鸟共用默认淘宝账号；京东展示官方网页动态条形码。关闭入口不会解除授权。")
             }
             Section {
                 Button {
@@ -140,10 +142,14 @@ struct IdentitySettingsPage: View {
             case .accounts:
                 PlatformAccountsPage()
             case .code(let id):
-                IdentityDetailPage(
-                    title: id == "pdd" ? "拼多多" : id == "cainiao" ? "菜鸟" : "淘宝",
-                    platform: id
-                )
+                if id == "jd" {
+                    JDIdentityPage()
+                } else {
+                    IdentityDetailPage(
+                        title: id == "pdd" ? "拼多多" : id == "cainiao" ? "菜鸟" : "淘宝",
+                        platform: id
+                    )
+                }
             }
         }
         .task { await checkLogin() }
@@ -170,7 +176,8 @@ struct IdentitySettingsPage: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(name).font(.body).foregroundStyle(.primary)
                     Text(hasSession[id] == true
-                         ? (id == "cainiao" ? "已登录 · 实名身份码" : "已登录 · 动态取件码")
+                         ? (id == "cainiao" ? "已登录 · 实名身份码" :
+                            id == "jd" ? "已登录 · 官方条形码" : "已登录 · 动态取件码")
                          : "未授权，请在账号页登录")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -183,7 +190,8 @@ struct IdentitySettingsPage: View {
                 set: { value in
                     if value && hasSession[id] != true {
                         alert = "请先在「账号授权」中登录" +
-                            (id == "pdd" ? "拼多多" : id == "cainiao" ? "菜鸟" : "淘宝")
+                            (id == "pdd" ? "拼多多" : id == "cainiao" ? "菜鸟" :
+                              id == "jd" ? "京东" : "淘宝")
                     } else {
                         enabled.wrappedValue = value
                     }
@@ -198,6 +206,8 @@ struct IdentitySettingsPage: View {
         for platform in ["taobao", "cainiao", "pdd"] {
             hasSession[platform] = await NativeParcelSync.hasIdentitySession(platform)
         }
+        hasSession["jd"] = await ParcelAccounts.hasSession(
+            "jd", accountID: ParcelAccounts.activeID(for: "jd"))
     }
 }
 

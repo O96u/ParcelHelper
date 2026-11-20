@@ -268,6 +268,7 @@ struct PickupHome: View {
     @AppStorage("native.id.taobao.enabled") private var showTaobaoIdentity = true
     @AppStorage("native.id.cainiao.enabled") private var showCainiaoIdentity = true
     @AppStorage("native.id.pdd.enabled") private var showPddIdentity = true
+    @AppStorage("native.id.jd.enabled") private var showJDIdentity = true
 
     private var pending: [Parcel] {
         store.snapshot.parcels
@@ -324,13 +325,14 @@ struct PickupHome: View {
                     statChip("累计已取", value: "\(picked.count)", symbol: "archivebox.fill", tint: accent)
                 }
 
-                if showTaobaoIdentity || showCainiaoIdentity || showPddIdentity {
+                if showTaobaoIdentity || showCainiaoIdentity || showPddIdentity || showJDIdentity {
                     VStack(alignment: .leading, spacing: 10) {
                         DashboardSection("身份码", subtitle: "到站后快速出示")
                         HStack(spacing: 9) {
                             if showTaobaoIdentity { identityButton("淘宝", platform: "taobao") }
                             if showCainiaoIdentity { identityButton("菜鸟", platform: "cainiao") }
                             if showPddIdentity { identityButton("拼多多", platform: "pdd") }
+                            if showJDIdentity { identityButton("京东", platform: "jd") }
                         }
                         HStack(spacing: 6) {
                             Image(systemName: "lock.shield")
@@ -433,14 +435,18 @@ struct PickupHome: View {
 
     private func identityButton(_ name: String, platform: String) -> some View {
         NavigationLink {
-            IdentityDetailPage(title: name, platform: platform)
+            if platform == "jd" {
+                JDIdentityPage()
+            } else {
+                IdentityDetailPage(title: name, platform: platform)
+            }
         } label: {
             VStack(spacing: 7) {
                 Image("brand_" + platform)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
-                    .frame(width: 47, height: 47)
+                    .frame(width: 42, height: 42)
                     .clipShape(RoundedRectangle(cornerRadius: 13))
                 Text(name)
                     .font(.system(size: 13, weight: .semibold))
