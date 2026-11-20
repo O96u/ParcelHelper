@@ -4,6 +4,45 @@ import WebKit
 // 京东身份码展示参考 HandyCode (MIT License).
 // Only official JD-generated SVG content is shown; no code, cookie or
 // credentials are sent through the WKWebView-to-Swift message bridge.
+private struct JDBarcodeImage: Identifiable {
+    let id = UUID()
+    let bitmap: UIImage
+}
+private struct JDBarcodeFullscreen: View {
+    @Environment(\.dismiss) private var dismiss
+    let bitmap: UIImage
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Color.white.ignoresSafeArea()
+                Image(uiImage: bitmap)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: min(geometry.size.height * 0.75, 720),
+                           height: min(geometry.size.width * 0.58, 240))
+                    .rotationEffect(.degrees(90))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .font(.headline).foregroundStyle(.black)
+                                .frame(width: 44, height: 44)
+                                .background(Color.black.opacity(0.06), in: Circle())
+                        }
+                    }
+                    Spacer()
+                    Text("京东官方动态条形码")
+                        .font(.caption).foregroundStyle(.gray)
+                }
+                .padding(24)
+            }
+        }
+        .preferredColorScheme(.light)
+    }
+}
 private enum JDIdentityState: Equatable {
     case loading
     case ready
@@ -19,6 +58,7 @@ struct JDIdentityPage: View {
     @State private var expanded = false
     @State private var refreshIndex = 0
     @State private var sessionValid = false
+    @State private var zoom: JDBarcodeImage?
     private let accent = Color(red: 0.19, green: 0.49, blue: 0.96)
     private var accountName: String {
         ParcelAccounts.displayName(accountID, platform: "jd")
@@ -59,13 +99,21 @@ struct JDIdentityPage: View {
                 .tint(accent)
                 ZStack {
                     if !accountID.isEmpty && sessionValid {
-                        JDIdentityWebView(accountID: accountID,
-                                          refreshIndex: refreshIndex,
-                                          dark: colorScheme == .dark) { newState, isExpanded in
-                            guard accountID == ParcelAccounts.activeID(for: "jd") else { return }
-                            state = newState
-                            expanded = isExpanded
-                        }
+                        JDIdentityWebView(
+                            accountID: accountID,
+                            refreshIndex: refreshIndex,
+                            dark: colorScheme == .dark,
+                            onUpdate: { newState, isExpanded in
+                                guard accountID == ParcelAccounts.activeID(for: "jd") else { return }
+                                state = newState
+                                expanded = isExpanded
+                                if newState != .ready { zoom = nil }
+                            },
+                            onZoom: { bitmap in
+                                guard state == .ready,
+                                      accountID == ParcelAccounts.activeID(for: "jd") else { return }
+                                zoom = JDBarcodeImage(bitmap: bitmap)
+                            })
                         .id(accountID)
                         .frame(height: expanded && state == .ready ? 390 : 265)
                         .opacity(state == .ready ? 1 : 0.01)
@@ -113,8 +161,6 @@ struct JDIdentityPage: View {
                 .background(Color(uiColor: .secondarySystemGroupedBackground),
                             in: RoundedRectangle(cornerRadius: 22))
                 .clipShape(RoundedRectangle(cornerRadius: 22))
-                Text("仅显示账号授权中设为默认的京东账号。条形码由京东官方网页实时生成，点击可放大；刷新失败时不会继续显示旧码。")
-                    .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 4)
             }
             .padding(.horizontal, 18)
             .padding(.top, 20)
@@ -123,6 +169,9 @@ struct JDIdentityPage: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("京东身份码")
         .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(item: $zoom) { item in
+            JDBarcodeFullscreen(bitmap: item.bitmap)
+        }
         .task { syncDefault() }
         .onAppear { syncDefault() }
         .onChange(of: scenePhase) { _, next in
@@ -172,11 +221,12 @@ private struct JDIdentityWebView: UIViewRepresentable {
     let refreshIndex: Int
     let dark: Bool
     let onUpdate: (JDIdentityState, Bool) -> Void
+    let onZoom: (UIImage) -> Void
     private static let entry = URL(
         string: "https://convenient-h5.jd.com/identityCode?channel=xueshengjirukou")!
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(revision: refreshIndex, onUpdate: onUpdate)
+        Coordinator(revision: refreshIndex, onUpdate: onUpdate, onZoom: onZoom)
     }
     func makeUIView(context: Context) -> WKWebView {
         let controller = WKUserContentController()
@@ -203,6 +253,7 @@ private struct JDIdentityWebView: UIViewRepresentable {
     }
     func updateUIView(_ view: WKWebView, context: Context) {
         context.coordinator.onUpdate = onUpdate
+        context.coordinator.onZoom = onZoom
         if context.coordinator.dark != dark {
             context.coordinator.dark = dark
             view.evaluateJavaScript("window.PHJDIdentity&&window.PHJDIdentity.setDark(" +
@@ -222,6 +273,7 @@ private struct JDIdentityWebView: UIViewRepresentable {
     }
     static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
         coordinator.onUpdate = { _, _ in }
+        coordinator.onZoom = { _ in }
         view.stopLoading()
         view.navigationDelegate = nil
         view.uiDelegate = nil
@@ -249,9 +301,12 @@ private struct JDIdentityWebView: UIViewRepresentable {
         var revision: Int
         var dark = false
         var onUpdate: (JDIdentityState, Bool) -> Void
-        init(revision: Int, onUpdate: @escaping (JDIdentityState, Bool) -> Void) {
+        var onZoom: (UIImage) -> Void
+        init(revision: Int, onUpdate: @escaping (JDIdentityState, Bool) -> Void,
+             onZoom: @escaping (UIImage) -> Void) {
             self.revision = revision
             self.onUpdate = onUpdate
+            self.onZoom = onZoom
         }
         func userContentController(_ controller: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
@@ -266,7 +321,40 @@ private struct JDIdentityWebView: UIViewRepresentable {
             case "loading": onUpdate(.loading, false)
             case "failed": onUpdate(.failed("京东未返回有效身份码，请刷新重试"), false)
             case "expired": onUpdate(.failed("京东身份码已过期，请刷新重试"), false)
+            case "zoom": snapshotBarcode(in: webView)
             default: break
+            }
+        }
+        private func snapshotBarcode(in webView: WKWebView) {
+            // Capture the actual official JD SVG rendering, not an inferred
+            // numeric code or a locally fabricated verification image.
+            let geometryScript = #"""
+            (() => {
+              const element=document.getElementById('ph-jd-barcode');
+              if (!element || !element.querySelector('svg')) return null;
+              const box=element.getBoundingClientRect();
+              return {x:box.left,y:box.top,w:box.width,h:box.height,viewport:innerWidth};
+            })()
+            """#
+            webView.evaluateJavaScript(geometryScript) { [weak self, weak webView] result, _ in
+                guard let self, let webView, let data = result as? [String: NSNumber],
+                      let viewport = data["viewport"]?.doubleValue, viewport > 0,
+                      let x = data["x"]?.doubleValue,
+                      let y = data["y"]?.doubleValue,
+                      let width = data["w"]?.doubleValue,
+                      let height = data["h"]?.doubleValue,
+                      width > 40, height > 20 else { return }
+                let scale = Double(webView.bounds.width) / viewport
+                let rect = CGRect(x: x * scale, y: y * scale,
+                                  width: width * scale, height: height * scale)
+                    .intersection(webView.bounds)
+                guard !rect.isNull, rect.width > 40, rect.height > 20 else { return }
+                let config = WKSnapshotConfiguration()
+                config.rect = rect
+                webView.takeSnapshot(with: config) { image, error in
+                    guard error == nil, let image else { return }
+                    self.onZoom(image)
+                }
             }
         }
         func webView(_ webView: WKWebView,
@@ -384,13 +472,11 @@ private struct JDIdentityWebView: UIViewRepresentable {
         '#ph-jd *{box-sizing:border-box}',
         '#ph-jd-inner{width:100%;text-align:center;transition:transform .3s}',
         '#ph-jd-phone{font-size:16px;line-height:24px;margin:2px 0 15px}',
-        '#ph-jd-barcode{display:block;width:100%;background:white;padding:12px;border-radius:12px;outline:none}',
-        '#ph-jd-barcode svg{width:100%;height:90px;display:block}',
+        '#ph-jd-barcode{display:block;width:100%;background:white;padding:12px;border-radius:12px;outline:none;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}',
+        '#ph-jd-barcode svg{width:100%;height:90px;display:block;pointer-events:none;user-select:none;-webkit-user-select:none}',
         '#ph-jd-note{font-size:12px;color:#7a8290;margin:13px 0 0}',
         'html[data-ph-jd-dark] #ph-jd{color:#f0f2f7}',
         'html[data-ph-jd-dark] #ph-jd-note{color:#9da6b7}',
-        '#ph-jd.expanded{height:390px}',
-        '#ph-jd.expanded #ph-jd-inner{transform:rotate(90deg) scale(.88)}',
         '@media(prefers-reduced-motion:reduce){#ph-jd-inner{transition:none}}'
       ].join('');
       (document.head||document.documentElement).appendChild(style);
@@ -444,15 +530,15 @@ private struct JDIdentityWebView: UIViewRepresentable {
         mount.style.visibility='visible';ready=true;emit('ready');
       }
       requests.changed=probe;
-      function toggle(){
+      function showZoom(event){
+        if(event){event.preventDefault();event.stopPropagation();}
         if(!ready)return;
-        expanded=!expanded;
-        mount.classList.toggle('expanded',expanded);
-        last='';probe();
+        try{window.webkit.messageHandlers.parcelJDIdentity.postMessage({state:'zoom'});}
+        catch(e){}
       }
-      barcode.addEventListener('click',toggle);
-      barcode.addEventListener('keydown',function(e){
-        if(e.key==='Enter'||e.key===' '){e.preventDefault();toggle();}
+      barcode.addEventListener('click',showZoom);
+      barcode.addEventListener('keydown',function(event){
+        if(event.key==='Enter'||event.key===' '){showZoom(event);}
       });
       window.PHJDIdentity={
         setDark:function(d){document.documentElement.toggleAttribute('data-ph-jd-dark',!!d);},
