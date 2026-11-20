@@ -221,6 +221,7 @@ struct IdentityDetailPage: View {
     let platform: String
     @Environment(\.scenePhase) private var scenePhase
     @State private var identity: NativeParcelSync.IdentityResult?
+    @State private var identityAccountID = ""
     @State private var now = Date()
     @State private var fetching = false
     @State private var authorized = false
@@ -230,7 +231,10 @@ struct IdentityDetailPage: View {
     @State private var notice: String?
     private let blue = Color(red: 0.19, green: 0.49, blue: 0.96)
     private var validCode: String? {
-        guard let identity, identity.expiresAt > now, authorized else { return nil }
+        guard let identity, identity.expiresAt > now, authorized,
+              identityAccountID == ParcelAccounts.activeID(for: platform) else {
+            return nil
+        }
         return identity.code
     }
     private var remaining: Int {
@@ -262,6 +266,18 @@ struct IdentityDetailPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Label("默认账号：" + ParcelAccounts.displayName(
+                        ParcelAccounts.activeID(for: platform), platform: platform),
+                          systemImage: "person.crop.circle")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    NavigationLink {
+                        MultiAccountPage(platformID: platform)
+                    } label: {
+                        Text("管理默认账号").font(.subheadline)
+                    }
+                }
                 if !authorized {
                     VStack(spacing: 15) {
                         Image(systemName: "person.badge.key")
@@ -427,7 +443,16 @@ struct IdentityDetailPage: View {
         guard !fetching else { return }
         fetching = true
         defer { fetching = false }
+        let requestedAccountID = ParcelAccounts.activeID(for: platform)
+        if requestedAccountID != identityAccountID {
+            identity = nil
+            authorized = false
+        }
         authorized = await NativeParcelSync.hasIdentitySession(platform)
+        guard requestedAccountID == ParcelAccounts.activeID(for: platform) else {
+            identity = nil
+            return
+        }
         guard authorized else {
             identity = nil
             failure = nil
@@ -435,9 +460,11 @@ struct IdentityDetailPage: View {
         }
         do {
             let response = try await NativeParcelSync.identityCode(platform)
-            guard !response.code.isEmpty, response.expiresAt > Date() else {
+            guard requestedAccountID == ParcelAccounts.activeID(for: platform),
+                  !response.code.isEmpty, response.expiresAt > Date() else {
                 throw NativeSyncError.badResponse("接口未返回有效身份码")
             }
+            identityAccountID = requestedAccountID
             identity = response
             now = Date()
             failure = nil
