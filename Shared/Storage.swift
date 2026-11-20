@@ -266,8 +266,10 @@ import WidgetKit
             if existing.arrivedAt == nil && !existing.isDone { existing.arrivedAt = incoming.arrivedAt }
             if existing.source == nil || existing.source?.isEmpty == true {
                 existing.source = "douyin"
-                existing.srcApp = incoming.srcApp
             }
+            // A confirmed Douyin import retains its small source logo even
+            // if a carrier/platform had previously created this shipment.
+            existing.srcApp = incoming.srcApp
             snapshot.parcels[index] = existing
             persist()
             return true

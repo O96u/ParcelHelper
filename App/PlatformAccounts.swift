@@ -101,7 +101,8 @@ enum PlatformCatalog {
         .init(id: "pdd", title: "拼多多", login: URL(string: "https://m.pinduoduo.net/mdkd/package?tab=ID_CODE"), validCookie: "PDDAccessToken", domain: "yangkeduo.com", note: "网页登录", home: URL(string: "https://mobile.yangkeduo.com/") ),
         .init(id: "fengchao", title: "丰巢", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.fcbox.com/") ),
         .init(id: "mi", title: "小米快递聚合", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.mi.com/") ),
-        .init(id: "douyin", title: "抖音", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.douyin.com/") )
+        .init(id: "douyin", title: "抖音", login: nil, validCookie: nil, domain: nil, note: "手动导入", home: URL(string: "https://www.douyin.com/") ),
+        .init(id: "kdniao", title: "快递鸟", login: nil, validCookie: nil, domain: nil, note: "查询服务", home: URL(string: "https://www.kdniao.com/") )
     ]
 }
 
@@ -186,12 +187,12 @@ struct PlatformAccountsPage: View {
 
     private let blue = Color(red: 0.19, green: 0.49, blue: 0.96)
     private var majorPlatforms: [PlatformWebsite] {
-        PlatformCatalog.rows.filter { $0.id != "douyin" }
+        PlatformCatalog.rows
     }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("授权电商平台")
+                Text("平台与物流服务")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 18)
@@ -237,54 +238,6 @@ struct PlatformAccountsPage: View {
                 .disabled(isSyncing)
                 .padding(.horizontal, 18)
 
-                Text("其他")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-                    .padding(.horizontal, 18).padding(.top, 29).padding(.bottom, 11)
-                VStack(spacing: 0) {
-                    NavigationLink {
-                        DouyinImportView()
-                    } label: {
-                        HStack(spacing: 14) {
-                            PlatformBrandMark(id: "douyin")
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("抖音").font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
-                                Text("打开官方页面 · 复制后自动识别").font(.system(size: 12)).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-
-                        }.padding(.horizontal, 19).frame(minHeight: 69)
-                    }.buttonStyle(.plain)
-                    Divider().padding(.leading, 76).padding(.trailing, 16)
-                    NavigationLink {
-                        CourierSettings()
-                    } label: {
-                        HStack(spacing: 14) {
-                            Image("brand_kdniao")
-                                .resizable().scaledToFill()
-                                .frame(width: 42, height: 42)
-                                .clipShape(Circle())
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("快递鸟")
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundStyle(.primary)
-                                Text(NativeTracking.accountStatus)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(NativeTracking.isConfigured ? blue : .secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            if NativeTracking.isConfigured {
-                                Text("已配置")
-                                    .font(.caption)
-                                    .foregroundStyle(blue)
-                            }
-
-                        }.padding(.horizontal, 19).frame(minHeight: 69)
-                    }.buttonStyle(.plain)
-                }
-                .background(Color(uiColor: .secondarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .padding(.horizontal, 18)
             }
             .padding(.bottom, 120)
         }
@@ -389,51 +342,30 @@ struct PlatformAccountsPage: View {
 
     private func row(_ platform: PlatformWebsite) -> some View {
         let authorized = isAuthorized(platform)
-        return HStack(spacing: 14) {
-            NavigationLink {
-                destination(for: platform)
-            } label: {
-                HStack(spacing: 14) {
-                    PlatformBrandMark(id: platform.id)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(platform.title)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.primary)
-                        Text(detailStatus(platform, authorized: authorized))
-                            .font(.system(size: 12))
-                            .foregroundStyle(authorized ? blue : .secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+        return NavigationLink {
+            destination(for: platform)
+        } label: {
+            HStack(spacing: 14) {
+                PlatformBrandMark(id: platform.id)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(platform.title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(detailStatus(platform, authorized: authorized))
+                        .font(.system(size: 12))
+                        .foregroundStyle(authorized ? blue : .secondary)
+                        .lineLimit(1)
                 }
-                .contentShape(Rectangle())
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity)
-            if !["taobao", "jd", "pdd", "fengchao", "cainiao"].contains(platform.id) {
-            Button {
-                if authorized { revokeTarget = platform }
-                else { authorize(platform) }
-            } label: {
-                Text(authorized ? "解除授权" : "授权")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(authorized ? Color(red: 0.95, green: 0.36, blue: 0.31) : .white)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 35)
-                    .background(
-                        authorized ? Color.red.opacity(0.17) : blue,
-                        in: Capsule()
-                    )
-            }
-            .buttonStyle(.plain)
-            }
-
+            .padding(.horizontal, 19)
+            .frame(minHeight: 72)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 19)
-        .frame(minHeight: 72)
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private func destination(for platform: PlatformWebsite) -> some View {
@@ -441,6 +373,8 @@ struct PlatformAccountsPage: View {
         case "fengchao", "pdd", "taobao", "jd", "cainiao":
             MultiAccountPage(platformID: platform.id)
         case "mi": XiaomiAccountPage()
+        case "douyin": DouyinImportView()
+        case "kdniao": CourierSettings()
         default: PlatformAccountDetail(platform: platform)
         }
     }
@@ -461,11 +395,15 @@ struct PlatformAccountsPage: View {
     private func isAuthorized(_ platform: PlatformWebsite) -> Bool {
         switch platform.id {
         case "mi": return NativeMiExpress.hasSession
+        case "kdniao": return NativeTracking.isConfigured
+        case "douyin": return false
         default: return (accountCounts[platform.id] ?? 0) > 0 ||
                        authenticated.contains(platform.id)
         }
     }
     private func detailStatus(_ platform: PlatformWebsite, authorized: Bool) -> String {
+        if platform.id == "douyin" { return "手动导入物流单号" }
+        if platform.id == "kdniao" { return NativeTracking.accountStatus }
         guard authorized else { return "未授权" }
         if ["taobao", "cainiao", "jd", "pdd", "fengchao"].contains(platform.id) {
             return "已授权 \(accountCounts[platform.id] ?? 1) 个账号"

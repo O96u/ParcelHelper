@@ -178,7 +178,8 @@ private struct PickupParcelRow: View {
         HStack(spacing: 12) {
             CourierBrandView(company: parcel.trackCompany ?? "",
                              shipperCode: parcel.shipperCode ?? "",
-                             source: parcel.source ?? parcel.srcApp?.id, size: 44)
+                             source: parcel.srcApp?.id == "douyin" ? "douyin" :
+                                  (parcel.source ?? parcel.srcApp?.id), size: 44)
             VStack(alignment: .leading, spacing: 5) {
                 Text(parcel.displayCode.isEmpty ? "待取件" : parcel.displayCode)
                     .font(.system(size: 21, weight: .bold, design: .rounded))
@@ -222,7 +223,8 @@ struct ParcelCell: View {
         HStack(spacing: 12) {
             CourierBrandView(company: parcel.trackCompany ?? "",
                              shipperCode: parcel.shipperCode ?? "",
-                             source: parcel.source ?? parcel.srcApp?.id, size: 48)
+                             source: parcel.srcApp?.id == "douyin" ? "douyin" :
+                                  (parcel.source ?? parcel.srcApp?.id), size: 48)
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text(mainTitle)
@@ -981,7 +983,8 @@ struct ParcelDetail: View {
             HStack(alignment: .top, spacing: 12) {
                 CourierBrandView(company:p.trackCompany ?? "",
                     shipperCode:p.shipperCode ?? "",
-                    source:p.source ?? p.srcApp?.id,size:57)
+                    source:p.srcApp?.id == "douyin" ? "douyin" :
+                         (p.source ?? p.srcApp?.id),size:57)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(p.trackCompany ?? p.title)
                         .font(.system(size: 20, weight: .bold))
@@ -1928,19 +1931,14 @@ struct CourierSettings: View {
                     Image(systemName: loggedIn ? "checkmark.shield.fill" : "person.crop.circle")
                         .foregroundStyle(loggedIn ? Color.green : accent)
                 }
-                Button {
-                    officialLogin = true
-                } label: {
-                    Label(loggedIn ? "切换账号 / 重新登录" :
-                          (configured ? "登录 / 关联快递鸟账号" : "登录 / 注册快递鸟"),
-                          systemImage: "person.crop.circle.badge.checkmark")
-                }
-                .tint(accent)
                 if !configured {
-                    Text("完成官方登录后，可尝试读取 API 密钥并保存到本机钥匙串。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } else if !loggedIn {
-                    Text("已有 API 配置。如需显示官方登录状态，请重新完成一次网页授权。")
+                    Button {
+                        officialLogin = true
+                    } label: {
+                        Label("授权快递鸟", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .tint(accent)
+                    Text("授权后可尝试读取账号的 API 密钥，也可以在下方手动配置。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             } header: {
@@ -1973,13 +1971,20 @@ struct CourierSettings: View {
                 }.disabled(!configured)
             }
             Section("状态") {
-                LabeledContent("账号授权", value: loggedIn ? "已登录" : "未检测到官方登录")
+                LabeledContent("配置方式", value: loggedIn ? "官方账号" : configured ? "API 密钥" : "未配置")
                 LabeledContent("查询服务", value: configured ? "已配置" : "尚未配置")
-                Text("登录或注册快递鸟本身不等于已开通查询 API；账号需要存在有效密钥。查询时优先复用已授权平台的物流数据，必要时使用快递鸟接口。")
+                Text("快递鸟查询需配置有效 API 密钥。账号已配置时无需重复登录；查询时仍优先复用其他平台的物流数据。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("物流服务")
+        .navigationTitle("快递鸟")
+        .onAppear {
+            businessID = NativeTracking.get("businessID")
+            key = NativeTracking.get("apiKey")
+            configured = NativeTracking.isConfigured
+            loggedIn = NativeTracking.hasOfficialLogin
+            accountStatus = NativeTracking.accountStatus
+        }
         .sheet(isPresented: $officialLogin) {
             NavigationStack {
                 KdniaoOfficialLoginPage {

@@ -46,7 +46,6 @@ struct CourierBrandView: View {
         case "cainiao": return ("菜", Color(red: 0.17, green: 0.48, blue: 0.95))
         case "fengchao": return ("丰", Color(red: 0.93, green: 0.58, blue: 0.06))
         case "mi": return ("米", Color(red: 1.0, green: 0.42, blue: 0.06))
-        case "douyin": return ("抖", .black)
         case "kdniao": return ("快", .blue)
         default: return nil
         }
@@ -88,7 +87,21 @@ struct CourierBrandView: View {
             .frame(width: size, height: size)
             .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
 
-            if let badge = sourceMark {
+            if source == "douyin" {
+                Image("brand_douyin")
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: size * 0.36, height: size * 0.36)
+                    .background(Color.white,
+                                in: RoundedRectangle(cornerRadius: size * 0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: size * 0.10))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: size * 0.10)
+                            .strokeBorder(Color(uiColor: .systemBackground), lineWidth: 1.5)
+                    }
+                    .offset(x: size * 0.09, y: size * 0.09)
+            } else if let badge = sourceMark {
                 Text(badge.text)
                     .font(.system(size: size * 0.22, weight: .heavy, design: .rounded))
                     .foregroundStyle(.white)

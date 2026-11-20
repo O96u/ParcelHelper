@@ -26,10 +26,10 @@ struct DouyinImportView: View {
     var body: some View {
         Form {
             Section("抖音商城") {
-                Label("登录授权待定", systemImage: "person.crop.circle.badge.clock")
+                Label("物流单号导入", systemImage: "shippingbox.and.arrow.backward")
                     .font(.headline)
                     .foregroundStyle(.secondary)
-                Text("暂不支持抖音商城账号登录或自动读取购物订单。你可以从抖音订单的「查看物流」中复制快递单号，在下方直接导入，无需在包裹助手重复登录抖音。")
+                Text("从抖音订单的「查看物流」复制运单号即可导入。当前不支持自动读取抖音订单；导入后会显示抖音来源小图标。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
