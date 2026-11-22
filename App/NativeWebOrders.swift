@@ -31,8 +31,13 @@ private struct WebShipment: Decodable {
     private var pending: [String] = []
     private var isRunning = false
     private var timeoutTask: Task<Void, Never>?
+    private var queueDecisions: [String: String] = [:]
 
     private init() {}
+
+    func lastQueueDecision(_ platform: String, accountID: String) -> String {
+        queueDecisions[platform + "|" + accountID] ?? "当前账号尚未加入同步队列"
+    }
 
     private func recordOutcome(platform: String, accountID: String?, success: Bool) {
         guard let accountID else { return }
@@ -67,45 +72,55 @@ private struct WebShipment: Decodable {
     @discardableResult
     func request(_ platform: String, force: Bool = false, accountID: String? = nil) async -> Bool {
         guard platform == "jd" || platform == "taobao" || platform == "pdd" else { return false }
-        // Never open a hidden Pinduoduo H5 order page without explicit opt-in.
-        guard platform != "pdd" || PddAccountProtection.webAccessAllowed else { return false }
-        if platform == "taobao",
-           (UserDefaults.standard.object(forKey: "native.platform.enabled.taobao") as? Bool) == false {
+        let selected = accountID ?? ParcelAccounts.activeID(for: platform)
+        let job = platform + "|" + selected
+
+        // Never start hidden PDD or a user-disabled Taobao source.
+        if platform == "pdd" && !PddAccountProtection.webAccessAllowed {
+            queueDecisions[job] = "拼多多网页访问未开启"
             return false
         }
-        let selected = accountID ?? ParcelAccounts.activeID(for: platform)
+        if platform == "taobao" &&
+            (UserDefaults.standard.object(forKey: "native.platform.enabled.taobao") as? Bool) == false {
+            queueDecisions[job] = "淘宝购物订单来源已关闭"
+            return false
+        }
         let retryAfter = UserDefaults.standard.double(
             forKey: "native.web.retry." + platform + "." + selected + ".after"
         )
         if !force && Date().timeIntervalSince1970 < retryAfter {
+            queueDecisions[job] = "自动同步暂缓，等候失败退避窗口结束"
             ParcelRunLog.record(platform, "自动同步暂缓：此前网页读取失败，等待退避时间")
             return false
         }
         guard await ParcelAccounts.hasSession(platform, accountID: selected) else {
+            queueDecisions[job] = "当前账号网页登录会话失效，请重新登录"
             ParcelRunLog.record(platform, "未排队：当前账号网页登录会话无效")
             return false
         }
         let key = "native.web.autosync.at." + platform + "." + selected
         let now = Date().timeIntervalSince1970
-        let job = platform + "|" + selected
-        // An already-running/queued job is success, not a failed manual
-        // request. Check this before cooldown and retry-backoff UI logic.
         if (activePlatform == platform && activeAccountID == selected) ||
-            pending.contains(job) { return true }
+            pending.contains(job) {
+            queueDecisions[job] = "订单同步任务已在队列中"
+            return true
+        }
         let manualKey = "native.web.manual.lastAt." + platform + "." + selected
         if force && now - UserDefaults.standard.double(forKey: manualKey) < 30 {
+            let remaining = Int(ceil(30 - (now - UserDefaults.standard.double(forKey: manualKey))))
+            queueDecisions[job] = "30 秒防重复：约 \(max(1, remaining)) 秒后可重试"
             ParcelRunLog.record(platform, "手动同步防重复：30 秒内已有请求")
             return false
         }
-        // Use the same foreground auto-refresh interval as the native
-        // platform synchronizer; manual force-sync remains available.
         let interval = TimeInterval(RefreshPolicy.minutes) * 60
         if !force && now - UserDefaults.standard.double(forKey: key) < interval {
+            queueDecisions[job] = "未达到前台自动刷新间隔"
             return false
         }
         UserDefaults.standard.set(now, forKey: key)
         if force { UserDefaults.standard.set(now, forKey: manualKey) }
         pending.append(job)
+        queueDecisions[job] = "已加入网页同步队列，结果稍后写入包裹"
         ParcelRunLog.record(platform, force ? "手动同步已加入队列" : "前台自动同步已加入队列")
         startNext()
         return true
