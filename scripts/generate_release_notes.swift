@@ -5,18 +5,23 @@ import Foundation
 let env = ProcessInfo.processInfo.environment
 let version = env["APP_VERSION"] ?? "1.2.0"
 let previous = env["PREVIOUS_TAG"] ?? ""
-
-func isPreV12Line(_ tag: String) -> Bool {
-    let raw = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-    let parts = raw.split(separator: ".")
-    guard parts.count == 3, let major = Int(parts[0]), let minor = Int(parts[1]) else { return false }
-    return major < 1 || (major == 1 && minor < 2)
-}
-
-// v1.2.0 为新版发版线起点：无上一标签，或上一标签仍属于 v1.1 及以前时，使用手写基准说明。
-let useBaseline = version == "1.2.0" && (previous.isEmpty || isPreV12Line(previous))
 let destination = URL(fileURLWithPath: "build/release-notes.md")
-let baseline = URL(fileURLWithPath: "docs/RELEASE_NOTES.md")
+
+// Once a release version receives its own CHANGELOG section, publish that
+// reviewed Chinese content instead of auto-generated English commit titles.
+func changelogNotes(for version: String) -> String? {
+    guard let text = try? String(contentsOfFile: "CHANGELOG.md", encoding: .utf8) else {
+        return nil
+    }
+    let lines = text.components(separatedBy: .newlines)
+    guard let first = lines.firstIndex(where: {
+        $0.hasPrefix("## [\(version)]") || $0.hasPrefix("## \(version) ")
+    }) else { return nil }
+    let content = lines.dropFirst(first + 1).prefix(while: { !$0.hasPrefix("## ") })
+        .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !content.isEmpty else { return nil }
+    return "# ParcelHelper v\(version)\n\n" + content
+}
 
 func gitLog(since tag: String? = nil) -> [String] {
     let process = Process()
@@ -90,8 +95,8 @@ let installation = """
 """
 
 let releaseNotes: String
-if useBaseline {
-    releaseNotes = try String(contentsOf: baseline, encoding: .utf8)
+if let curated = changelogNotes(for: version) {
+    releaseNotes = curated + "\n\n" + installation + "\n"
 } else {
     let messages = previous.isEmpty ? gitLog() : gitLog(since: previous)
     var entries: [Kind: [String]] = [:]
@@ -115,4 +120,4 @@ if useBaseline {
 try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
                                         withIntermediateDirectories: true)
 try releaseNotes.write(to: destination, atomically: true, encoding: .utf8)
-print("已生成 v\(version) 中文版发行说明（仅含非空分类）")
+print("已生成 v\(version) 中文版发行说明（优先使用 CHANGELOG.md）")
