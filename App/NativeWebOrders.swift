@@ -312,6 +312,7 @@ struct NativeWebOrderPage: View {
                     received = true
                     if let failure {
                         detail = failure
+                        ParcelRunLog.record(platform, "手动网页读取失败：原因见页面提示")
                     } else {
                         var scoped = packages
                         let selected = accountID ?? ParcelAccounts.activeID(for: platform)
@@ -321,6 +322,7 @@ struct NativeWebOrderPage: View {
                         UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
                         let count = NativeParcelSync.merge(scoped,
                             notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
+                        ParcelRunLog.record(platform, "手动读取完成：有效运单 \(scoped.count) 件，新增或更新 \(count) 件")
                         if count == 0 { ParcelStore.shared.persist() }
                         UserDefaults.standard.set(true, forKey: baselineKey)
                         UserDefaults.standard.set(syncedAt,
