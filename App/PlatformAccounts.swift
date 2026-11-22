@@ -157,12 +157,50 @@ enum PlatformCatalog {
     }
 }
 
+// A local vector rendering of the recognisable blue "100" brand mark.
+// Avoid an unreliable remote image or a generic SF Symbol for 快递100.
+struct Kuaidi100BrandMark: View {
+    var size: CGFloat = 42
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                .fill(Color(red: 0.06, green: 0.52, blue: 0.97))
+            Circle()
+                .fill(.white.opacity(0.08))
+                .frame(width: size * 0.95, height: size * 0.95)
+                .offset(x: size * 0.19, y: size * 0.28)
+                .clipped()
+            Text("100")
+                .font(.system(size: size * 0.50, weight: .black, design: .rounded))
+                .italic()
+                .tracking(-size * 0.045)
+                .foregroundStyle(.white)
+                .minimumScaleFactor(0.75)
+                .offset(y: -size * 0.055)
+            Path { path in
+                path.move(to: CGPoint(x: size * 0.27, y: size * 0.64))
+                path.addQuadCurve(to: CGPoint(x: size * 0.76, y: size * 0.64),
+                                  control: CGPoint(x: size * 0.53, y: size * 0.90))
+            }
+            .stroke(.white, style: StrokeStyle(lineWidth: size * 0.055,
+                                               lineCap: .round))
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.24,
+                                    style: .continuous))
+        .accessibilityLabel("快递100")
+    }
+}
+
 private struct PlatformBrandMark: View {
     let id: String
     var body: some View {
         Group {
-            if id == "kuaidi100" || id == "publictracking" {
-                Image(systemName: id == "kuaidi100" ? "shippingbox.fill" : "network")
+            if id == "kuaidi100" {
+                Kuaidi100BrandMark(size: 42)
+            } else if id == "publictracking" {
+                Image(systemName: "network")
                     .font(.system(size: 22, weight: .medium))
                     .foregroundStyle(.blue)
                     .frame(width: 42, height: 42)
