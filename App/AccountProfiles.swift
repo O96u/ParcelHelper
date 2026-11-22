@@ -53,11 +53,37 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
     // Closing the login sheet must never create an unauthorized account.
     static func prepare(_ platform: String) -> ParcelAccountProfile {
         let kind = canonical(platform)
-        let all = accounts(for: kind)
+        // "legacy:<platform>" is an always-present compatibility slot,
+        // not a real added account. Never count it as account #1.
+        let real = saved.filter { $0.platform == kind }
+        let occupied = Set(real.compactMap { account -> Int? in
+            guard account.nickname.hasPrefix("账号 ") else { return nil }
+            return Int(account.nickname.dropFirst("账号 ".count))
+        })
+        var number = 1
+        while occupied.contains(number) { number += 1 }
         return ParcelAccountProfile(id: UUID().uuidString, platform: kind,
-                                    nickname: "账号 \(all.count + 1)",
+                                    nickname: "账号 \(number)",
                                     createdAt: Date().timeIntervalSince1970,
                                     isLegacy: false)
+    }
+
+    /// Migrate the old off-by-one default names only when there is no real
+    /// legacy login and ALL stored names still follow that original sequence.
+    /// Custom nicknames and existing authenticated legacy accounts are kept.
+    static func repairDefaultNames(for platform: String, legacyAuthorized: Bool) {
+        guard !legacyAuthorized else { return }
+        let kind = canonical(platform)
+        var all = saved
+        let indices = all.indices.filter { all[$0].platform == kind }
+        guard !indices.isEmpty else { return }
+        for (offset, i) in indices.enumerated() {
+            guard all[i].nickname == "账号 \(offset + 2)" else { return }
+        }
+        for (offset, i) in indices.enumerated() {
+            all[i].nickname = "账号 \(offset + 1)"
+        }
+        write(all)
     }
     static func commitIfAuthorized(_ draft: ParcelAccountProfile) async -> Bool {
         guard !draft.isLegacy, platforms.contains(draft.platform),
@@ -127,6 +153,9 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
         return result
     }
     static func unlink(_ account: ParcelAccountProfile) async throws {
+        // Capture selection BEFORE removing a UUID profile: after removal,
+        // activeID() already falls back to legacy and loses this information.
+        let wasDefault = activeID(for: account.platform) == account.id
         if account.platform == "fengchao" { NativeFengchao.logout(for: account.id) }
         if account.platform == "pdd" { PddSessionVault.clear(for: account.id) }
         if account.isLegacy {
@@ -148,8 +177,18 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
             write(saved.filter { $0.id != account.id })
         }
         ParcelStore.shared.removeImportedParcels(linkedTo: account.id, platform: account.platform)
-        if activeID(for: account.platform) == account.id {
-            select(legacyID(account.platform), for: account.platform)
+        if wasDefault {
+            // Prefer another genuinely authorized profile. Do not silently
+            // switch to an empty legacy placeholder when accounts remain.
+            let remaining = accounts(for: account.platform).filter { $0.id != account.id }
+            var replacement = legacyID(account.platform)
+            for candidate in remaining {
+                if await hasSession(account.platform, accountID: candidate.id) {
+                    replacement = candidate.id
+                    break
+                }
+            }
+            select(replacement, for: account.platform)
         }
     }
 }
@@ -555,6 +594,7 @@ struct MultiAccountPage: View {
     @State private var accountsLoaded = false
     @State private var loginAccount: ParcelAccountProfile?
     @State private var draftAccount: ParcelAccountProfile?
+    @State private var confirmingLoginID: String?
     @State private var loginError: String?
     @State private var managePhoneAccount: ParcelAccountProfile?
     @State private var renameAccount: ParcelAccountProfile?
@@ -580,9 +620,12 @@ struct MultiAccountPage: View {
                     .foregroundStyle(.secondary)
                     .padding(.leading, 14)
                 let visibleAccounts = records.filter {
-                    !accountsLoaded || !$0.isLegacy || validAccounts.contains($0.id)
+                    !$0.isLegacy || validAccounts.contains($0.id)
                 }
-                if visibleAccounts.isEmpty {
+                if !accountsLoaded {
+                    ProgressView("正在核对账号授权…")
+                        .frame(maxWidth: .infinity, minHeight: 80)
+                } else if visibleAccounts.isEmpty {
                     HStack(spacing: 10) {
                         Image(systemName: "person.crop.circle.badge.plus")
                             .foregroundStyle(.secondary)
@@ -598,6 +641,7 @@ struct MultiAccountPage: View {
                     accountCard(account)
                 }
                 Button {
+                    loginError = nil
                     let account = ParcelAccounts.prepare(kind)
                     draftAccount = account
                     if kind == "pdd" {
@@ -623,7 +667,8 @@ struct MultiAccountPage: View {
                                 in: RoundedRectangle(cornerRadius: 25))
                 }
                 .buttonStyle(.plain)
-                .disabled(loginAccount != nil || pddConsent || busy != nil)
+                .disabled(loginAccount != nil || pddConsent ||
+                          busy != nil || confirmingLoginID != nil)
                 if kind == "pdd" {
                     Toggle("允许拼多多网页授权及同步", isOn: $pddWebEnabled)
                         .tint(.blue)
@@ -644,6 +689,7 @@ struct MultiAccountPage: View {
         .sheet(item: $loginAccount, onDismiss: {
             let unfinished = draftAccount
             draftAccount = nil
+            loginError = nil
             Task {
                 if let unfinished { await ParcelAccounts.discard(unfinished) }
                 await reload()
@@ -666,13 +712,24 @@ struct MultiAccountPage: View {
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
                             Button("取消") { loginAccount = nil }
+                                .disabled(confirmingLoginID != nil)
                         }
                         ToolbarItem(placement: .topBarTrailing) {
-                            Button("完成授权") { finishLogin(account) }
+                            Button {
+                                finishLogin(account)
+                            } label: {
+                                if confirmingLoginID == account.id {
+                                    ProgressView()
+                                } else {
+                                    Text("完成授权")
+                                }
+                            }
+                            .disabled(confirmingLoginID != nil)
                         }
                     }
                 }
             }
+            .interactiveDismissDisabled(confirmingLoginID != nil)
             .alert("账号授权", isPresented: Binding(
                 get: { loginError != nil }, set: { if !$0 { loginError = nil } }
             )) {
@@ -745,11 +802,16 @@ struct MultiAccountPage: View {
     @State private var pendingPddAccount: ParcelAccountProfile?
 
     private func finishLogin(_ account: ParcelAccountProfile) {
-        guard loginAccount?.id == account.id else { return }
+        guard loginAccount?.id == account.id, confirmingLoginID == nil else { return }
+        // Auto-login callbacks and the user's Done button can fire together.
+        // A single in-flight verification must own the draft and its store.
+        confirmingLoginID = account.id
         Task { @MainActor in
+            defer { confirmingLoginID = nil }
             let valid = await ParcelAccounts.hasSession(kind, accountID: account.id)
+            guard loginAccount?.id == account.id else { return }
             guard valid else {
-                loginError = "尚未验证登录成功。请先在平台页面完成登录，或点击取消放弃添加。"
+                loginError = "尚未验证登录成功。请在当前平台页面完成验证；未授权的账号不会保存。"
                 return
             }
             if let draft = draftAccount, draft.id == account.id {
@@ -757,8 +819,7 @@ struct MultiAccountPage: View {
                     loginError = "尚未取得有效登录会话，账号不会被保存。"
                     return
                 }
-                // The newly authorized account should be used for identity
-                // codes rather than silently continuing with the old default.
+                guard loginAccount?.id == account.id else { return }
                 ParcelAccounts.select(draft.id, for: kind)
                 draftAccount = nil
                 notice = "账号已授权并添加，已设为默认账号。"
@@ -882,6 +943,10 @@ struct MultiAccountPage: View {
                 found.insert(account.id)
             }
         }
+        // Only migrate the old auto-generated 2-based names when the
+        // compatibility slot really has no active login.
+        ParcelAccounts.repairDefaultNames(
+            for: kind, legacyAuthorized: found.contains(ParcelAccounts.legacyID(kind)))
         // Do not probe each account's private phone-binding endpoint merely
         // because the account list appeared. Query only on the detail page.
         validAccounts = found
