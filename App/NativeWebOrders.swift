@@ -382,6 +382,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         config.websiteDataStore = ParcelAccounts.webStore(for: platform, accountID: accountID)
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
         let url = platform == "jd" ?
             "https://trade.m.jd.com/order/orderlist_jdm.shtml?sceneval=2" :
@@ -391,7 +392,40 @@ private struct NativeWebOrderReader: UIViewRepresentable {
     }
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.navigationDelegate = nil
+        uiView.uiDelegate = nil
+        uiView.stopLoading()
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        func webView(_ webView: WKWebView,
+                     decidePolicyFor action: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            let scheme = action.request.url?.scheme?.lowercased()
+            decisionHandler(scheme == "https" || scheme == "http" ||
+                            scheme == "about" ? .allow : .cancel)
+        }
+
+        // JD's mobile order entry may open in target=_blank/window.open.
+        // Keep official H5 navigation in this signed-in session instead of
+        // silently losing the page or handing off to another installed app.
+        func webView(_ webView: WKWebView,
+                     createWebViewWith configuration: WKWebViewConfiguration,
+                     for action: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard action.targetFrame == nil,
+                  let url = action.request.url,
+                  ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+                  let host = url.host?.lowercased(),
+                  (platform == "jd"
+                    ? (host == "jd.com" || host.hasSuffix(".jd.com"))
+                    : (host == "taobao.com" || host.hasSuffix(".taobao.com") ||
+                       host == "tmall.com" || host.hasSuffix(".tmall.com")))
+            else { return nil }
+            webView.load(action.request)
+            return nil
+        }
         enum Stage { case orderList, tracking }
         let platform: String
         let accountID: String?
