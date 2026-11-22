@@ -272,8 +272,10 @@ private enum SyncJSON {
             throw NativeSyncError.unavailable("账号正在等待失败退避，稍后会自动再试")
         }
         let last = UserDefaults.standard.double(forKey: key)
-        if !force && now - last < minGap {
-            throw NativeSyncError.unavailable("请求过于频繁，请稍后再试")
+        // Force bypasses retry backoff, not endpoint rate limiting. The old
+        // condition unintentionally let a rapid manual tap burst the API.
+        if now - last < minGap {
+            throw NativeSyncError.unavailable("请求过于频繁，请 30 秒后再试")
         }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: key)
         do {
@@ -324,7 +326,18 @@ private enum SyncJSON {
             // A background expiration must not merge stale results or update
             // sync-success state after its parent task was cancelled.
             try Task.checkCancellation()
-            let count = merge(incoming)
+            if id != "mi" {
+                let kind = id == "cainiao" ? "taobao" : id
+                guard ParcelAccounts.accounts(for: kind).contains(where: { $0.id == selected }) else {
+                    // A removed account can finish an in-flight network
+                    // request; never restore its deleted parcels afterward.
+                    throw CancellationError()
+                }
+            }
+            let baselineKey = "native.sync.baseline." + id + "." + selected
+            let hadBaseline = UserDefaults.standard.bool(forKey: baselineKey)
+            let count = merge(incoming, notifyNewArrival: hadBaseline)
+            UserDefaults.standard.set(true, forKey: baselineKey)
             let result = NativeSyncResult(
                 name: id == "pdd" ? "拼多多驿站包裹" : (id == "cainiao" ? "菜鸟" : (id == "fengchao" ? "丰巢" : "小米")),
                 found: incoming.count, imported: count, errors: [])
@@ -369,6 +382,7 @@ private enum SyncJSON {
             let detail = error.localizedDescription
             UserDefaults.standard.set(detail, forKey: "native.sync.result." + id)
             UserDefaults.standard.set(detail, forKey: "native.sync.result." + id + "." + selected)
+            Task { await ParcelNotifications.notifySyncFailure(platform: id, accountID: selected) }
             throw error
         }
     }
@@ -408,9 +422,12 @@ private enum SyncJSON {
     // Updates should supplement, not overwrite user decisions. Source loyalty,
     // code merging, deduplication, transit history and pickup statuses follow
     // the supplied original platformSync.ts and codes.ts design.
-    @discardableResult static func merge(_ rows: [NativeSyncParcel]) -> Int {
+    @discardableResult static func merge(
+        _ rows: [NativeSyncParcel], notifyNewArrival: Bool = false
+    ) -> Int {
         let store = ParcelStore.shared
         var changed = 0
+        var newArrivalNotifications = 0
         for row in rows {
             let mail = row.mailNo.trimmingCharacters(in: .whitespacesAndNewlines)
             let code = normalizedCode(row.code)
@@ -467,9 +484,6 @@ private enum SyncJSON {
             if previous == nil && !wasArrived && row.latest.isEmpty && row.tracks.isEmpty { continue }
             var p = previous ?? Parcel()
             let priorSource = p.source
-            let oldNodes = p.trackNodes
-            let oldLatest = p.trackLatest ?? ""
-            let previousCodes = p.codes
             if p.orderId == nil && !orderKey.isEmpty { p.orderId = orderKey }
             if !scopedAccount.isEmpty {
                 var owners = Set(p.linkedAccounts ?? [])
@@ -526,22 +540,22 @@ private enum SyncJSON {
             }
             if wasArrived { p.eta = nil; p.etaAt = nil }
             if p.pickedByUser { p.status = 2 }
-            let needsWrite = previous == nil ||
-                p.status != previous?.status || p.arrivedAt != previous?.arrivedAt ||
-                p.pickedAt != previous?.pickedAt || p.trackNodes != oldNodes ||
-                p.trackLatest != oldLatest || p.codes != previousCodes ||
-                p.stationText != previous?.stationText ||
-                p.trackCompany != previous?.trackCompany ||
-                p.mailNo != previous?.mailNo ||
-                p.source != priorSource || p.linkedAccounts != previous?.linkedAccounts
-            if needsWrite {
-                store.upsert(p)
+            // Missing title, ETA, source app, order ID or receiver changes
+            // here previously caused genuine server updates to be discarded.
+            if p.hasSyncedContentChange(comparedTo: previous) {
+                store.upsert(p, persistNow: false)
                 if previous != nil {
                     Task { await ParcelNotifications.notifyUpdate(previous: previous, current: p) }
+                } else if notifyNewArrival && p.isPending && newArrivalNotifications < 3 {
+                    // Do not flood the user with old deliveries on a first
+                    // account import. Only alert after a successful baseline.
+                    newArrivalNotifications += 1
+                    Task { await ParcelNotifications.notifyUpdate(previous: nil, current: p) }
                 }
                 changed += 1
             }
         }
+        if changed > 0 { store.persist() }
         return changed
     }
 
@@ -1265,5 +1279,26 @@ private enum SyncJSON {
         }
         if force && results.isEmpty { return ["没有已授权且支持自动同步的平台"] }
         return results
+    }
+}
+
+/// One manual action refreshes both the native APIs and authorized web orders.
+/// WebKit readers run in a serialized queue; queued means started, not finished.
+@MainActor enum ParcelManualSync {
+    static func refreshAll() async -> [String] {
+        var messages = await NativeHomeRefresh.refresh(force: true)
+        var queued = 0
+        for platform in ["taobao", "jd", "pdd"] {
+            for account in await ParcelAccounts.authorizedAccounts(for: platform) {
+                if await NativeWebAutoSync.shared.request(
+                    platform, force: true, accountID: account.id) {
+                    queued += 1
+                }
+            }
+        }
+        if queued > 0 {
+            messages.append("已安排 \(queued) 个网页订单同步任务，结果稍后在账号授权页显示。")
+        }
+        return messages
     }
 }

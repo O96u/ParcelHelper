@@ -48,6 +48,13 @@ private struct WebShipment: Decodable {
     }
 
     func refreshAvailable() async {
+        // Foreground timer checks once a minute, but reading WebKit cookies
+        // for every account each minute is unnecessary and power-hungry.
+        let now = Date().timeIntervalSince1970
+        let key = "native.web.autosync.lastSweep"
+        let interval = TimeInterval(RefreshPolicy.minutes) * 60
+        guard now - UserDefaults.standard.double(forKey: key) >= interval else { return }
+        UserDefaults.standard.set(now, forKey: key)
         for platform in ["jd", "taobao", "pdd"] {
             for profile in await ParcelAccounts.authorizedAccounts(for: platform) {
                 _ = await request(platform, accountID: profile.id)
@@ -72,6 +79,10 @@ private struct WebShipment: Decodable {
         guard await ParcelAccounts.hasSession(platform, accountID: selected) else { return false }
         let key = "native.web.autosync.at." + platform + "." + selected
         let now = Date().timeIntervalSince1970
+        let manualKey = "native.web.manual.lastAt." + platform + "." + selected
+        if force && now - UserDefaults.standard.double(forKey: manualKey) < 30 {
+            return false
+        }
         // Use the same foreground auto-refresh interval as the native
         // platform synchronizer; manual force-sync remains available.
         let interval = TimeInterval(RefreshPolicy.minutes) * 60
@@ -82,6 +93,7 @@ private struct WebShipment: Decodable {
         if (activePlatform == platform && activeAccountID == selected) ||
             pending.contains(job) { return true }
         UserDefaults.standard.set(now, forKey: key)
+        if force { UserDefaults.standard.set(now, forKey: manualKey) }
         pending.append(job)
         startNext()
         return true
@@ -92,6 +104,13 @@ private struct WebShipment: Decodable {
         let job = pending.removeFirst().components(separatedBy: "|")
         guard job.count == 2 else { startNext(); return }
         let platform = job[0], accountID = job[1]
+        // A queued job must never revive a profile removed during a previous
+        // WebKit task. Skip it without creating another WKWebsiteDataStore.
+        guard ParcelAccounts.accounts(for: platform)
+            .contains(where: { $0.id == accountID }) else {
+            startNext()
+            return
+        }
         // Consent may have been revoked while this reader was queued.
         if platform == "pdd" && !PddAccountProtection.webAccessAllowed {
             startNext()
@@ -128,8 +147,17 @@ private struct WebShipment: Decodable {
               expectedSequence == nil || sequence == expectedSequence else { return }
         timeoutTask?.cancel()
         timeoutTask = nil
-        recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
-        if succeeded {
+        let retained = activeAccountID.map { accountID in
+            ParcelAccounts.accounts(for: "pdd").contains(where: { $0.id == accountID })
+        } ?? false
+        if retained {
+            recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
+        }
+        if !succeeded, retained, let accountID = activeAccountID {
+            Task { await ParcelNotifications.notifySyncFailure(
+                platform: "pdd", accountID: accountID) }
+        }
+        if succeeded && retained {
             let syncedAt = Date().timeIntervalSince1970
             UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success.pdd")
@@ -153,19 +181,34 @@ private struct WebShipment: Decodable {
               expectedSequence == nil || sequence == expectedSequence else { return }
         timeoutTask?.cancel()
         timeoutTask = nil
-        recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
+        let retained = activeAccountID.map { accountID in
+            ParcelAccounts.accounts(for: platform).contains(where: { $0.id == accountID })
+        } ?? false
+        if retained {
+            recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
+        }
+        if failure != nil, retained, let accountID = activeAccountID {
+            Task { await ParcelNotifications.notifySyncFailure(
+                platform: platform, accountID: accountID) }
+        }
         let description: String
-        if let failure {
+        if !retained {
+            description = "账号已解除授权，忽略滞后的网页同步结果"
+        } else if let failure {
             description = (platform == "jd" ? "京东" : "淘宝") + "自动同步： " + failure
         } else {
             var scoped = packages
             let accountID = activeAccountID ?? ParcelAccounts.activeID(for: platform)
             for index in scoped.indices { scoped[index].accountID = accountID }
-            let merged = NativeParcelSync.merge(scoped)
+            let baselineKey = "native.sync.baseline.web." + platform + "." + accountID
             let syncedAt = Date().timeIntervalSince1970
+            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
+            let merged = NativeParcelSync.merge(scoped,
+                notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
+            if merged == 0 { ParcelStore.shared.persist() }
+            UserDefaults.standard.set(true, forKey: baselineKey)
             UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success." + platform)
-            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
             description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(packages.count) 件，导入或更新 \(merged) 件。"
         }
         UserDefaults.standard.set(description, forKey: "native.sync.result." + platform)
@@ -192,7 +235,16 @@ struct NativeWebAutoSyncHost: View {
                     // callback cannot accidentally complete a newer reader.
                     let generation = sync.sequence
                     if platform == "pdd" {
-                        PddOrdersAutoSyncReader(accountID: accountID) { message, succeeded in
+                        PddOrdersAutoSyncReader(
+                            accountID: accountID,
+                            isStillCurrent: {
+                                sync.activePlatform == "pdd" &&
+                                sync.activeAccountID == accountID &&
+                                sync.sequence == generation &&
+                                ParcelAccounts.accounts(for: "pdd")
+                                    .contains(where: { $0.id == accountID })
+                            }
+                        ) { message, succeeded in
                             Task { @MainActor in
                                 sync.finishPdd(message, succeeded: succeeded,
                                                expectedAccountID: accountID,
@@ -246,8 +298,14 @@ struct NativeWebOrderPage: View {
                         var scoped = packages
                         let selected = accountID ?? ParcelAccounts.activeID(for: platform)
                         for index in scoped.indices { scoped[index].accountID = selected }
-                        let count = NativeParcelSync.merge(scoped)
-                        UserDefaults.standard.set(Date().timeIntervalSince1970,
+                        let baselineKey = "native.sync.baseline.web." + platform + "." + selected
+                        let syncedAt = Date().timeIntervalSince1970
+                        UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
+                        let count = NativeParcelSync.merge(scoped,
+                            notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
+                        if count == 0 { ParcelStore.shared.persist() }
+                        UserDefaults.standard.set(true, forKey: baselineKey)
+                        UserDefaults.standard.set(syncedAt,
                                                   forKey: "native.sync.success." + platform)
                         detail = "\(platform == "jd" ? "京东" : "淘宝")：读取 \(packages.count) 件有效物流包裹，导入或更新 \(count) 件。"
                     }

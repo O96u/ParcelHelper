@@ -135,8 +135,20 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                         clipboardMonitor.checkOnForeground()
                         Task {
                             _ = await NativeHomeRefresh.refresh()
+                            guard UIApplication.shared.applicationState == .active else { return }
                             await NativeWebAutoSync.shared.refreshAvailable()
                         }
+                    }
+                }
+                // A foreground-only timer is needed when the user leaves the
+                // app open for hours: onAppear/onChange alone do not respect
+                // the configured refresh interval until the next app switch.
+                .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
+                    guard scenePhase == .active else { return }
+                    Task { @MainActor in
+                        _ = await NativeHomeRefresh.refresh()
+                        guard UIApplication.shared.applicationState == .active else { return }
+                        await NativeWebAutoSync.shared.refreshAvailable()
                     }
                 }
                 .alert(clipboardMonitor.candidate == nil ? "剪贴板识别" : "识别到快递取件信息",

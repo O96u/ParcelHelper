@@ -554,7 +554,7 @@ struct ReminderSettingsPage: View {
                     set: { value in store.changePreferences { $0.reminderAfterHours = value } }), in: 1...168)
             }
             Section {
-                Text("已启用通知并获得 iOS 权限后，App 同步到新的运输节点、派送、到站或签收状态时发送本地通知。普通运输节点通知默认关闭，避免过多提醒。只有成功读取到新的物流状态才会提醒；App 被 iOS 挂起时无法保证实时同步。同步失败提醒暂未接入自动通知。")
+                Text("已启用通知并获得 iOS 权限后，App 同步到新的运输节点、派送、到站或签收状态时发送本地通知。普通运输节点通知默认关闭，避免过多提醒。只有成功读取到新的物流状态才会提醒；App 被 iOS 挂起时无法保证实时同步。同步失败提醒默认开启，针对同一账号最多每 6 小时通知一次。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }.navigationTitle("取件提醒")
@@ -933,7 +933,7 @@ struct RefreshSettingsPage: View {
         Form {
             Section("前台自动同步") {
                 Stepper("刷新间隔：\(appMin) 分钟", value: $appMin, in: 5...120, step: 5)
-                Text("打开 App 或切回前台时，超过所设间隔才自动检查已授权平台。淘宝、京东的订单网页同步也使用这个间隔。默认 15 分钟。")
+                Text("打开 App、返回前台，或持续使用 App 时，按所设最短间隔自动检查已授权平台。前台每分钟检查一次是否到期，并非每分钟向平台请求。淘宝、京东订单网页同步使用相同间隔；默认 15 分钟。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("后台智能刷新") {
@@ -943,7 +943,7 @@ struct RefreshSettingsPage: View {
             }
             Section("刷新说明") {
                 Text("这里设置的是前台最短自动检查间隔，并不是后台任务的执行周期。强制关闭 App 后不能保证后台查询。")
-                Text("在包裹页面下拉或在账号授权页点击「立即同步」，可以主动同步，通常不受上述自动检查间隔限制；平台安全限制及请求频率限制仍然适用。")
+                Text("首页刷新、包裹列表下拉或账号授权页「立即同步」会启动原生接口刷新，并安排授权平台的网页订单读取；网页任务依次执行，按钮完成并不代表所有网页已同步成功。平台安全限制及请求频率限制仍然适用。")
                 Text("桌面小组件读取 App 保存到共享 App Group 的快照。WidgetKit 会安排时间线更新，但不会保证固定间隔联网；灵动岛实时活动单独更新。")
             }
         }
