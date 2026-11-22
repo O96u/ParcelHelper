@@ -196,19 +196,25 @@ struct NativeTrackLookup {
         return ""
     }
     static func lookup(_ mailRaw:String, source:String?=nil, shipperCode:String="",
-                       phone:String="") async throws -> NativeTrackLookup {
+                       phone:String="", accountIDs: [String] = []) async throws -> NativeTrackLookup {
         let mail=mailRaw.trimmingCharacters(in:.whitespacesAndNewlines)
             .replacingOccurrences(of:" ",with:"")
         guard mail.range(of:#"^[A-Za-z0-9-]{8,40}$"#,options:.regularExpression) != nil else {
             throw NativeSyncError.badResponse("请填写有效的运单号（8 至 40 位字母、数字或短横线）")
         }
         // Prefer a first-party platform that already has a valid session.
-        if let native = await NativeParcelSync.lookupShipment(mail,source:source) {
+        if let native = await NativeParcelSync.lookupShipment(
+            mail, source: source, accountIDs: accountIDs) {
             remember(mail)
             return native
         }
         guard isConfigured else {
-            throw NativeSyncError.noLogin("暂无可用物流接口，请先在「设置 → 账号授权 → 快递鸟」配置 API，或登录对应电商平台")
+            if source == "cainiao" || source == "taobao" {
+                throw NativeSyncError.unavailable(
+                    "菜鸟暂未返回这笔运单的运输轨迹。亲友包裹可能仅开放取件码和驿站状态；请在菜鸟官方核对，无需为此专门配置快递鸟 API。")
+            }
+            throw NativeSyncError.noLogin(
+                "暂无可用物流接口，请在账号授权中检查平台登录或配置快递鸟 API")
         }
         let id=get("businessID"),secret=get("apiKey")
         var chosen=shipperCode.trimmingCharacters(in:.whitespacesAndNewlines).uppercased()

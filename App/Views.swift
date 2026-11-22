@@ -964,7 +964,8 @@ struct ParcelDetail: View {
             defer {isRefreshing=false}
             do {
                 let latest=try await NativeTracking.lookup(mail,source:p.source,
-                    shipperCode:p.shipperCode ?? "",phone:"")
+                    shipperCode:p.shipperCode ?? "",phone:"",
+                    accountIDs:p.linkedAccounts ?? [])
                 guard var current=store.snapshot.parcels.first(where:{$0.uuid == parcelID}) else {return}
                 if !latest.nodes.isEmpty {current.trackNodes=latest.nodes}
                 if !latest.latest.isEmpty {current.trackLatest=latest.latest}

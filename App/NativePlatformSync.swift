@@ -279,7 +279,38 @@ private enum SyncJSON {
         do {
             let incoming: [NativeSyncParcel]
             if id == "pdd" { incoming = try await pddPackages(accountID: selected) }
-            else if id == "cainiao" { incoming = try await cainiaoPackages(accountID: selected) }
+            else if id == "cainiao" {
+                var rows = try await cainiaoPackages(accountID: selected)
+                let seen = Set(rows.map { $0.mailNo.uppercased() })
+                // After official sign-off a parcel may disappear from the
+                // active package list. Check a small bounded set of existing
+                // uncollected parcels belonging to THIS account for a newer
+                // status; never interpret missing parcels as collected.
+                let candidates = ParcelStore.shared.snapshot.parcels.filter { parcel in
+                    let source = parcel.source ?? parcel.srcApp?.id ?? ""
+                    let mail = parcel.mailNo ?? ""
+                    let linked = parcel.linkedAccounts ?? []
+                    let belongs = linked.contains(selected) ||
+                        (linked.isEmpty && selected == ParcelAccounts.legacyID("taobao"))
+                    return source == "cainiao" && belongs &&
+                        !parcel.isDone && !parcel.isSigned &&
+                        SyncJSON.isMail(mail) && !seen.contains(mail.uppercased())
+                }
+                for parcel in candidates.prefix(3) {
+                    guard let mail = parcel.mailNo,
+                          let detail = await cainiaoTrack(mail, accountID: selected),
+                          !detail.nodes.isEmpty || !detail.status.isEmpty else { continue }
+                    var updated = NativeSyncParcel(source: "cainiao")
+                    updated.accountID = selected
+                    updated.mailNo = mail
+                    updated.company = detail.company
+                    updated.tracks = detail.nodes
+                    updated.latest = detail.status.isEmpty ?
+                        (detail.nodes.first?.text ?? "") : detail.status
+                    rows.append(updated)
+                }
+                incoming = rows
+            }
             else if id == "fengchao" { incoming = try await NativeFengchao.packages(accountID: selected) }
             else { incoming = try await NativeMiExpress.packages() }
             // A background expiration must not merge stale results or update
@@ -804,7 +835,8 @@ private enum SyncJSON {
                             parcel.tracks = detail.nodes
                             // Avoid replacing final platform SIGN with older route text.
                             if upperStatus != "SIGN" {
-                                parcel.latest = detail.nodes.first?.text ?? status
+                                parcel.latest = detail.status.isEmpty ?
+                                    (detail.nodes.first?.text ?? status) : detail.status
                             }
                         }
                     }
@@ -820,20 +852,78 @@ private enum SyncJSON {
     // Original utils/cainiao.ts: trackMailNo() with a PID query first, falling
     // back to carrier detection + queryalltrace. A failed trace lookup does not
     // invalidate the rest of the order-list import.
-    private static func cainiaoTrack(_ mail: String, accountID: String? = nil) async -> (company: String, nodes: [TrackNode])? {
-        var result: [String: Any]?
-        do {
-            result = try await mtop("mtop.cainiao.logisticsdetail.packages.pid.orderCode.mailNo.get",
-                                    data: ["mailNo": mail], accountID: accountID)
-        } catch {
-            var companyCode = ""
-            if let cp = try? await mtop("mtop.taobao.logisticsDetailTraceQueryService.queryCpByMailNo",
-                                         data: ["mailNo": mail], accountID: accountID) {
-                let d = SyncJSON.dict(cp["data"])
-                let list = SyncJSON.list(d["result"])
-                companyCode = SyncJSON.first(list.first ?? [:], ["tpCode", "cpCode"])
+    private static func cainiaoTrack(
+        _ mail: String, accountID: String? = nil
+    ) async -> (company: String, nodes: [TrackNode], status: String)? {
+        func parse(_ result: [String: Any]) -> (company: String, nodes: [TrackNode], status: String) {
+            let data = SyncJSON.dict(result["data"])
+            let payload = SyncJSON.dict(data["data"]).isEmpty ? data : SyncJSON.dict(data["data"])
+            var containers: [[String: Any]] = []
+            if let first = SyncJSON.list(payload["result"]).first { containers.append(first) }
+            let resultObject = SyncJSON.dict(payload["result"])
+            if !resultObject.isEmpty { containers.append(resultObject) }
+            containers.append(payload)
+            containers.append(data)
+            let company = containers.lazy.map {
+                SyncJSON.first($0, ["cpName", "cp_name", "companyName",
+                                    "logisticsCompanyName", "cpCode"])
+            }.first(where: { !$0.isEmpty }) ?? ""
+            var nodes: [TrackNode] = []
+            for container in containers {
+                for key in ["detailList", "traceList", "transitList", "traces", "routeList"] {
+                    let list = SyncJSON.list(container[key])
+                    let found = list.compactMap { item -> TrackNode? in
+                        let text = SyncJSON.first(item, ["standerdDesc", "standardDesc",
+                            "statusDesc", "desc", "content", "description", "action", "status"])
+                        guard !text.isEmpty else { return nil }
+                        return TrackNode(time: SyncJSON.first(item,
+                            ["time", "ocurrTimeStr", "occurTimeStr", "gmtCreate", "statusTime"]),
+                            text: text)
+                    }
+                    if !found.isEmpty {
+                        nodes = Array(found.prefix(60))
+                        break
+                    }
+                }
+                if !nodes.isEmpty { break }
             }
-            result = try? await mtop("mtop.taobao.logisticstracedetailservice.queryalltrace", data: [
+            // SIGN from the official Cainiao package-detail response means
+            // signed/delivered, not necessarily collected by the recipient.
+            let raw = containers.lazy.map {
+                SyncJSON.first($0, ["statusDesc", "packageStatus", "status",
+                                    "latestStatus", "logisticsStatus"])
+            }.first(where: { !$0.isEmpty }) ?? ""
+            let normalized = raw.uppercased()
+            let status: String
+            if normalized == "SIGN" { status = "已签收" }
+            else if Parcel.confirmsRecipientPickup(raw) ||
+                    ["已签收", "签收成功", "待取件", "到站", "已妥投"]
+                        .contains(where: { raw.contains($0) }) {
+                status = raw
+            } else {
+                status = ""
+            }
+            return (company, nodes, status)
+        }
+
+        // An HTTP/MTOP SUCCESS with no trace nodes is still an empty result.
+        // Fall back to the receiver trace API in that case as well.
+        let primary = try? await mtop(
+            "mtop.cainiao.logisticsdetail.packages.pid.orderCode.mailNo.get",
+            data: ["mailNo": mail], accountID: accountID)
+        let first = primary.map(parse)
+        if let first, !first.nodes.isEmpty { return first }
+
+        var companyCode = ""
+        if let cp = try? await mtop("mtop.taobao.logisticsDetailTraceQueryService.queryCpByMailNo",
+                                      data: ["mailNo": mail], accountID: accountID) {
+            let data = SyncJSON.dict(cp["data"])
+            let list = SyncJSON.list(data["result"])
+            companyCode = SyncJSON.first(list.first ?? [:], ["tpCode", "cpCode"])
+        }
+        let alternate = try? await mtop(
+            "mtop.taobao.logisticstracedetailservice.queryalltrace",
+            data: [
                 "mailNo": mail, "cpCode": companyCode, "actor": "RECEIVER",
                 "isShowAllDetail": true, "isShowExceptionDetail": true,
                 "isShowExpressMan": true, "isShowConsignDetail": true,
@@ -841,26 +931,15 @@ private enum SyncJSON {
                 "isShowServiceProvider": true, "isStandard": true,
                 "isUnique": true, "ignoreInvalidNode": true
             ], accountID: accountID)
-        }
-        guard let result else { return nil }
-        let data = SyncJSON.dict(result["data"])
-        let payload = SyncJSON.dict(data["data"]).isEmpty ? data : SyncJSON.dict(data["data"])
-        let first = SyncJSON.list(payload["result"]).first ?? payload
-        let company = SyncJSON.first(first, ["cpName", "cp_name", "companyName", "logisticsCompanyName", "cpCode"])
-        var nodes: [TrackNode] = []
-        for key in ["detailList", "traceList", "transitList"] {
-            let list = SyncJSON.list(first[key])
-            if !list.isEmpty {
-                nodes = list.compactMap { record -> TrackNode? in
-                    let text = SyncJSON.first(record, ["standerdDesc", "statusDesc", "desc", "content", "action", "status"])
-                    guard !text.isEmpty else { return nil }
-                    return TrackNode(time: SyncJSON.first(record, ["time", "ocurrTimeStr", "occurTimeStr", "gmtCreate", "statusTime"]),
-                                     text: text)
-                }
-                break
+        if let alternate {
+            let second = parse(alternate)
+            if !second.nodes.isEmpty || !second.status.isEmpty {
+                return (second.company.isEmpty ? first?.company ?? "" : second.company,
+                        second.nodes, second.status.isEmpty ? first?.status ?? "" : second.status)
             }
         }
-        return (company, nodes)
+        if let first, !first.status.isEmpty || !first.company.isEmpty { return first }
+        return nil
     }
 
     // Native port of the exact three identity-code endpoints in
@@ -1059,18 +1138,34 @@ private enum SyncJSON {
 
     // The manual search and details screen share the same track endpoints.
     // Returning nil means this source had no verified shipment data.
-    static func lookupShipment(_ mail:String, source:String?=nil) async -> NativeTrackLookup? {
-        let usePdd=(source == "pdd" || source == nil || source == "")
-        let useCainiao=(source == "cainiao" || source == "taobao" || source == nil || source == "")
-        if usePdd, let detail=try? await pddTrack(mail), !detail.1.isEmpty {
-            return NativeTrackLookup(mailNo:mail,company:detail.0,
-                shipperCode:"",latest:detail.1.first?.text ?? "",
-                nodes:detail.1,provider:"拼多多")
+    static func lookupShipment(_ mail: String, source: String? = nil,
+                               accountIDs: [String] = []) async -> NativeTrackLookup? {
+        let usePdd = (source == "pdd" || source == nil || source == "")
+        let useCainiao = (source == "cainiao" || source == "taobao" ||
+                          source == nil || source == "")
+        if usePdd, let detail = try? await pddTrack(mail), !detail.1.isEmpty {
+            return NativeTrackLookup(mailNo: mail, company: detail.0,
+                shipperCode: "", latest: detail.1.first?.text ?? "",
+                nodes: detail.1, provider: "拼多多")
         }
-        if useCainiao, let detail=await cainiaoTrack(mail), !detail.nodes.isEmpty {
-            return NativeTrackLookup(mailNo:mail,company:detail.company,
-                shipperCode:"",latest:detail.nodes.first?.text ?? "",
-                nodes:detail.nodes,provider:"菜鸟")
+        if useCainiao {
+            // First query the account which imported the parcel. A friend's
+            // shipment can be visible to that account but not the currently
+            // selected default Taobao login.
+            let known = Set(ParcelAccounts.accounts(for: "taobao").map(\.id))
+            var candidates = accountIDs.filter { known.contains($0) }
+            let active = ParcelAccounts.activeID(for: "taobao")
+            if !candidates.contains(active) { candidates.append(active) }
+            for id in candidates.prefix(3) {
+                if let detail = await cainiaoTrack(mail, accountID: id),
+                   !detail.nodes.isEmpty || !detail.status.isEmpty {
+                    return NativeTrackLookup(mailNo: mail, company: detail.company,
+                        shipperCode: "",
+                        latest: detail.status.isEmpty ?
+                            (detail.nodes.first?.text ?? "") : detail.status,
+                        nodes: detail.nodes, provider: "菜鸟")
+                }
+            }
         }
         return nil
     }
