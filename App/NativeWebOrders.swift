@@ -79,6 +79,11 @@ private struct WebShipment: Decodable {
         guard await ParcelAccounts.hasSession(platform, accountID: selected) else { return false }
         let key = "native.web.autosync.at." + platform + "." + selected
         let now = Date().timeIntervalSince1970
+        let job = platform + "|" + selected
+        // An already-running/queued job is success, not a failed manual
+        // request. Check this before cooldown and retry-backoff UI logic.
+        if (activePlatform == platform && activeAccountID == selected) ||
+            pending.contains(job) { return true }
         let manualKey = "native.web.manual.lastAt." + platform + "." + selected
         if force && now - UserDefaults.standard.double(forKey: manualKey) < 30 {
             return false
@@ -89,9 +94,6 @@ private struct WebShipment: Decodable {
         if !force && now - UserDefaults.standard.double(forKey: key) < interval {
             return false
         }
-        let job = platform + "|" + selected
-        if (activePlatform == platform && activeAccountID == selected) ||
-            pending.contains(job) { return true }
         UserDefaults.standard.set(now, forKey: key)
         if force { UserDefaults.standard.set(now, forKey: manualKey) }
         pending.append(job)
@@ -209,6 +211,8 @@ private struct WebShipment: Decodable {
             UserDefaults.standard.set(true, forKey: baselineKey)
             UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success." + platform)
+            UserDefaults.standard.set(syncedAt,
+                                      forKey: "native.sync.success." + platform + "." + accountID)
             description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(packages.count) 件，导入或更新 \(merged) 件。"
         }
         UserDefaults.standard.set(description, forKey: "native.sync.result." + platform)
@@ -307,6 +311,8 @@ struct NativeWebOrderPage: View {
                         UserDefaults.standard.set(true, forKey: baselineKey)
                         UserDefaults.standard.set(syncedAt,
                                                   forKey: "native.sync.success." + platform)
+                        UserDefaults.standard.set(syncedAt,
+                                                  forKey: "native.sync.success." + platform + "." + selected)
                         detail = "\(platform == "jd" ? "京东" : "淘宝")：读取 \(packages.count) 件有效物流包裹，导入或更新 \(count) 件。"
                     }
                     UserDefaults.standard.set(detail, forKey: "native.sync.result." + platform)

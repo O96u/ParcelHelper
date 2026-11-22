@@ -198,10 +198,11 @@ private enum SyncJSON {
     }
 }
 
-/// Refreshes the Taobao H5 MTOP token in the SELECTED account's isolated
-/// WebKit store. The Scripting reference reloads h5.m.taobao.com when the
-/// gateway rotates _m_h5_tk. This WebView never appears in the UI and does
-/// not inspect webpage contents, passwords, or identity codes.
+/// Refreshes the MTOP token through the SAME gateway host that issued
+/// the failed request, inside the selected account's persistent WebKit store.
+/// Loading h5.m.taobao.com is insufficient when the API host uses a different
+/// scoped token cookie. This WebView never appears in the UI and does not
+/// inspect webpage contents, passwords, or identity codes.
 @MainActor private final class CainiaoMtopTokenRefresh: NSObject, WKNavigationDelegate {
     private let webView: WKWebView
     private var continuation: CheckedContinuation<Void, Never>?
@@ -214,10 +215,15 @@ private enum SyncJSON {
         webView.navigationDelegate = self
     }
 
-    func run() async {
+    func run(gatewayURL: URL) async {
+        // No third-party URLs or login pages. Revisit the MTOP gateway URL
+        // so WebKit can accept host-scoped Set-Cookie for this account.
+        guard gatewayURL.scheme == "https",
+              gatewayURL.host == "h5api.m.taobao.com" else { return }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             self.continuation = continuation
-            webView.load(URLRequest(url: URL(string: "https://h5.m.taobao.com/")!))
+            webView.load(URLRequest(url: gatewayURL,
+                cachePolicy: .reloadIgnoringLocalCacheData))
             // Retain the refresh owner until its continuation is resumed.
             // WKNavigationDelegate is weak; a weak timeout can otherwise
             // leave this async refresh suspended indefinitely.
@@ -793,13 +799,14 @@ private enum SyncJSON {
             if newer.isEmpty || newer == token {
                 // Bootstrap a fresh H5 token without ever displaying a login
                 // form. Never clear the user's persistent authorization data.
-                await CainiaoMtopTokenRefresh(accountID: selected).run()
+                await CainiaoMtopTokenRefresh(accountID: selected)
+                    .run(gatewayURL: components.url!)
                 cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
             }
         }
         if lastFailure.uppercased().contains("SESSION_EXPIRED") {
             throw NativeSyncError.unavailable(
-                "淘宝/菜鸟会话自动恢复失败，请在「账号授权」检查当前账号；已有包裹及登录数据均已保留")
+                "菜鸟接口返回 SESSION_EXPIRED：网页 Cookie 仍在，但接口会话已过期且自动续期未成功。可在「账号授权 → 菜鸟」重新验证；原有包裹和 Cookie 已保留")
         }
         throw NativeSyncError.unavailable("菜鸟 MTOP 请求失败：\(lastFailure)")
     }
