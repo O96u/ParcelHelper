@@ -136,6 +136,10 @@ struct NativeTrackLookup {
     ]
     private static var publicLastAttempt: [String: Date] = [:]
     private static var publicSuccessCache: [String: (Date, NativeTrackLookup)] = [:]
+    // Kuaidi100's realtime API documents at least 30 minutes between
+    // queries for the same waybill. Cache success and suppress repeats.
+    private static var kuaidi100LastAttempt: [String: Date] = [:]
+    private static var kuaidi100SuccessCache: [String: (Date, NativeTrackLookup)] = [:]
 
     // Login provenance is separate from API configuration. The official web
     // login token and unmasked phone are never persisted.
@@ -361,6 +365,17 @@ struct NativeTrackLookup {
     private static func kuaidi100Lookup(_ mail: String,
                                         shipperCode: String,
                                         phone: String) async throws -> NativeTrackLookup {
+        let now = Date()
+        if let cached = kuaidi100SuccessCache[mail],
+           now.timeIntervalSince(cached.0) < 1800 {
+            var found = cached.1
+            found.provider = "快递100（30分钟内缓存）"
+            return found
+        }
+        if let previous = kuaidi100LastAttempt[mail],
+           now.timeIntervalSince(previous) < 1800 {
+            throw NativeSyncError.unavailable("该运单查询间隔需不少于30分钟")
+        }
         var selected = shipperCode.trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
         if selected.isEmpty, let detected = try? await detect(mail) {
@@ -400,6 +415,7 @@ struct NativeTrackLookup {
                      forHTTPHeaderField: "Content-Type")
         req.httpBody = Data(body.utf8)
         req.httpShouldHandleCookies = false
+        kuaidi100LastAttempt[mail] = now
         let (data, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               data.count < 500_000,
@@ -424,10 +440,12 @@ struct NativeTrackLookup {
         guard !nodes.isEmpty else {
             throw NativeSyncError.unavailable("快递100未返回物流轨迹")
         }
-        return NativeTrackLookup(mailNo: mail,
+        let result = NativeTrackLookup(mailNo: mail,
             company: shippers.first(where: { $0.0 == selected })?.1 ?? "",
             shipperCode: selected, latest: nodes[0].text,
             nodes: Array(nodes.prefix(60)), provider: "快递100")
+        kuaidi100SuccessCache[mail] = (Date(), result)
+        return result
     }
 
     // Publicly documented free endpoint. As third-party availability is not

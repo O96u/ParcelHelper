@@ -218,8 +218,20 @@ struct NativeTrackSearchPage: View {
         if !r.receiverAddress.isEmpty { item.receiverAddress=r.receiverAddress }
         item.trackUpdatedAt=Date().timeIntervalSince1970*1000
         if item.source == nil {
-            item.source="kdniao"
-            item.srcApp=SourceApp(id:"kdniao",name:"快递鸟")
+            // Preserve the successful backend's provenance. A free/public
+            // lookup must never be presented as a KDniao-authenticated item.
+            let source: (id: String, name: String)
+            switch r.provider {
+            case "快递鸟": source = ("kdniao", "快递鸟")
+            case "快递100": source = ("kuaidi100", "快递100")
+            case "菜鸟": source = ("cainiao", "菜鸟")
+            case "拼多多": source = ("pdd", "拼多多")
+            default:
+                source = r.provider.hasPrefix("快递100") ?
+                    ("kuaidi100", "快递100") : ("public", "公开物流查询")
+            }
+            item.source = source.id
+            item.srcApp = SourceApp(id: source.id, name: source.name)
         }
         store.upsert(item)
         dismiss()
