@@ -242,12 +242,14 @@ struct NativeTrackLookup {
         }
         var failures: [String] = []
         var statusOnly: NativeTrackLookup?
+        ParcelRunLog.record("物流查询", "开始查询：优先来源平台，之后按已配置服务兜底")
 
         // Query the parcel's own authorized platform before external APIs.
         // This retains the original account context for friends' parcels.
         if let native = await NativeParcelSync.lookupShipment(
             mail, source: source, accountIDs: accountIDs) {
             if !native.nodes.isEmpty {
+                ParcelRunLog.record("物流查询", "来源平台返回 \(native.nodes.count) 条真实物流节点")
                 remember(mail)
                 return native
             }
@@ -259,9 +261,11 @@ struct NativeTrackLookup {
         if isConfigured {
             do {
                 let found = try await kdniaoLookup(mail, shipperCode: shipperCode, phone: phone)
+                ParcelRunLog.record("快递鸟", "备用查询成功：节点 \(found.nodes.count) 条")
                 remember(mail)
                 return found
             } catch {
+                ParcelRunLog.record("快递鸟", "备用查询失败（查看物流查询页面提示）")
                 failures.append("快递鸟：" + error.localizedDescription)
             }
         }
@@ -270,9 +274,11 @@ struct NativeTrackLookup {
             do {
                 let found = try await kuaidi100Lookup(
                     mail, shipperCode: shipperCode, phone: phone)
+                ParcelRunLog.record("快递100", "备用查询成功：节点 \(found.nodes.count) 条")
                 remember(mail)
                 return found
             } catch {
+                ParcelRunLog.record("快递100", "备用查询失败（可能受 30 分钟间隔或额度限制）")
                 failures.append("快递100：" + error.localizedDescription)
             }
         }
@@ -280,9 +286,11 @@ struct NativeTrackLookup {
         if publicFallbackEnabled {
             do {
                 let found = try await publicLookup(mail)
+                ParcelRunLog.record("公开查询", "备用查询成功：节点 \(found.nodes.count) 条")
                 remember(mail)
                 return found
             } catch {
+                ParcelRunLog.record("公开查询", "备用查询失败")
                 failures.append("公开接口：" + error.localizedDescription)
             }
         }
