@@ -1914,6 +1914,10 @@ struct CourierSettings: View {
     @State private var configured = NativeTracking.isConfigured
     @State private var loggedIn = NativeTracking.hasOfficialLogin
     @State private var accountStatus = NativeTracking.accountStatus
+    @State private var kuaidi100Customer = NativeTracking.get("kuaidi100Customer")
+    @State private var kuaidi100Key = NativeTracking.get("kuaidi100Key")
+    @State private var kuaidi100Configured = NativeTracking.isKuaidi100Configured
+    @AppStorage("native.track.publicFallback.enabled") private var publicFallbackEnabled = true
     @State private var officialLogin = false
     @State private var notice: String?
 
@@ -1971,10 +1975,38 @@ struct CourierSettings: View {
                     notice = "API 配置已清除"
                 }.disabled(!configured)
             }
-            Section("状态") {
-                LabeledContent("配置方式", value: loggedIn ? "官方账号" : configured ? "API 密钥" : "未配置")
-                LabeledContent("查询服务", value: configured ? "已配置" : "尚未配置")
-                Text("快递鸟查询需配置有效 API 密钥。账号已配置时无需重复登录；查询时仍优先复用其他平台的物流数据。")
+            Section("物流查询优先级") {
+                LabeledContent("1 · 快递鸟", value: configured ? "优先查询" : "未配置，跳过")
+                LabeledContent("2 · 已授权平台", value: "淘宝 / 菜鸟 / 拼多多")
+                LabeledContent("3 · 快递100", value: kuaidi100Configured ? "备选已配置" : "未配置，跳过")
+                LabeledContent("4 · 公开免费接口", value: publicFallbackEnabled ? "失败后尝试" : "已关闭")
+                Toggle("允许公开接口兜底", isOn: $publicFallbackEnabled)
+                    .tint(accent)
+                Text("仅在前面的接口无有效轨迹时调用。公开接口会接收运单号，不发送账号 Cookie 或手机号；免费接口可能限流或停止服务。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("快递100 备用 API（可选）") {
+                TextField("Customer 授权码", text: $kuaidi100Customer)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                SecureField("Key", text: $kuaidi100Key)
+                Button("保存快递100备用密钥") {
+                    do {
+                        try NativeTracking.setKuaidi100(
+                            customer: kuaidi100Customer, key: kuaidi100Key)
+                        kuaidi100Configured = true
+                        notice = "快递100密钥已保存，仅作为备选查询来源"
+                    } catch { notice = error.localizedDescription }
+                }
+                Button("清除快递100备用密钥", role: .destructive) {
+                    NativeTracking.clearKuaidi100()
+                    kuaidi100Customer = ""
+                    kuaidi100Key = ""
+                    kuaidi100Configured = false
+                    notice = "已清除快递100备用密钥"
+                }
+                .disabled(!kuaidi100Configured)
+                Text("快递100官方接口需要自行申请 Customer / Key，可能产生调用费用；按官方限制控制查询频率。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
@@ -1985,6 +2017,9 @@ struct CourierSettings: View {
             configured = NativeTracking.isConfigured
             loggedIn = NativeTracking.hasOfficialLogin
             accountStatus = NativeTracking.accountStatus
+            kuaidi100Customer = NativeTracking.get("kuaidi100Customer")
+            kuaidi100Key = NativeTracking.get("kuaidi100Key")
+            kuaidi100Configured = NativeTracking.isKuaidi100Configured
         }
         .sheet(isPresented: $officialLogin) {
             NavigationStack {

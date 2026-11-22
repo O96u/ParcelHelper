@@ -103,6 +103,40 @@ struct NativeTrackLookup {
     }
 
     static var isConfigured:Bool { !get("businessID").isEmpty && !get("apiKey").isEmpty }
+    // A documented public no-key tracking endpoint can disappear or throttle.
+    // Do not send cookies or recipient phone numbers to public fallback APIs.
+    private static let publicFallbackKey = "native.track.publicFallback.enabled"
+    static var publicFallbackEnabled: Bool {
+        get { (UserDefaults.standard.object(forKey: publicFallbackKey) as? Bool) ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: publicFallbackKey) }
+    }
+    static var isKuaidi100Configured: Bool {
+        !get("kuaidi100Customer").isEmpty && !get("kuaidi100Key").isEmpty
+    }
+    static func setKuaidi100(customer: String, key: String) throws {
+        let id = customer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (4...100).contains(id.count), (8...160).contains(secret.count),
+              !id.contains(where: \.isWhitespace),
+              !secret.contains(where: \.isWhitespace) else {
+            throw NativeSyncError.badResponse("请填写有效的快递100 Customer 与 Key")
+        }
+        save("kuaidi100Customer", value: id)
+        save("kuaidi100Key", value: secret)
+    }
+    static func clearKuaidi100() {
+        save("kuaidi100Customer", value: "")
+        save("kuaidi100Key", value: "")
+    }
+    private static let kuaidi100Codes: [String: String] = [
+        "ZTO": "zhongtong", "SF": "shunfeng", "YTO": "yuantong",
+        "YUNDA": "yunda", "STO": "shentong", "JT": "jtexpress",
+        "EMS": "ems", "JD": "jd", "DBWL": "debangwuliu",
+        "HTKY": "huitongkuaidi"
+    ]
+    private static var publicLastAttempt: [String: Date] = [:]
+    private static var publicSuccessCache: [String: (Date, NativeTrackLookup)] = [:]
+
     // Login provenance is separate from API configuration. The official web
     // login token and unmasked phone are never persisted.
     static var hasOfficialLogin: Bool {
@@ -202,20 +236,62 @@ struct NativeTrackLookup {
         guard mail.range(of:#"^[A-Za-z0-9-]{8,40}$"#,options:.regularExpression) != nil else {
             throw NativeSyncError.badResponse("请填写有效的运单号（8 至 40 位字母、数字或短横线）")
         }
-        // Prefer a first-party platform that already has a valid session.
+        var failures: [String] = []
+        // User-configured provider gets absolute priority. Only a missing or
+        // invalid route triggers the next source; no concurrent API storms.
+        if isConfigured {
+            do {
+                let found = try await kdniaoLookup(mail, shipperCode: shipperCode, phone: phone)
+                remember(mail)
+                return found
+            } catch {
+                failures.append("快递鸟：" + error.localizedDescription)
+            }
+        }
+
+        // Use the selected parcel's own platform account before sending its
+        // number to another third party; this also covers friend parcels.
         if let native = await NativeParcelSync.lookupShipment(
-            mail, source: source, accountIDs: accountIDs) {
+            mail, source: source, accountIDs: accountIDs),
+            !native.nodes.isEmpty || !native.latest.isEmpty {
             remember(mail)
             return native
         }
-        guard isConfigured else {
-            if source == "cainiao" || source == "taobao" {
-                throw NativeSyncError.unavailable(
-                    "菜鸟暂未返回这笔运单的运输轨迹。亲友包裹可能仅开放取件码和驿站状态；请在菜鸟官方核对，无需为此专门配置快递鸟 API。")
+
+        if isKuaidi100Configured {
+            do {
+                let found = try await kuaidi100Lookup(
+                    mail, shipperCode: shipperCode, phone: phone)
+                remember(mail)
+                return found
+            } catch {
+                failures.append("快递100：" + error.localizedDescription)
             }
-            throw NativeSyncError.noLogin(
-                "暂无可用物流接口，请在账号授权中检查平台登录或配置快递鸟 API")
         }
+
+        if publicFallbackEnabled {
+            do {
+                let found = try await publicLookup(mail)
+                remember(mail)
+                return found
+            } catch {
+                failures.append("公开接口：" + error.localizedDescription)
+            }
+        }
+
+        let detail = failures.isEmpty ? "" :
+            "；" + failures.prefix(3).joined(separator: "；")
+        if !publicFallbackEnabled && !isConfigured && !isKuaidi100Configured {
+            throw NativeSyncError.unavailable(
+                "已授权平台没有返回有效物流轨迹。可在快递鸟设置中配置 API 或开启公开接口兜底。")
+        }
+        throw NativeSyncError.unavailable(
+            "已尝试可用物流接口，但未获得有效轨迹" + detail)
+    }
+
+    private static func kdniaoLookup(_ mail: String,
+                                     shipperCode: String,
+                                     phone: String) async throws -> NativeTrackLookup {
         let id=get("businessID"),secret=get("apiKey")
         var chosen=shipperCode.trimmingCharacters(in:.whitespacesAndNewlines).uppercased()
         var company=shippers.first(where:{$0.0 == chosen})?.1 ?? ""
@@ -269,12 +345,158 @@ struct NativeTrackLookup {
             .prefix(60)
             .map{TrackNode(time:$0.0,text:$0.1)}
         let latest=traces.first?.text ?? ""
-        guard !traces.isEmpty || !(json["State"] as? String ?? "").isEmpty else {
+        // Only a genuine trace is a successful result for failover.
+        // A state code without route events must not hide other providers.
+        guard !traces.isEmpty else {
             throw NativeSyncError.unavailable("快递鸟没有返回这笔运单的有效物流轨迹")
         }
         if !tail.isEmpty { savePhone(tail,mail:mail) }
         remember(mail)
         return NativeTrackLookup(mailNo:mail,company:company,shipperCode:chosen,
                                  latest:latest,nodes:Array(traces),provider:"快递鸟")
+    }
+    // Official Kuaidi100 realtime API: POST /poll/query.do, MD5 of
+    // param + key + customer, uppercase hex. Requires the user's own keys.
+    // Docs: https://api.kuaidi100.com/document/5f0ffb5ebc8da837cbd8aefc.html
+    private static func kuaidi100Lookup(_ mail: String,
+                                        shipperCode: String,
+                                        phone: String) async throws -> NativeTrackLookup {
+        var selected = shipperCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        if selected.isEmpty, let detected = try? await detect(mail) {
+            selected = detected.0
+        }
+        guard let code = kuaidi100Codes[selected] else {
+            throw NativeSyncError.unavailable("没有可确认的快递公司编码")
+        }
+        let fullPhone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Kuaidi100 documents a full phone for SF / ZTO, not four digits.
+        if (selected == "SF" || selected == "ZTO") && fullPhone.count != 11 {
+            throw NativeSyncError.verify("此快递公司查询需要完整号码，已跳过备选接口")
+        }
+        var query: [String: String] = [
+            "com": code, "num": mail, "show": "0", "order": "desc"
+        ]
+        if fullPhone.range(of: #"^1[3-9][0-9]{9}$"#,
+                           options: .regularExpression) != nil {
+            query["phone"] = fullPhone
+        }
+        let blob = try JSONSerialization.data(withJSONObject: query, options: [.sortedKeys])
+        guard let param = String(data: blob, encoding: .utf8) else {
+            throw NativeSyncError.badResponse("快递100请求编码失败")
+        }
+        let customer = get("kuaidi100Customer")
+        let key = get("kuaidi100Key")
+        let checksum = param + key + customer
+        let sign = Insecure.MD5.hash(data: Data(checksum.utf8))
+            .map { String(format: "%02X", $0) }.joined()
+        let body = "customer=" + formEscape(customer) +
+            "&sign=" + formEscape(sign) + "&param=" + formEscape(param)
+        var req = URLRequest(url: URL(string: "https://poll.kuaidi100.com/poll/query.do")!,
+                             cachePolicy: .reloadIgnoringLocalCacheData,
+                             timeoutInterval: 13)
+        req.httpMethod = "POST"
+        req.setValue("application/x-www-form-urlencoded",
+                     forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data(body.utf8)
+        req.httpShouldHandleCookies = false
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              data.count < 500_000,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NativeSyncError.unavailable("快递100网络请求失败")
+        }
+        let status = String(describing: json["status"] ?? "")
+        guard status == "200" else {
+            throw NativeSyncError.unavailable(
+                (json["message"] as? String) ?? "快递100未提供有效轨迹")
+        }
+        if let returned = json["nu"] as? String, !returned.isEmpty,
+           returned.caseInsensitiveCompare(mail) != .orderedSame {
+            throw NativeSyncError.badResponse("快递100运单号不匹配")
+        }
+        let nodes = (json["data"] as? [[String: Any]] ?? [])
+            .compactMap { item -> TrackNode? in
+                let content = item["context"] as? String ?? ""
+                guard !content.isEmpty else { return nil }
+                return TrackNode(time: item["time"] as? String ?? "", text: content)
+            }
+        guard !nodes.isEmpty else {
+            throw NativeSyncError.unavailable("快递100未返回物流轨迹")
+        }
+        return NativeTrackLookup(mailNo: mail,
+            company: shippers.first(where: { $0.0 == selected })?.1 ?? "",
+            shipperCode: selected, latest: nodes[0].text,
+            nodes: Array(nodes.prefix(60)), provider: "快递100")
+    }
+
+    // Publicly documented free endpoint. As third-party availability is not
+    // guaranteed, throttle it independently and accept ONLY matching
+    // waybill numbers plus timestamped textual tracking events.
+    // Docs: https://api.aa1.cn/api.aa1.cn/doc/szx-express-tracking.html
+    private static func publicLookup(_ mail: String) async throws -> NativeTrackLookup {
+        if let cached = publicSuccessCache[mail],
+           Date().timeIntervalSince(cached.0) < 180 {
+            var data = cached.1
+            data.provider = "公开接口（短时缓存）"
+            return data
+        }
+        if let previous = publicLastAttempt[mail],
+           Date().timeIntervalSince(previous) < 180 {
+            throw NativeSyncError.unavailable("免费接口限频中，请稍后查询")
+        }
+        publicLastAttempt[mail] = Date()
+        var parts = URLComponents(string:
+            "https://api.songzixian.com/api/express/tracking")!
+        parts.queryItems = [
+            .init(name: "dataSource", value: "nationwide_express"),
+            .init(name: "trackingNumber", value: mail)
+        ]
+        guard let url = parts.url, url.host == "api.songzixian.com" else {
+            throw NativeSyncError.badResponse("公开接口地址异常")
+        }
+        var req = URLRequest(url: url,
+                             cachePolicy: .reloadIgnoringLocalCacheData,
+                             timeoutInterval: 10)
+        req.httpShouldHandleCookies = false
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.urlCache = nil
+        config.timeoutIntervalForRequest = 10
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse,
+              http.statusCode == 200, data.count < 500_000,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (json["code"] as? Int) == 200,
+              let payload = json["data"] as? [String: Any] else {
+            throw NativeSyncError.unavailable("公开接口暂不可用")
+        }
+        guard let responseMail = payload["trackingNumber"] as? String,
+              responseMail.caseInsensitiveCompare(mail) == .orderedSame else {
+            throw NativeSyncError.badResponse("公开接口返回运单号不匹配")
+        }
+        let nodes = (payload["trackingDetails"] as? [[String: Any]] ?? [])
+            .compactMap { node -> TrackNode? in
+                let text = node["description"] as? String ?? ""
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return nil
+                }
+                return TrackNode(time: node["time"] as? String ?? "", text: text)
+            }
+            .sorted { $0.time > $1.time }
+        guard !nodes.isEmpty else {
+            throw NativeSyncError.unavailable("公开接口暂无物流轨迹")
+        }
+        let result = NativeTrackLookup(mailNo: mail,
+            company: payload["courierName"] as? String ?? "",
+            shipperCode: payload["courierCode"] as? String ?? "",
+            latest: nodes[0].text, nodes: Array(nodes.prefix(60)),
+            provider: "公开接口（Songzixian）")
+        publicSuccessCache[mail] = (Date(), result)
+        return result
     }
 }
