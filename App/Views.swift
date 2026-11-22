@@ -963,7 +963,7 @@ struct ParcelDetail: View {
         Task {
             defer {isRefreshing=false}
             do {
-                let latest=try await NativeTracking.lookup(mail,source:p.source,
+                let latest=try await NativeTracking.lookup(mail,source:p.source ?? p.srcApp?.id,
                     shipperCode:p.shipperCode ?? "",phone:"",
                     accountIDs:p.linkedAccounts ?? [])
                 guard var current=store.snapshot.parcels.first(where:{$0.uuid == parcelID}) else {return}

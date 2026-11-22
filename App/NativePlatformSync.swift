@@ -292,9 +292,17 @@ private enum SyncJSON {
                     let linked = parcel.linkedAccounts ?? []
                     let belongs = linked.contains(selected) ||
                         (linked.isEmpty && selected == ParcelAccounts.legacyID("taobao"))
-                    return source == "cainiao" && belongs &&
+                    // A Taobao order may later merge with a Cainiao station
+                    // record for the same mail number. Keep that record
+                    // eligible for a Cainiao status recheck.
+                    return (source == "cainiao" || source == "taobao") && belongs &&
                         !parcel.isDone && !parcel.isSigned &&
                         SyncJSON.isMail(mail) && !seen.contains(mail.uppercased())
+                }.sorted {
+                    if ($0.source == "cainiao") != ($1.source == "cainiao") {
+                        return $0.source == "cainiao"
+                    }
+                    return $0.createdAt > $1.createdAt
                 }
                 for parcel in candidates.prefix(3) {
                     guard let mail = parcel.mailNo,
@@ -523,6 +531,8 @@ private enum SyncJSON {
                 p.pickedAt != previous?.pickedAt || p.trackNodes != oldNodes ||
                 p.trackLatest != oldLatest || p.codes != previousCodes ||
                 p.stationText != previous?.stationText ||
+                p.trackCompany != previous?.trackCompany ||
+                p.mailNo != previous?.mailNo ||
                 p.source != priorSource || p.linkedAccounts != previous?.linkedAccounts
             if needsWrite {
                 store.upsert(p)
