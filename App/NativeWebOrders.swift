@@ -455,10 +455,12 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 }
                 self.record("订单页检查：候选 \(result.orders.count) 笔，来源 \(result.source ?? "网页")")
                 if result.verify {
+                    self.record("页面要求安全验证，暂停自动读取")
                     self.complete("平台要求安全验证，请在官方页面完成验证后重新同步")
                     return
                 }
                 if result.login {
+                    self.record("订单页出现登录提示，当前网页会话失效")
                     self.complete("未检测到有效账号登录，请先授权")
                     return
                 }
