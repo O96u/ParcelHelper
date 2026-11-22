@@ -1994,6 +1994,17 @@ struct Kuaidi100Settings: View {
 
     var body: some View {
         Form {
+            Section {
+                HStack(spacing: 12) {
+                    Kuaidi100BrandMark(size: 47)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("快递100").font(.headline)
+                        Text("独立的备用物流查询服务")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 5)
+            }
             Section("快递100 API") {
                 LabeledContent("状态", value: configured ? "已配置" : "未配置")
                 TextField("Customer 授权码", text: $customer)
