@@ -79,6 +79,10 @@ private struct WebShipment: Decodable {
         guard await ParcelAccounts.hasSession(platform, accountID: selected) else { return false }
         let key = "native.web.autosync.at." + platform + "." + selected
         let now = Date().timeIntervalSince1970
+        let manualKey = "native.web.manual.lastAt." + platform + "." + selected
+        if force && now - UserDefaults.standard.double(forKey: manualKey) < 30 {
+            return false
+        }
         // Use the same foreground auto-refresh interval as the native
         // platform synchronizer; manual force-sync remains available.
         let interval = TimeInterval(RefreshPolicy.minutes) * 60
@@ -89,6 +93,7 @@ private struct WebShipment: Decodable {
         if (activePlatform == platform && activeAccountID == selected) ||
             pending.contains(job) { return true }
         UserDefaults.standard.set(now, forKey: key)
+        if force { UserDefaults.standard.set(now, forKey: manualKey) }
         pending.append(job)
         startNext()
         return true
@@ -99,6 +104,13 @@ private struct WebShipment: Decodable {
         let job = pending.removeFirst().components(separatedBy: "|")
         guard job.count == 2 else { startNext(); return }
         let platform = job[0], accountID = job[1]
+        // A queued job must never revive a profile removed during a previous
+        // WebKit task. Skip it without creating another WKWebsiteDataStore.
+        guard ParcelAccounts.accounts(for: platform)
+            .contains(where: { $0.id == accountID }) else {
+            startNext()
+            return
+        }
         // Consent may have been revoked while this reader was queued.
         if platform == "pdd" && !PddAccountProtection.webAccessAllowed {
             startNext()
@@ -135,12 +147,17 @@ private struct WebShipment: Decodable {
               expectedSequence == nil || sequence == expectedSequence else { return }
         timeoutTask?.cancel()
         timeoutTask = nil
-        recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
-        if !succeeded, let accountID = activeAccountID {
+        let retained = activeAccountID.map { accountID in
+            ParcelAccounts.accounts(for: "pdd").contains(where: { $0.id == accountID })
+        } ?? false
+        if retained {
+            recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
+        }
+        if !succeeded, retained, let accountID = activeAccountID {
             Task { await ParcelNotifications.notifySyncFailure(
                 platform: "pdd", accountID: accountID) }
         }
-        if succeeded {
+        if succeeded && retained {
             let syncedAt = Date().timeIntervalSince1970
             UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success.pdd")
@@ -164,13 +181,20 @@ private struct WebShipment: Decodable {
               expectedSequence == nil || sequence == expectedSequence else { return }
         timeoutTask?.cancel()
         timeoutTask = nil
-        recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
-        if failure != nil, let accountID = activeAccountID {
+        let retained = activeAccountID.map { accountID in
+            ParcelAccounts.accounts(for: platform).contains(where: { $0.id == accountID })
+        } ?? false
+        if retained {
+            recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
+        }
+        if failure != nil, retained, let accountID = activeAccountID {
             Task { await ParcelNotifications.notifySyncFailure(
                 platform: platform, accountID: accountID) }
         }
         let description: String
-        if let failure {
+        if !retained {
+            description = "账号已解除授权，忽略滞后的网页同步结果"
+        } else if let failure {
             description = (platform == "jd" ? "京东" : "淘宝") + "自动同步： " + failure
         } else {
             var scoped = packages
@@ -210,7 +234,16 @@ struct NativeWebAutoSyncHost: View {
                     // callback cannot accidentally complete a newer reader.
                     let generation = sync.sequence
                     if platform == "pdd" {
-                        PddOrdersAutoSyncReader(accountID: accountID) { message, succeeded in
+                        PddOrdersAutoSyncReader(
+                            accountID: accountID,
+                            isStillCurrent: {
+                                sync.activePlatform == "pdd" &&
+                                sync.activeAccountID == accountID &&
+                                sync.sequence == generation &&
+                                ParcelAccounts.accounts(for: "pdd")
+                                    .contains(where: { $0.id == accountID })
+                            }
+                        ) { message, succeeded in
                             Task { @MainActor in
                                 sync.finishPdd(message, succeeded: succeeded,
                                                expectedAccountID: accountID,

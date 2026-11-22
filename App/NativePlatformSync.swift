@@ -272,8 +272,10 @@ private enum SyncJSON {
             throw NativeSyncError.unavailable("账号正在等待失败退避，稍后会自动再试")
         }
         let last = UserDefaults.standard.double(forKey: key)
-        if !force && now - last < minGap {
-            throw NativeSyncError.unavailable("请求过于频繁，请稍后再试")
+        // Force bypasses retry backoff, not endpoint rate limiting. The old
+        // condition unintentionally let a rapid manual tap burst the API.
+        if now - last < minGap {
+            throw NativeSyncError.unavailable("请求过于频繁，请 30 秒后再试")
         }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: key)
         do {
@@ -324,6 +326,14 @@ private enum SyncJSON {
             // A background expiration must not merge stale results or update
             // sync-success state after its parent task was cancelled.
             try Task.checkCancellation()
+            if id != "mi" {
+                let kind = id == "cainiao" ? "taobao" : id
+                guard ParcelAccounts.accounts(for: kind).contains(where: { $0.id == selected }) else {
+                    // A removed account can finish an in-flight network
+                    // request; never restore its deleted parcels afterward.
+                    throw CancellationError()
+                }
+            }
             let baselineKey = "native.sync.baseline." + id + "." + selected
             let hadBaseline = UserDefaults.standard.bool(forKey: baselineKey)
             let count = merge(incoming, notifyNewArrival: hadBaseline)

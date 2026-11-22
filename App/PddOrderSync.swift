@@ -60,13 +60,16 @@ struct PddOrderSyncPage: View {
 
     @MainActor fileprivate static func save(_ orders: [PddDetectedOrder],
                                             accountID: String? = nil) -> Int {
+        let selected = accountID ?? ParcelAccounts.activeID(for: "pdd")
+        guard ParcelAccounts.accounts(for: "pdd")
+            .contains(where: { $0.id == selected }) else { return 0 }
         let incoming = orders.compactMap { order -> NativeSyncParcel? in
             let mail = order.trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines)
             let code = order.pickupCode ?? ""
             guard mail.range(of: #"^[A-Za-z0-9-]{8,40}$"#, options: .regularExpression) != nil ||
                     (!code.isEmpty && !(order.station ?? "").isEmpty) else { return nil }
             var p = NativeSyncParcel(source: "pdd")
-            p.accountID = accountID ?? ParcelAccounts.activeID(for: "pdd")
+            p.accountID = selected
             p.orderID = order.orderSn
             p.mailNo = mail
             p.title = order.title
@@ -86,10 +89,14 @@ struct PddOrderSyncPage: View {
 // the foreground automatic sync. There are no separate parsing paths.
 struct PddOrdersAutoSyncReader: View {
     var accountID: String? = nil
+    // A request may finish after the hidden reader timed out or another
+    // account's reader replaced it. Ignore all such stale callbacks.
+    var isStillCurrent: () -> Bool = { true }
     let onComplete: (String, Bool) -> Void
 
     var body: some View {
         PddOrdersWebView(accountID: accountID) { result in
+            guard isStillCurrent() else { return }
             switch result {
             case .success(let orders, let discovered):
                 let changed = PddOrderSyncPage.save(orders, accountID: accountID)
