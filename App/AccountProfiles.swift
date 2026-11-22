@@ -588,6 +588,7 @@ private struct PddOfficialPhoneManager: UIViewRepresentable {
 }
 
 struct MultiAccountPage: View {
+    @Environment(\.scenePhase) private var scenePhase
     let platformID: String
     @State private var revision = 0
     @State private var validAccounts: Set<String> = []
@@ -667,7 +668,7 @@ struct MultiAccountPage: View {
                                 in: RoundedRectangle(cornerRadius: 25))
                 }
                 .buttonStyle(.plain)
-                .disabled(loginAccount != nil || pddConsent ||
+                .disabled(!accountsLoaded || loginAccount != nil || pddConsent ||
                           busy != nil || confirmingLoginID != nil)
                 if kind == "pdd" {
                     Toggle("允许拼多多网页授权及同步", isOn: $pddWebEnabled)
@@ -686,6 +687,9 @@ struct MultiAccountPage: View {
         .navigationTitle(title + "账号")
         .navigationBarTitleDisplayMode(.inline)
         .task { await reload() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await reload() } }
+        }
         .sheet(item: $loginAccount, onDismiss: {
             let unfinished = draftAccount
             draftAccount = nil
@@ -880,7 +884,7 @@ struct MultiAccountPage: View {
                 .disabled(busy != nil || !validAccounts.contains(account.id))
                 Spacer(minLength: 0)
                 Menu {
-                    if account.id != currentID {
+                    if account.id != currentID && validAccounts.contains(account.id) {
                         Button {
                             ParcelAccounts.select(account.id, for: kind)
                             revision += 1
