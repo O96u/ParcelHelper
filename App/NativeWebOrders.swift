@@ -20,6 +20,8 @@ private struct WebShipment: Decodable {
     var pickup: String
     var station: String
     var tracks: [TrackNode]
+    var login: Bool?
+    var verify: Bool?
 }
 @MainActor final class NativeWebAutoSync: ObservableObject {
     static let shared = NativeWebAutoSync()
@@ -532,8 +534,22 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 guard let self, let webView, !self.finished, self.position < self.orders.count else { return }
                 if scriptError == nil,
                    let json = value as? String, let data = json.data(using: .utf8),
-                   let shipment = try? JSONDecoder().decode(WebShipment.self, from: data),
-                   shipment.mail.range(of: #"^[A-Za-z0-9-]{8,40}$"#, options: .regularExpression) != nil {
+                   let shipment = try? JSONDecoder().decode(WebShipment.self, from: data) {
+                    if shipment.verify == true {
+                        self.record("物流详情要求安全验证，停止本轮读取")
+                        self.complete("物流页面要求官方安全验证，请在京东网页完成验证后重新同步")
+                        return
+                    }
+                    if shipment.login == true {
+                        self.record("物流详情跳转到登录页，停止本轮读取")
+                        self.complete("京东物流网页会话已失效，请重新登录后同步")
+                        return
+                    }
+                    if shipment.mail.range(of: #"^[A-Za-z0-9-]{8,40}$"#,
+                                           options: .regularExpression) == nil {
+                        self.retryTracking(webView)
+                        return
+                    }
                     let order = self.orders[self.position]
                     var item = NativeSyncParcel(source: self.platform)
                     item.accountID = self.accountID ?? ""
@@ -553,19 +569,24 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     self.next(webView)
                     return
                 }
-                if self.trackingReadAttempts < 2 {
-                    self.trackingReadAttempts += 1
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) { [weak self, weak webView] in
-                        guard let self, let view = webView, !self.finished else { return }
-                        self.readTracking(view)
-                    }
-                    return
-                }
-                self.record("第 \(self.position + 1) 笔：物流页无有效运单号或解析失败（重试后）")
-                self.missingTracking += 1
-                self.position += 1
-                self.next(webView)
+                self.retryTracking(webView)
             }
+        }
+
+        private func retryTracking(_ webView: WKWebView) {
+            guard !finished else { return }
+            if trackingReadAttempts < 2 {
+                trackingReadAttempts += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) { [weak self, weak webView] in
+                    guard let self, let view = webView, !self.finished else { return }
+                    self.readTracking(view)
+                }
+                return
+            }
+            record("第 \(position + 1) 笔：物流页无有效运单号或解析失败（重试后）")
+            missingTracking += 1
+            position += 1
+            next(webView)
         }
         private func complete(_ error: String) {
             guard !finished else { return }
@@ -702,7 +723,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             if(note)tracks.push({time:m[1],text:note.slice(0,500)});
           }
           return JSON.stringify({mail:mail,company:company,
-            latest:tracks[0]?tracks[0].text:'',pickup:code,station:'',tracks:tracks});
+            latest:tracks[0]?tracks[0].text:'',pickup:code,station:'',tracks:tracks,login:/请登录|登录后查看/.test(txt)&&!mail,verify:/滑块验证|安全验证|人机验证/.test(txt)});
         })()
         """#
         private static let taobaoTrackingJS = #"""
