@@ -241,6 +241,7 @@ struct NativeTrackLookup {
             throw NativeSyncError.badResponse("请填写有效的运单号（8 至 40 位字母、数字或短横线）")
         }
         var failures: [String] = []
+        var statusOnly: NativeTrackLookup?
         // User-configured provider gets absolute priority. Only a missing or
         // invalid route triggers the next source; no concurrent API storms.
         if isConfigured {
@@ -256,10 +257,12 @@ struct NativeTrackLookup {
         // Use the selected parcel's own platform account before sending its
         // number to another third party; this also covers friend parcels.
         if let native = await NativeParcelSync.lookupShipment(
-            mail, source: source, accountIDs: accountIDs),
-            !native.nodes.isEmpty || !native.latest.isEmpty {
-            remember(mail)
-            return native
+            mail, source: source, accountIDs: accountIDs) {
+            if !native.nodes.isEmpty {
+                remember(mail)
+                return native
+            }
+            if !native.latest.isEmpty { statusOnly = native }
         }
 
         if isKuaidi100Configured {
@@ -283,6 +286,12 @@ struct NativeTrackLookup {
             }
         }
 
+        // A verified first-party status is more useful than an error when
+        // none of the backup providers supplies a full event timeline.
+        if let statusOnly {
+            remember(mail)
+            return statusOnly
+        }
         let detail = failures.isEmpty ? "" :
             "；" + failures.prefix(3).joined(separator: "；")
         if !publicFallbackEnabled && !isConfigured && !isKuaidi100Configured {
@@ -372,8 +381,11 @@ struct NativeTrackLookup {
             found.provider = "快递100（30分钟内缓存）"
             return found
         }
-        if let previous = kuaidi100LastAttempt[mail],
-           now.timeIntervalSince(previous) < 1800 {
+        let persisted = UserDefaults.standard.double(
+            forKey: "native.track.kuaidi100.last." + mail)
+        let previous = kuaidi100LastAttempt[mail] ??
+            (persisted > 0 ? Date(timeIntervalSince1970: persisted) : nil)
+        if let previous, now.timeIntervalSince(previous) < 1800 {
             throw NativeSyncError.unavailable("该运单查询间隔需不少于30分钟")
         }
         var selected = shipperCode.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -416,6 +428,8 @@ struct NativeTrackLookup {
         req.httpBody = Data(body.utf8)
         req.httpShouldHandleCookies = false
         kuaidi100LastAttempt[mail] = now
+        UserDefaults.standard.set(now.timeIntervalSince1970,
+            forKey: "native.track.kuaidi100.last." + mail)
         let (data, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               data.count < 500_000,
