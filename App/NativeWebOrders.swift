@@ -75,8 +75,14 @@ private struct WebShipment: Decodable {
         let retryAfter = UserDefaults.standard.double(
             forKey: "native.web.retry." + platform + "." + selected + ".after"
         )
-        guard force || Date().timeIntervalSince1970 >= retryAfter else { return false }
-        guard await ParcelAccounts.hasSession(platform, accountID: selected) else { return false }
+        if !force && Date().timeIntervalSince1970 < retryAfter {
+            ParcelRunLog.record(platform, "自动同步暂缓：此前网页读取失败，等待退避时间")
+            return false
+        }
+        guard await ParcelAccounts.hasSession(platform, accountID: selected) else {
+            ParcelRunLog.record(platform, "未排队：当前账号网页登录会话无效")
+            return false
+        }
         let key = "native.web.autosync.at." + platform + "." + selected
         let now = Date().timeIntervalSince1970
         let job = platform + "|" + selected
@@ -86,6 +92,7 @@ private struct WebShipment: Decodable {
             pending.contains(job) { return true }
         let manualKey = "native.web.manual.lastAt." + platform + "." + selected
         if force && now - UserDefaults.standard.double(forKey: manualKey) < 30 {
+            ParcelRunLog.record(platform, "手动同步防重复：30 秒内已有请求")
             return false
         }
         // Use the same foreground auto-refresh interval as the native
@@ -97,6 +104,7 @@ private struct WebShipment: Decodable {
         UserDefaults.standard.set(now, forKey: key)
         if force { UserDefaults.standard.set(now, forKey: manualKey) }
         pending.append(job)
+        ParcelRunLog.record(platform, force ? "手动同步已加入队列" : "前台自动同步已加入队列")
         startNext()
         return true
     }
@@ -120,6 +128,7 @@ private struct WebShipment: Decodable {
         }
         sequence += 1
         isRunning = true
+        ParcelRunLog.record(platform, "开始读取官方订单网页")
         activePlatform = platform
         activeAccountID = accountID
         let requestNumber = sequence
@@ -128,11 +137,12 @@ private struct WebShipment: Decodable {
         timeoutTask?.cancel()
         timeoutTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(nanoseconds: 35_000_000_000)
+                try await Task.sleep(nanoseconds: platform == "jd" ? 75_000_000_000 : 35_000_000_000)
             } catch { return }
             guard let self,
                   activePlatform == platform && activeAccountID == accountID &&
                   sequence == requestNumber else { return }
+            ParcelRunLog.record(platform, "网页同步超时，任务已结束")
             if platform == "pdd" {
                 finishPdd("拼多多购物订单：网页读取超时，请稍后重试", succeeded: false)
             } else {
@@ -215,6 +225,9 @@ private struct WebShipment: Decodable {
                                       forKey: "native.sync.success." + platform + "." + accountID)
             description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(packages.count) 件，导入或更新 \(merged) 件。"
         }
+        ParcelRunLog.record(platform, failure == nil
+            ? "网页同步完成：有效物流 (packages.count) 件"
+            : "网页同步未完成；详情请查看账号同步结果")
         UserDefaults.standard.set(description, forKey: "native.sync.result." + platform)
         if let accountID = activeAccountID {
             UserDefaults.standard.set(description, forKey: "native.sync.result." + platform + "." + accountID)
@@ -372,6 +385,13 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var finished = false
         var usedJDFallback = false
         var emptyReadAttempts = 0
+        var trackingReadAttempts = 0
+        var missingTracking = 0
+
+        private func record(_ stage: String) {
+            let category = platform == "jd" ? "京东网页" : "淘宝网页"
+            Task { @MainActor in ParcelRunLog.record(category, stage) }
+        }
 
         init(platform: String, accountID: String?,
              onProgress: @escaping (String) -> Void,
@@ -383,8 +403,17 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            if stage == .tracking { position += 1; next(webView) }
-            else { complete("页面加载失败：\(error.localizedDescription)") }
+            if (error as NSError).domain == NSURLErrorDomain &&
+                (error as NSError).code == NSURLErrorCancelled { return }
+            if stage == .tracking {
+                record("物流详情页无法打开：已跳过第 \(position + 1) 笔")
+                missingTracking += 1
+                position += 1
+                next(webView)
+            } else {
+                record("订单页打开失败（网络或页面访问错误）")
+                complete("页面加载失败：\(error.localizedDescription)")
+            }
         }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard !finished else { return }
@@ -417,9 +446,11 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 guard let self, let webView, !self.finished else { return }
                 guard error == nil, let text = value as? String, let data = text.data(using: .utf8),
                       let result = try? JSONDecoder().decode(OrdersResponse.self, from: data) else {
+                    self.record("订单页脚本无法解析：官方页面结构可能已变化")
                     self.complete("订单列表解析失败，页面可能已变更")
                     return
                 }
+                self.record("订单页检查：候选 \(result.orders.count) 笔，来源 \(result.source ?? "网页")")
                 if result.verify {
                     self.complete("平台要求安全验证，请在官方页面完成验证后重新同步")
                     return
@@ -435,7 +466,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                       "已收货", "已取件", "确认收货"].contains {
                         order.status.contains($0)
                     }
-                }.prefix(10))
+                }.prefix(self.platform == "jd" ? 15 : 10))
+                self.record("筛选后可查询 \(self.orders.count) 笔订单")
                 if self.orders.isEmpty {
                     if self.emptyReadAttempts < 2 {
                         self.emptyReadAttempts += 1
@@ -446,6 +478,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                         return
                     }
                     if self.platform == "jd" && !self.usedJDFallback {
+                        self.record("列表无匹配订单，尝试从京东个人首页进入订单")
                         self.usedJDFallback = true
                         self.emptyReadAttempts = 0
                         self.scanning = false
@@ -454,6 +487,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                             return
                         }
                     }
+                    self.record("订单列表及备用页面均未识别到符合条件的订单")
                     self.complete("未识别到可查询的订单。页面可能未加载完毕、账号需要安全验证，或平台调整了订单结构；必要时可打开官方订单页核对。")
                 } else {
                     self.stage = .tracking
@@ -465,10 +499,16 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private func next(_ webView: WKWebView) {
             guard !finished else { return }
             if position >= orders.count {
+                record("物流详情读取结束：成功 \(loaded.count) 件，未取得有效单号 \(missingTracking) 笔")
+                if loaded.isEmpty && !orders.isEmpty {
+                    complete("已发现 \(orders.count) 笔订单，但物流详情未取得有效运单号。可能是订单未发货、页面未加载、要求安全验证或页面结构已变化；请在「运行日志」查看阶段记录。")
+                    return
+                }
                 finished = true
                 onComplete(loaded, nil)
                 return
             }
+            trackingReadAttempts = 0
             let order = orders[position]
             onProgress("正在查询 \(position + 1)/\(orders.count) 笔订单的物流")
             let url: String
@@ -483,9 +523,10 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private func readTracking(_ webView: WKWebView) {
             guard !finished, position < orders.count else { return }
             let script = platform == "jd" ? Self.jdTrackingJS : Self.taobaoTrackingJS
-            webView.evaluateJavaScript(script) { [weak self, weak webView] value, _ in
+            webView.evaluateJavaScript(script) { [weak self, weak webView] value, scriptError in
                 guard let self, let webView, !self.finished, self.position < self.orders.count else { return }
-                if let json = value as? String, let data = json.data(using: .utf8),
+                if scriptError == nil,
+                   let json = value as? String, let data = json.data(using: .utf8),
                    let shipment = try? JSONDecoder().decode(WebShipment.self, from: data),
                    shipment.mail.range(of: #"^[A-Za-z0-9-]{8,40}$"#, options: .regularExpression) != nil {
                     let order = self.orders[self.position]
@@ -502,7 +543,21 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     item.tracks = shipment.tracks
                     item.arrived = !shipment.pickup.isEmpty
                     self.loaded.append(item)
+                    self.record("第 \(self.position + 1) 笔：已识别有效运单及 \(shipment.tracks.count) 条轨迹")
+                    self.position += 1
+                    self.next(webView)
+                    return
                 }
+                if self.trackingReadAttempts < 2 {
+                    self.trackingReadAttempts += 1
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) { [weak self, weak webView] in
+                        guard let self, let view = webView, !self.finished else { return }
+                        self.readTracking(view)
+                    }
+                    return
+                }
+                self.record("第 \(self.position + 1) 笔：物流页无有效运单号或解析失败（重试后）")
+                self.missingTracking += 1
                 self.position += 1
                 self.next(webView)
             }
@@ -516,6 +571,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             let login: Bool
             let verify: Bool
             let orders: [WebOrder]
+            let source: String?
         }
         private static let openJDOrders = #"""
         (function(){
