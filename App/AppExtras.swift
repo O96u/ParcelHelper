@@ -461,7 +461,7 @@ struct ParcelUpdatePage: View {
     }
 }
 
-struct ParcelRunLogPage: View {
+@MainActor struct ParcelRunLogPage: View {
     @State private var records: [ParcelRunLog.Entry] = []
     @State private var copied = false
     @State private var confirmClear = false
