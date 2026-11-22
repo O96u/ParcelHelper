@@ -997,7 +997,7 @@ struct MultiAccountPage: View {
                 forKey: "native.platform.enabled.taobao") as? Bool) == false {
                 messages.append("淘宝购物订单来源已关闭，未发起网页同步")
             } else {
-                messages.append("淘宝购物订单未重复排队（可能处于 30 秒请求冷却或失败退避期）")
+                messages.append("淘宝：" + NativeWebAutoSync.shared.lastQueueDecision("taobao", accountID: account.id))
             }
             do {
                 let result = try await NativeParcelSync.run(
@@ -1009,8 +1009,8 @@ struct MultiAccountPage: View {
         } else if kind == "jd" {
             let queued = await NativeWebAutoSync.shared.request(
                 "jd", force: true, accountID: account.id)
-            messages.append(queued ? "已安排京东购物订单同步" :
-                "京东订单未重新排队（可能正处于请求冷却、退避或授权验证阶段）")
+            messages.append(queued ? "已安排京东购物订单同步，可在运行日志查看进度" :
+                "京东：" + NativeWebAutoSync.shared.lastQueueDecision("jd", accountID: account.id))
         } else {
             do {
                 let result = try await NativeParcelSync.run(
