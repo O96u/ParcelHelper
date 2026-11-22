@@ -217,6 +217,7 @@ private struct WebShipment: Decodable {
             UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
             let merged = NativeParcelSync.merge(scoped,
                 notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
+            ParcelRunLog.record(platform, "有效运单 \(scoped.count) 件，新增或更新 \(merged) 件（其余可能已存在、已完成或无变化）")
             if merged == 0 { ParcelStore.shared.persist() }
             UserDefaults.standard.set(true, forKey: baselineKey)
             UserDefaults.standard.set(syncedAt,
@@ -225,9 +226,9 @@ private struct WebShipment: Decodable {
                                       forKey: "native.sync.success." + platform + "." + accountID)
             description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(packages.count) 件，导入或更新 \(merged) 件。"
         }
-        ParcelRunLog.record(platform, failure == nil
-            ? "网页同步完成：有效物流 (packages.count) 件"
-            : "网页同步未完成；详情请查看账号同步结果")
+        if failure != nil {
+            ParcelRunLog.record(platform, "网页同步未完成；详情请查看账号同步结果")
+        }
         UserDefaults.standard.set(description, forKey: "native.sync.result." + platform)
         if let accountID = activeAccountID {
             UserDefaults.standard.set(description, forKey: "native.sync.result." + platform + "." + accountID)
