@@ -997,7 +997,8 @@ struct MultiAccountPage: View {
                 forKey: "native.platform.enabled.taobao") as? Bool) == false {
                 messages.append("淘宝购物订单来源已关闭，未发起网页同步")
             } else {
-                messages.append("淘宝：" + await NativeWebAutoSync.shared.lastQueueDecision("taobao", accountID: account.id))
+                let reason = await NativeWebAutoSync.shared.lastQueueDecision("taobao", accountID: account.id)
+                messages.append("淘宝：" + reason)
             }
             do {
                 let result = try await NativeParcelSync.run(
@@ -1009,8 +1010,9 @@ struct MultiAccountPage: View {
         } else if kind == "jd" {
             let queued = await NativeWebAutoSync.shared.request(
                 "jd", force: true, accountID: account.id)
+            let reason = await NativeWebAutoSync.shared.lastQueueDecision("jd", accountID: account.id)
             messages.append(queued ? "已安排京东购物订单同步，可在运行日志查看进度" :
-                "京东：" + await NativeWebAutoSync.shared.lastQueueDecision("jd", accountID: account.id))
+                "京东：" + reason)
         } else {
             do {
                 let result = try await NativeParcelSync.run(
