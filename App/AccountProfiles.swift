@@ -606,9 +606,13 @@ struct MultiAccountPage: View {
     @State private var pddConsent = false
     @AppStorage("native.pdd.webAccessAllowed") private var pddWebEnabled = false
 
+    // Taobao and Cainiao intentionally share login storage and the selected
+    // account, but their settings entry must retain its own identity.
     private var kind: String { ParcelAccounts.canonical(platformID) }
+    private var brandID: String { platformID == "cainiao" ? "cainiao" : kind }
     private var title: String {
-        ["taobao": "淘宝 / 菜鸟", "jd": "京东", "pdd": "拼多多", "fengchao": "丰巢"][kind] ?? kind
+        ["taobao": "淘宝", "cainiao": "菜鸟", "jd": "京东",
+         "pdd": "拼多多", "fengchao": "丰巢"][brandID] ?? kind
     }
     private var records: [ParcelAccountProfile] { ParcelAccounts.accounts(for: kind) }
     private var currentID: String { ParcelAccounts.activeID(for: kind) }
@@ -676,7 +680,9 @@ struct MultiAccountPage: View {
                     Text("小号登录后可通过拼多多官方页面绑定收件手机号。")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else if kind == "taobao" {
-                    Text("淘宝和菜鸟共用每个账号的登录环境；菜鸟身份码跟随当前默认账号。")
+                    Text(brandID == "cainiao"
+                        ? "菜鸟使用淘宝账号授权体系；登录页面可能显示淘宝标识。两者共用同一账号与 Cookie，但这里仅管理菜鸟同步。"
+                        : "淘宝与菜鸟共用登录账号和 Cookie；此处显示淘宝订单同步，菜鸟驿站同步可在菜鸟入口操作。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -704,14 +710,14 @@ struct MultiAccountPage: View {
                     FengchaoSMSLoginPage(accountID: account.id) {
                         finishLogin(account)
                     }
-                } else if let url = PlatformCatalog.rows.first(where: { $0.id == kind })?.login {
+                } else if let url = PlatformCatalog.rows.first(where: { $0.id == brandID })?.login {
                     PlatformWebLogin(url: kind == "pdd"
                                      ? URL(string: "https://m.pinduoduo.net/mdkd/package?tab=ID_CODE")!
-                                     : url, platformID: kind,
+                                     : url, platformID: brandID,
                                      accountID: account.id) {
                         finishLogin(account)
                     }
-                    .navigationTitle("登录 " + account.nickname)
+                    .navigationTitle(title + "授权 · " + account.nickname)
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
@@ -836,18 +842,27 @@ struct MultiAccountPage: View {
     private func accountCard(_ account: ParcelAccountProfile) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image("brand_" + kind)
+                Image("brand_" + brandID)
                     .resizable().scaledToFill()
                     .frame(width: 45, height: 45)
                     .clipShape(RoundedRectangle(cornerRadius: 13))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(account.nickname).font(.headline)
-                    Text(validAccounts.contains(account.id) ? "已授权" : "需要重新登录")
+                    Text(validAccounts.contains(account.id) ?
+                         "网页登录已授权" : "网页登录状态待验证")
                         .font(.caption)
                         .foregroundStyle(validAccounts.contains(account.id) ?
                                          Color.green : Color.secondary)
-                    let key = "native.sync.success." +
-                              (kind == "taobao" ? "cainiao" : kind) + "." + account.id
+                    let key = "native.sync.success." + (
+                        kind == "taobao" ? "cainiao" : kind) + "." + account.id
+                    let cainiaoResult = UserDefaults.standard.string(
+                        forKey: "native.sync.result.cainiao." + account.id) ?? ""
+                    if brandID == "cainiao" &&
+                       (cainiaoResult.contains("会话自动恢复失败") ||
+                        cainiaoResult.contains("SESSION_EXPIRED")) {
+                        Text("菜鸟接口会话未恢复（网页登录信息仍保留）")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
                     let updated = UserDefaults.standard.double(forKey: key)
                     if updated > 0 {
                         Text("上次同步 " + Date(timeIntervalSince1970: updated)
@@ -959,32 +974,57 @@ struct MultiAccountPage: View {
     }
 
     private func syncAccount(_ account: ParcelAccountProfile) async {
+        guard busy == nil else { return }
         busy = account.id
         defer { busy = nil }
-        do {
-            if kind == "taobao" || kind == "jd" {
-                let queued = await NativeWebAutoSync.shared.request(kind, force: true,
-                                                                     accountID: account.id)
-                if kind == "taobao" {
-                    let result = try? await NativeParcelSync.run("cainiao", force: true,
-                                                                   accountID: account.id)
-                    notice = (queued ? "已安排淘宝订单同步" : "未能启动订单同步") +
-                             (result.map { "；" + $0.description } ?? "")
-                } else {
-                    notice = queued ? "已安排京东订单同步" : "未检测到有效登录会话"
-                }
-            } else {
-                let result = try await NativeParcelSync.run(kind, force: true,
-                                                            accountID: account.id)
-                notice = result.description
-                if kind == "pdd" && PddAccountProtection.webAccessAllowed {
-                    _ = await NativeWebAutoSync.shared.request("pdd", force: true,
-                                                                accountID: account.id)
-                }
+        var messages: [String] = []
+        if brandID == "cainiao" {
+            // The Cainiao entry is for Cainiao parcel/identity status only.
+            // Do not report a Taobao shopping-order cooldown as its failure.
+            do {
+                let result = try await NativeParcelSync.run(
+                    "cainiao", force: true, accountID: account.id)
+                messages.append(result.description)
+            } catch {
+                messages.append("菜鸟同步：" + error.localizedDescription)
             }
-        } catch {
-            notice = error.localizedDescription
+        } else if kind == "taobao" {
+            let queued = await NativeWebAutoSync.shared.request(
+                "taobao", force: true, accountID: account.id)
+            if queued {
+                messages.append("已安排淘宝购物订单同步（后台队列依次执行）")
+            } else if (UserDefaults.standard.object(
+                forKey: "native.platform.enabled.taobao") as? Bool) == false {
+                messages.append("淘宝购物订单来源已关闭，未发起网页同步")
+            } else {
+                messages.append("淘宝购物订单未重复排队（可能处于 30 秒请求冷却或失败退避期）")
+            }
+            do {
+                let result = try await NativeParcelSync.run(
+                    "cainiao", force: true, accountID: account.id)
+                messages.append("菜鸟驿站：" + result.description)
+            } catch {
+                messages.append("菜鸟驿站：" + error.localizedDescription)
+            }
+        } else if kind == "jd" {
+            let queued = await NativeWebAutoSync.shared.request(
+                "jd", force: true, accountID: account.id)
+            messages.append(queued ? "已安排京东购物订单同步" :
+                "京东订单未重新排队（可能正处于请求冷却、退避或授权验证阶段）")
+        } else {
+            do {
+                let result = try await NativeParcelSync.run(
+                    kind, force: true, accountID: account.id)
+                messages.append(result.description)
+                if kind == "pdd" && PddAccountProtection.webAccessAllowed {
+                    _ = await NativeWebAutoSync.shared.request(
+                        "pdd", force: true, accountID: account.id)
+                }
+            } catch {
+                messages.append(error.localizedDescription)
+            }
         }
+        notice = messages.joined(separator: "\n")
         await reload()
     }
 }
