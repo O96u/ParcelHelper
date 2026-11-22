@@ -397,3 +397,131 @@ struct ParcelUpdatePage: View {
         }
     }
 }
+
+
+// Local, bounded diagnostics. Only explicitly authored stage names and counts
+// are recorded. Never pass raw HTML, URLs, cookies, headers, tokens, order IDs,
+// tracking numbers, phone numbers, addresses, or product names to this logger.
+@MainActor enum ParcelRunLog {
+    struct Entry: Codable, Identifiable {
+        var id: UUID = UUID()
+        var date: Date
+        var subsystem: String
+        var event: String
+    }
+
+    private static let key = "native.runtime.diagnostics.v1"
+    private static let maximumEntries = 240
+
+    static func entries() -> [Entry] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let items = try? JSONDecoder().decode([Entry].self, from: data)
+        else { return [] }
+        return items
+    }
+
+    static func record(_ subsystem: String, _ event: String) {
+        // Defense in depth: replace long identifiers and suspicious values in
+        // case a future call accidentally includes a URL or raw platform error.
+        func redact(_ raw: String) -> String {
+            let patterns = [
+                #"https?://[^\s]+"#,
+                #"\b[A-Za-z0-9_-]{18,}\b"#,
+                #"\b\d{7,}\b"#,
+                #"(?i)(?:cookie|token|password|secret|apikey)\s*[:=]\s*[^\s]+"#
+            ]
+            return patterns.reduce(String(raw.prefix(240))) {
+                $0.replacingOccurrences(of: $1, with: "[已隐藏]",
+                                        options: .regularExpression)
+            }
+        }
+        var items = entries()
+        items.append(Entry(date: Date(), subsystem: redact(subsystem),
+                           event: redact(event)))
+        if items.count > maximumEntries {
+            items.removeFirst(items.count - maximumEntries)
+        }
+        if let data = try? JSONEncoder().encode(items) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+
+    static func export() -> String {
+        let lines = entries().map { entry in
+            let stamp = entry.date.formatted(date: .numeric, time: .standard)
+            return "[\(stamp)] [\(entry.subsystem)] \(entry.event)"
+        }
+        return (["ParcelHelper \(ParcelUpdateVersions.installed) · 本地运行日志",
+                 "仅包含流程阶段、状态和数量，不包含登录凭据及订单详情。", ""]
+                + lines).joined(separator: "\n")
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+}
+
+struct ParcelRunLogPage: View {
+    @State private var records: [ParcelRunLog.Entry] = []
+    @State private var copied = false
+    @State private var confirmClear = false
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent("记录数", value: "\(records.count) 条")
+                Button {
+                    UIPasteboard.general.string = ParcelRunLog.export()
+                    copied = true
+                } label: {
+                    Label(copied ? "已复制日志" : "复制日志用于排查", systemImage: "doc.on.doc")
+                }
+                .disabled(records.isEmpty)
+                Button("刷新日志") { reload() }
+                Button("清空运行日志", role: .destructive) {
+                    confirmClear = true
+                }
+                .disabled(records.isEmpty)
+            } footer: {
+                Text("只在本机保存最近 240 条诊断记录；不会自动上传，也不保存 Cookie、账号令牌、手机号、运单号、商品名称或物流地址。排查京东问题时先同步，再回来刷新并复制日志。")
+            }
+            Section("最新运行记录") {
+                if records.isEmpty {
+                    ContentUnavailableView("暂无运行日志",
+                        systemImage: "text.book.closed",
+                        description: Text("前往账号授权页同步一次包裹后，可在这里查看记录"))
+                } else {
+                    ForEach(records.reversed()) { item in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text(item.subsystem)
+                                    .font(.system(size: 13, weight: .semibold))
+                                Spacer()
+                                Text(item.date.formatted(date: .omitted, time: .standard))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(item.event)
+                                .font(.subheadline)
+                                .textSelection(.enabled)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .navigationTitle("运行日志")
+        .onAppear(perform: reload)
+        .confirmationDialog("清空全部本地运行日志？", isPresented: $confirmClear) {
+            Button("清空", role: .destructive) {
+                ParcelRunLog.clear()
+                reload()
+            }
+        }
+    }
+
+    private func reload() {
+        records = ParcelRunLog.entries()
+        copied = false
+    }
+}
