@@ -793,6 +793,7 @@ struct ParcelDetail: View {
     let parcelID: String
     @State private var edit = false
     @State private var isRefreshing = false
+    @State private var detailProvider: String?
     @State private var detailError: String?
     @State private var deleteConfirm = false
     @State private var toast: String?
@@ -811,7 +812,12 @@ struct ParcelDetail: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         }
                         courierHeader(p)
-                        if isRefreshing { ProgressView("正在查询物流详情…").padding(.vertical,8) }
+                        if isRefreshing { ProgressView("正在依次查询物流接口…").padding(.vertical,8) }
+                        if let detailProvider, !detailProvider.isEmpty {
+                            Text("物流数据来源：" + detailProvider)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         if let detailError { Text(detailError).font(.caption).foregroundStyle(.orange) }
                         HStack(spacing: 7) {
                             Image(systemName: p.isDone || p.isSigned ? "checkmark.seal.fill" :
@@ -960,6 +966,7 @@ struct ParcelDetail: View {
         guard !isRefreshing, let p=parcel, let mail=p.mailNo, !mail.isEmpty else {return}
         isRefreshing=true
         detailError=nil
+        detailProvider=nil
         Task {
             defer {isRefreshing=false}
             do {
@@ -973,6 +980,7 @@ struct ParcelDetail: View {
                 if !latest.shipperCode.isEmpty {current.shipperCode=latest.shipperCode}
                 current.trackUpdatedAt=Date().timeIntervalSince1970*1000
                 store.upsert(current)
+                detailProvider = latest.provider
             } catch {
                 detailError=error.localizedDescription
             }
