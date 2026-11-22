@@ -1473,6 +1473,8 @@ struct SettingsHome: View {
                 settingsGroup {
                     nativeRow("常见问题", "questionmark.circle.fill", .blue) { FAQSettingsPage() }
                     Divider().padding(.leading, 58)
+                    nativeRow("运行日志", "list.bullet.rectangle.portrait.fill", .blue) { ParcelRunLogPage() }
+                    Divider().padding(.leading, 58)
                     nativeRow("清除缓存", "trash.fill", .gray) { CacheSettingsPage() }
                 }
                 settingsGroup {
