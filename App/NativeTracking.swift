@@ -107,7 +107,7 @@ struct NativeTrackLookup {
     // Do not send cookies or recipient phone numbers to public fallback APIs.
     private static let publicFallbackKey = "native.track.publicFallback.enabled"
     static var publicFallbackEnabled: Bool {
-        get { (UserDefaults.standard.object(forKey: publicFallbackKey) as? Bool) ?? true }
+        get { (UserDefaults.standard.object(forKey: publicFallbackKey) as? Bool) ?? false }
         set { UserDefaults.standard.set(newValue, forKey: publicFallbackKey) }
     }
     static var isKuaidi100Configured: Bool {

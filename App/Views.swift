@@ -470,7 +470,7 @@ struct PickupHome: View {
     private func refreshAllAsync() async {
         guard !refreshing else { return }
         refreshing = true
-        let result = await NativeHomeRefresh.refresh(force: true)
+        let result = await ParcelManualSync.refreshAll()
         refreshing = false
         refreshNotice = result.joined(separator: "\n")
     }
@@ -659,7 +659,7 @@ struct ParcelsHome: View {
                 .accessibilityLabel("添加包裹")
             }
         }
-        .refreshable { _ = await NativeHomeRefresh.refresh(force: true) }
+        .refreshable { _ = await ParcelManualSync.refreshAll() }
         .sheet(isPresented: $finding) {
             NavigationStack { NativeTrackSearchPage() }
         }
@@ -1925,7 +1925,7 @@ struct CourierSettings: View {
     @State private var kuaidi100Customer = NativeTracking.get("kuaidi100Customer")
     @State private var kuaidi100Key = NativeTracking.get("kuaidi100Key")
     @State private var kuaidi100Configured = NativeTracking.isKuaidi100Configured
-    @AppStorage("native.track.publicFallback.enabled") private var publicFallbackEnabled = true
+    @AppStorage("native.track.publicFallback.enabled") private var publicFallbackEnabled = false
     @State private var officialLogin = false
     @State private var notice: String?
 
@@ -1990,7 +1990,7 @@ struct CourierSettings: View {
                 LabeledContent("4 · 公开免费接口", value: publicFallbackEnabled ? "失败后尝试" : "已关闭")
                 Toggle("允许公开接口兜底", isOn: $publicFallbackEnabled)
                     .tint(accent)
-                Text("仅在前面的接口无有效轨迹时调用。公开接口会接收运单号，不发送账号 Cookie 或手机号；免费接口可能限流或停止服务。")
+                Text("默认关闭。只有你主动开启后，查询失败才会把运单号发送给第三方 Songzixian；绝不发送淘宝 Cookie 或手机号。公开免费接口可能限流或停止服务。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("快递100 备用 API（可选）") {
