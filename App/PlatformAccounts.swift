@@ -102,7 +102,9 @@ enum PlatformCatalog {
         .init(id: "fengchao", title: "丰巢", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.fcbox.com/") ),
         .init(id: "mi", title: "小米快递聚合", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.mi.com/") ),
         .init(id: "douyin", title: "抖音", login: nil, validCookie: nil, domain: nil, note: "手动导入", home: URL(string: "https://www.douyin.com/") ),
-        .init(id: "kdniao", title: "快递鸟", login: nil, validCookie: nil, domain: nil, note: "查询服务", home: URL(string: "https://www.kdniao.com/") )
+        .init(id: "kdniao", title: "快递鸟", login: nil, validCookie: nil, domain: nil, note: "查询服务", home: URL(string: "https://www.kdniao.com/") ),
+        .init(id: "kuaidi100", title: "快递100", login: nil, validCookie: nil, domain: nil, note: "备用查询", home: URL(string: "https://www.kuaidi100.com/") ),
+        .init(id: "publictracking", title: "免费物流查询", login: nil, validCookie: nil, domain: nil, note: "自选兜底", home: URL(string: "https://api.aa1.cn/doc/szx-express-tracking.html") )
     ]
 }
 
@@ -158,13 +160,23 @@ enum PlatformCatalog {
 private struct PlatformBrandMark: View {
     let id: String
     var body: some View {
-        Image("brand_" + id)
-            .resizable()
-            .interpolation(.high)
-            .scaledToFill()
-            .frame(width: 42, height: 42)
-            .clipShape(Circle())
-            .accessibilityLabel(id)
+        Group {
+            if id == "kuaidi100" || id == "publictracking" {
+                Image(systemName: id == "kuaidi100" ? "shippingbox.fill" : "network")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(.blue)
+                    .frame(width: 42, height: 42)
+                    .background(Color.blue.opacity(0.10), in: Circle())
+            } else {
+                Image("brand_" + id)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFill()
+                    .frame(width: 42, height: 42)
+                    .clipShape(Circle())
+            }
+        }
+        .accessibilityLabel(id)
     }
 }
 
@@ -184,10 +196,18 @@ struct PlatformAccountsPage: View {
     @State private var refreshVersion = 0
     @State private var loginSyncBusy = false
     @State private var showPddLoginWarning = false
+    @AppStorage("native.track.publicFallback.enabled") private var publicFallbackEnabled = false
 
     private let blue = Color(red: 0.19, green: 0.49, blue: 0.96)
     private var majorPlatforms: [PlatformWebsite] {
-        PlatformCatalog.rows
+        PlatformCatalog.rows.filter {
+            !["kdniao", "kuaidi100", "publictracking"].contains($0.id)
+        }
+    }
+    private var trackingProviders: [PlatformWebsite] {
+        PlatformCatalog.rows.filter {
+            ["kdniao", "kuaidi100"].contains($0.id)
+        }
     }
     var body: some View {
         ScrollView {
@@ -209,6 +229,42 @@ struct PlatformAccountsPage: View {
                 .background(Color(uiColor: .secondarySystemGroupedBackground),
                             in: RoundedRectangle(cornerRadius: 27, style: .continuous))
                 .padding(.horizontal, 18)
+
+                Text("物流查询")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 24)
+                    .padding(.bottom, 11)
+                VStack(spacing: 0) {
+                    ForEach(trackingProviders) { provider in
+                        row(provider)
+                        Divider().padding(.leading, 76).padding(.trailing, 16)
+                    }
+                    HStack(spacing: 14) {
+                        PlatformBrandMark(id: "publictracking")
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("免费物流查询")
+                                .font(.system(size: 16, weight: .semibold))
+                            Text("其他来源查不到时尝试")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 10)
+                        Toggle("开启免费查询", isOn: $publicFallbackEnabled)
+                            .labelsHidden()
+                            .tint(blue)
+                    }
+                    .padding(.horizontal, 19)
+                    .frame(minHeight: 72)
+                }
+                .background(Color(uiColor: .secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 27))
+                .padding(.horizontal, 18)
+                Text("开启免费查询后，会将运单号发送给第三方服务。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 8)
 
                 Text("同步")
                     .font(.system(size: 13))
@@ -375,6 +431,7 @@ struct PlatformAccountsPage: View {
         case "mi": XiaomiAccountPage()
         case "douyin": DouyinImportView()
         case "kdniao": CourierSettings()
+        case "kuaidi100": Kuaidi100Settings()
         default: PlatformAccountDetail(platform: platform)
         }
     }
@@ -396,6 +453,7 @@ struct PlatformAccountsPage: View {
         switch platform.id {
         case "mi": return NativeMiExpress.hasSession
         case "kdniao": return NativeTracking.isConfigured
+        case "kuaidi100": return NativeTracking.isKuaidi100Configured
         case "douyin": return false
         default: return (accountCounts[platform.id] ?? 0) > 0 ||
                        authenticated.contains(platform.id)
@@ -404,6 +462,9 @@ struct PlatformAccountsPage: View {
     private func detailStatus(_ platform: PlatformWebsite, authorized: Bool) -> String {
         if platform.id == "douyin" { return "手动导入物流单号" }
         if platform.id == "kdniao" { return NativeTracking.accountStatus }
+        if platform.id == "kuaidi100" {
+            return NativeTracking.isKuaidi100Configured ? "API 已配置" : "未配置"
+        }
         guard authorized else { return "未授权" }
         if ["taobao", "cainiao", "jd", "pdd", "fengchao"].contains(platform.id) {
             return "已授权 \(accountCounts[platform.id] ?? 1) 个账号"

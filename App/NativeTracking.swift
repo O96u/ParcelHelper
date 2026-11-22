@@ -242,8 +242,20 @@ struct NativeTrackLookup {
         }
         var failures: [String] = []
         var statusOnly: NativeTrackLookup?
-        // User-configured provider gets absolute priority. Only a missing or
-        // invalid route triggers the next source; no concurrent API storms.
+
+        // Query the parcel's own authorized platform before external APIs.
+        // This retains the original account context for friends' parcels.
+        if let native = await NativeParcelSync.lookupShipment(
+            mail, source: source, accountIDs: accountIDs) {
+            if !native.nodes.isEmpty {
+                remember(mail)
+                return native
+            }
+            if !native.latest.isEmpty { statusOnly = native }
+        }
+
+
+        // Only explicitly configured API services run after platform lookup.
         if isConfigured {
             do {
                 let found = try await kdniaoLookup(mail, shipperCode: shipperCode, phone: phone)
@@ -252,17 +264,6 @@ struct NativeTrackLookup {
             } catch {
                 failures.append("快递鸟：" + error.localizedDescription)
             }
-        }
-
-        // Use the selected parcel's own platform account before sending its
-        // number to another third party; this also covers friend parcels.
-        if let native = await NativeParcelSync.lookupShipment(
-            mail, source: source, accountIDs: accountIDs) {
-            if !native.nodes.isEmpty {
-                remember(mail)
-                return native
-            }
-            if !native.latest.isEmpty { statusOnly = native }
         }
 
         if isKuaidi100Configured {
@@ -296,10 +297,10 @@ struct NativeTrackLookup {
             "；" + failures.prefix(3).joined(separator: "；")
         if !publicFallbackEnabled && !isConfigured && !isKuaidi100Configured {
             throw NativeSyncError.unavailable(
-                "已授权平台没有返回有效物流轨迹。可在快递鸟设置中配置 API 或开启公开接口兜底。")
+                "当前平台暂无有效轨迹，可在「账号授权」配置物流 API 或开启免费查询。")
         }
         throw NativeSyncError.unavailable(
-            "已尝试可用物流接口，但未获得有效轨迹" + detail)
+            "暂未查到物流轨迹" + detail)
     }
 
     private static func kdniaoLookup(_ mail: String,
@@ -465,7 +466,7 @@ struct NativeTrackLookup {
     // Publicly documented free endpoint. As third-party availability is not
     // guaranteed, throttle it independently and accept ONLY matching
     // waybill numbers plus timestamped textual tracking events.
-    // Docs: https://api.aa1.cn/api.aa1.cn/doc/szx-express-tracking.html
+    // Docs: https://api.aa1.cn/doc/szx-express-tracking.html
     private static func publicLookup(_ mail: String) async throws -> NativeTrackLookup {
         if let cached = publicSuccessCache[mail],
            Date().timeIntervalSince(cached.0) < 180 {
@@ -479,12 +480,12 @@ struct NativeTrackLookup {
         }
         publicLastAttempt[mail] = Date()
         var parts = URLComponents(string:
-            "https://api.songzixian.com/api/express/tracking")!
+            "https://api.dev.songzixian.com/api/express/tracking")!
         parts.queryItems = [
             .init(name: "dataSource", value: "nationwide_express"),
             .init(name: "trackingNumber", value: mail)
         ]
-        guard let url = parts.url, url.host == "api.songzixian.com" else {
+        guard let url = parts.url, url.host == "api.dev.songzixian.com" else {
             throw NativeSyncError.badResponse("公开接口地址异常")
         }
         var req = URLRequest(url: url,
@@ -499,7 +500,22 @@ struct NativeTrackLookup {
         config.timeoutIntervalForRequest = 10
         let session = URLSession(configuration: config)
         defer { session.finishTasksAndInvalidate() }
-        let (data, response) = try await session.data(for: req)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: req)
+        } catch let error as URLError {
+            // Never bypass HTTPS certificate validation or downgrade to HTTP.
+            let tlsCodes: [URLError.Code] = [
+                .secureConnectionFailed, .serverCertificateUntrusted,
+                .serverCertificateHasBadDate, .serverCertificateHasUnknownRoot,
+                .serverCertificateNotYetValid, .clientCertificateRejected
+            ]
+            if tlsCodes.contains(error.code) {
+                throw NativeSyncError.unavailable("免费接口安全连接失败，已停止请求")
+            }
+            throw NativeSyncError.unavailable("免费接口网络不可用")
+        }
         guard let http = response as? HTTPURLResponse,
               http.statusCode == 200, data.count < 500_000,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

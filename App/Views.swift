@@ -1921,101 +1921,40 @@ struct CourierSettings: View {
     @State private var key = NativeTracking.get("apiKey")
     @State private var configured = NativeTracking.isConfigured
     @State private var loggedIn = NativeTracking.hasOfficialLogin
-    @State private var accountStatus = NativeTracking.accountStatus
-    @State private var kuaidi100Customer = NativeTracking.get("kuaidi100Customer")
-    @State private var kuaidi100Key = NativeTracking.get("kuaidi100Key")
-    @State private var kuaidi100Configured = NativeTracking.isKuaidi100Configured
-    @AppStorage("native.track.publicFallback.enabled") private var publicFallbackEnabled = false
     @State private var officialLogin = false
     @State private var notice: String?
 
     var body: some View {
         Form {
-            Section {
-                Label {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(loggedIn ? "快递鸟账号" : (configured ? "快递鸟 API" : "快递鸟账号"))
-                            .foregroundStyle(.primary)
-                        Text(accountStatus)
-                            .font(.footnote)
-                            .foregroundStyle(loggedIn || configured ? accent : .secondary)
-                    }
-                } icon: {
-                    Image(systemName: loggedIn ? "checkmark.shield.fill" : "person.crop.circle")
-                        .foregroundStyle(loggedIn ? Color.green : accent)
-                }
-                if !configured {
-                    Button {
-                        officialLogin = true
-                    } label: {
-                        Label("授权快递鸟", systemImage: "person.crop.circle.badge.checkmark")
-                    }
-                    .tint(accent)
-                    Text("授权后可尝试读取账号的 API 密钥，也可以在下方手动配置。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("官方账号授权")
+            Section("快递鸟") {
+                LabeledContent("状态", value: NativeTracking.accountStatus)
+                Button("官方账号授权") { officialLogin = true }
+                Text("授权后可尝试自动读取 API 密钥。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
-            Section("手动配置 API") {
+            Section("API 密钥") {
                 TextField("EBusinessID", text: $businessID)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 SecureField("API Key", text: $key)
-                Button("保存 API 配置") {
+                Button("保存配置") {
                     do {
-                        try NativeTracking.setCredential(businessID: businessID, apiKey: key)
+                        try NativeTracking.setCredential(
+                            businessID: businessID, apiKey: key)
                         configured = true
                         loggedIn = NativeTracking.hasOfficialLogin
-                        accountStatus = NativeTracking.accountStatus
-                        notice = "密钥已安全保存到设备钥匙串"
-                    } catch {
-                        notice = error.localizedDescription
-                    }
+                        notice = "配置已保存"
+                    } catch { notice = error.localizedDescription }
                 }
-                Button("清除 API 配置", role: .destructive) {
+                Button("清除配置", role: .destructive) {
                     NativeTracking.clearCredential()
                     businessID = ""
                     key = ""
                     configured = false
                     loggedIn = false
-                    accountStatus = NativeTracking.accountStatus
-                    notice = "API 配置已清除"
-                }.disabled(!configured)
-            }
-            Section("物流查询优先级") {
-                LabeledContent("1 · 快递鸟", value: configured ? "优先查询" : "未配置，跳过")
-                LabeledContent("2 · 已授权平台", value: "淘宝 / 菜鸟 / 拼多多")
-                LabeledContent("3 · 快递100", value: kuaidi100Configured ? "备选已配置" : "未配置，跳过")
-                LabeledContent("4 · 公开免费接口", value: publicFallbackEnabled ? "失败后尝试" : "已关闭")
-                Toggle("允许公开接口兜底", isOn: $publicFallbackEnabled)
-                    .tint(accent)
-                Text("默认关闭。只有你主动开启后，查询失败才会把运单号发送给第三方 Songzixian；绝不发送淘宝 Cookie 或手机号。公开免费接口可能限流或停止服务。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section("快递100 备用 API（可选）") {
-                TextField("Customer 授权码", text: $kuaidi100Customer)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                SecureField("Key", text: $kuaidi100Key)
-                Button("保存快递100备用密钥") {
-                    do {
-                        try NativeTracking.setKuaidi100(
-                            customer: kuaidi100Customer, key: kuaidi100Key)
-                        kuaidi100Configured = true
-                        notice = "快递100密钥已保存，仅作为备选查询来源"
-                    } catch { notice = error.localizedDescription }
+                    notice = "已清除配置"
                 }
-                Button("清除快递100备用密钥", role: .destructive) {
-                    NativeTracking.clearKuaidi100()
-                    kuaidi100Customer = ""
-                    kuaidi100Key = ""
-                    kuaidi100Configured = false
-                    notice = "已清除快递100备用密钥"
-                }
-                .disabled(!kuaidi100Configured)
-                Text("快递100官方接口需要自行申请 Customer / Key，可能产生调用费用；按官方限制控制查询频率。")
-                    .font(.footnote).foregroundStyle(.secondary)
+                .disabled(!configured)
             }
         }
         .navigationTitle("快递鸟")
@@ -2024,10 +1963,6 @@ struct CourierSettings: View {
             key = NativeTracking.get("apiKey")
             configured = NativeTracking.isConfigured
             loggedIn = NativeTracking.hasOfficialLogin
-            accountStatus = NativeTracking.accountStatus
-            kuaidi100Customer = NativeTracking.get("kuaidi100Customer")
-            kuaidi100Key = NativeTracking.get("kuaidi100Key")
-            kuaidi100Configured = NativeTracking.isKuaidi100Configured
         }
         .sheet(isPresented: $officialLogin) {
             NavigationStack {
@@ -2036,13 +1971,61 @@ struct CourierSettings: View {
                     key = NativeTracking.get("apiKey")
                     configured = NativeTracking.isConfigured
                     loggedIn = NativeTracking.hasOfficialLogin
-                    accountStatus = NativeTracking.accountStatus
                     officialLogin = false
-                    notice = "快递鸟官方授权成功，API 密钥已安全保存"
+                    notice = "快递鸟授权成功"
                 }
             }
         }
         .alert("快递鸟", isPresented: Binding(
+            get: { notice != nil }, set: { if !$0 { notice = nil } }
+        )) {
+            Button("确定") { notice = nil }
+        } message: { Text(notice ?? "") }
+    }
+}
+
+struct Kuaidi100Settings: View {
+    @State private var customer = NativeTracking.get("kuaidi100Customer")
+    @State private var key = NativeTracking.get("kuaidi100Key")
+    @State private var configured = NativeTracking.isKuaidi100Configured
+    @State private var notice: String?
+
+    var body: some View {
+        Form {
+            Section("快递100 API") {
+                LabeledContent("状态", value: configured ? "已配置" : "未配置")
+                TextField("Customer 授权码", text: $customer)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                SecureField("Key", text: $key)
+                Button("保存配置") {
+                    do {
+                        try NativeTracking.setKuaidi100(customer: customer, key: key)
+                        configured = true
+                        notice = "配置已保存"
+                    } catch { notice = error.localizedDescription }
+                }
+                Button("清除配置", role: .destructive) {
+                    NativeTracking.clearKuaidi100()
+                    customer = ""
+                    key = ""
+                    configured = false
+                    notice = "已清除配置"
+                }
+                .disabled(!configured)
+            }
+            Section {
+                Text("需要自行申请 API 密钥；查询可能产生费用，同一单号有查询间隔限制。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("快递100")
+        .onAppear {
+            customer = NativeTracking.get("kuaidi100Customer")
+            key = NativeTracking.get("kuaidi100Key")
+            configured = NativeTracking.isKuaidi100Configured
+        }
+        .alert("快递100", isPresented: Binding(
             get: { notice != nil }, set: { if !$0 { notice = nil } }
         )) {
             Button("确定") { notice = nil }
