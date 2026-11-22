@@ -332,6 +332,25 @@ struct PlatformAccountsPage: View {
                 .disabled(isSyncing)
                 .padding(.horizontal, 18)
 
+                NavigationLink {
+                    ParcelRunLogPage()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "list.bullet.rectangle.portrait")
+                        Text("查看同步运行日志")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 19)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 18)
+
             }
             .padding(.bottom, 120)
         }
