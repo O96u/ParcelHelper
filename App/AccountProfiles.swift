@@ -853,8 +853,8 @@ struct MultiAccountPage: View {
                         .font(.caption)
                         .foregroundStyle(validAccounts.contains(account.id) ?
                                          Color.green : Color.secondary)
-                    let key = "native.sync.success." + (
-                        kind == "taobao" ? "cainiao" : kind) + "." + account.id
+                    // Read the timestamp of the platform currently shown.
+                    let key = "native.sync.success." + brandID + "." + account.id
                     let cainiaoResult = UserDefaults.standard.string(
                         forKey: "native.sync.result.cainiao." + account.id) ?? ""
                     if brandID == "cainiao" &&
