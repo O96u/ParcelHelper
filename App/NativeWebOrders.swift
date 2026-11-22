@@ -582,39 +582,74 @@ private struct NativeWebOrderReader: UIViewRepresentable {
           if(el) { el.click(); return true; } return false;
         })()
         """#
+        // JD uses multiple H5 layouts: old data-eparam cards, newer anchor
+        // links, and client-side initial state. Read only the current signed-in
+        // official page; no private API calls or login/session bypass.
         private static let jdOrdersJS = #"""
         (function(){
-          var body=(document.body&&document.body.innerText||'').slice(0,3000);
-          var orders=[],seen={};
-          function extract(card,state,details){
-            var raw=details||{},id=String(raw.orderid||raw.orderId||raw.dealId||'');
+          var body=(document.body&&document.body.innerText||'').slice(0,4500);
+          var orders=[],seen={},stats={attrs:0,links:0,state:0};
+          function cardOf(el){
+            if(!el||!el.closest) return document.body;
+            return el.closest('[class*="order-card"],[class*="order_item"],[class*="orderItem"],[class*="order_list"],[data-orderid],[data-order-id]')||
+                   el.closest('li,article,section')||el.parentElement||el;
+          }
+          function add(id,el,raw,source){
+            id=String(id||'').trim();
             if(!/^\d{8,}$/.test(id)||seen[id])return;
             seen[id]=1;
-            var sku=(raw.orderSkus&&raw.orderSkus[0])||{};
-            var titleNode=card.querySelector('[class*="desc"],[class*="goods_name"],[class*="product_name"]');
+            var card=cardOf(el),extra=raw||{};
+            var sku=(extra.orderSkus&&extra.orderSkus[0])||{};
+            var titleNode=card&&card.querySelector&&card.querySelector(
+              '[class*="goods_name"],[class*="product_name"],[class*="goodsName"],[class*="desc"],[class*="sku_name"]');
+            var statusNode=card&&card.querySelector&&card.querySelector(
+              '[class*="order_state"],[class*="orderStatus"],[class*="status"],[class*="state"]');
             var title=titleNode?(titleNode.innerText||titleNode.textContent||'').trim().slice(0,120):'';
-            var statusNode=card.querySelector('[class*="order_state"],[class*="status"]');
-            var status=(statusNode&&(statusNode.innerText||statusNode.textContent)||state||'').trim().slice(0,80);
+            var status=statusNode?(statusNode.innerText||statusNode.textContent||'').trim().slice(0,80):
+                       String(extra.orderStatusName||extra.statusName||extra.orderStatus||'').slice(0,80);
             orders.push({id:id,title:title,status:status,
-              sku:String(sku.skuid||raw.skuid||''),shop:String(raw.shopId||sku.shopid||'')});
+              sku:String(sku.skuid||sku.skuId||extra.skuid||extra.skuId||''),
+              shop:String(extra.shopId||extra.shopid||sku.shopid||'')});
+            stats[source]++;
           }
           document.querySelectorAll('[data-eparam]').forEach(function(el){
-            var json={};try{json=JSON.parse((el.getAttribute('data-eparam')||'').replace(/&quot;/g,'"'))}catch(e){}
-            var node=el;
-            for(var i=0;i<5&&node.parentElement;i++){
-              if(node.querySelector&&node.querySelector('[class*="order_state"]'))break;
-              node=node.parentElement;
-            }
-            extract(node,'',json);
+            var raw={};try{raw=JSON.parse((el.getAttribute('data-eparam')||'').replace(/&quot;/g,'"'))}catch(e){}
+            add(raw.orderid||raw.orderId||raw.dealId,el,raw,'attrs');
           });
           document.querySelectorAll('[data-orderid],[data-order-id],[data-dealid]').forEach(function(el){
-            var id=el.getAttribute('data-orderid')||el.getAttribute('data-order-id')||el.getAttribute('data-dealid');
-            extract(el.closest('[class*="order"]')||el.parentElement||el,'',{orderid:id});
+            add(el.getAttribute('data-orderid')||el.getAttribute('data-order-id')||
+                el.getAttribute('data-dealid'),el,{},'attrs');
           });
+          // Several current JD mobile layouts expose IDs only in order-detail links.
+          document.querySelectorAll('a[href], [data-href]').forEach(function(el){
+            var href=el.getAttribute('href')||el.getAttribute('data-href')||'';
+            if(!/(?:orderid|dealid|order_id)[=%3D:]/i.test(href))return;
+            var match=href.match(/(?:orderid|dealid|order_id)(?:=|%3D|:)(\d{8,})/i);
+            if(match)add(match[1],el,{},'links');
+          });
+          // Limited, local search of already-rendered page state; never sends
+          // account data to native code. Identifiers remain inside this WebView.
+          var visited=new WeakSet(),nodes=0;
+          function walk(v,depth){
+            if(!v||typeof v!=='object'||depth>12||nodes++>7000||visited.has(v))return;
+            visited.add(v);
+            if(!Array.isArray(v)){
+              var id=v.orderId||v.orderid||v.dealId;
+              if(id)add(id,null,v,'state');
+            }
+            Object.keys(v).slice(0,65).forEach(function(key){
+              try{walk(v[key],depth+1)}catch(e){}
+            });
+          }
+          [window.__INITIAL_STATE__,window.__PRELOADED_STATE__,
+           window.__NEXT_DATA__,window.pageData].forEach(function(v){
+              try{walk(v,0)}catch(e){}
+           });
           return JSON.stringify({
             login:/请登录|登录后查看|账号登录/.test(body)&&!orders.length,
             verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
-            orders:orders.slice(0,30)
+            source:'属性'+stats.attrs+' 链接'+stats.links+' 页面状态'+stats.state,
+            orders:orders.slice(0,45)
           });
         })()
         """#
@@ -646,14 +681,23 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         """#
         private static let jdTrackingJS = #"""
         (function(){
-          var txt=(document.body&&document.body.innerText||'').split('可能您还想要')[0];
-          function g(re){var m=txt.match(re);return m?m[1]:''}
-          var mail=g(/(?:运单号|快递单号|物流单号)\s*[:：]?\s*([A-Za-z0-9-]{8,})/);
-          var company=g(/(?:国内承运人|承运人|配送方)\s*[:：]?\s*([^\s]{2,12})/);
-          var code=g(/(?:取件码|提货码|取货码|自提码)\s*[:：]?\s*([A-Za-z0-9-]{3,12})/);
-          var tracks=[],re=/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*([\s\S]*?)(?=\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}|$)/g,m;
-          while((m=re.exec(txt))&&tracks.length<40){var t=m[2].replace(/\s+/g,' ').trim();if(t)tracks.push({time:m[1],text:t.slice(0,500)})}
-          return JSON.stringify({mail:mail,company:company,latest:tracks[0]?tracks[0].text:'',pickup:code,station:'',tracks:tracks});
+          var txt=(document.body&&document.body.innerText||'').split('可能您还想要')[0].slice(0,70000);
+          var html=(document.documentElement&&document.documentElement.outerHTML||'').slice(0,450000);
+          function get(text,regex){var m=text.match(regex);return m?m[1]:''}
+          // JD-operated and third-party shipments use different labels.
+          var mail=get(txt,/(?:运单号|快递单号|物流单号|京东快递单号|运单编号|物流编号|快递编号)\s*[:：]?\s*([A-Za-z0-9-]{8,40})/i);
+          if(!mail)mail=get(html,/(?:waybillCode|waybillNo|mailNo|expressNo|trackingNumber|logisticsNo|waybillNumber)["\\]?\s*[:=]\s*["\\]?([A-Za-z0-9-]{8,40})/i);
+          var company=get(txt,/(?:国内承运人|承运人|配送方|快递公司|物流公司)\s*[:：]?\s*([^\s]{2,15})/);
+          var code=get(txt,/(?:取件码|提货码|取货码|自提码)\s*[:：]?\s*([A-Za-z0-9-]{3,12})/);
+          var tracks=[];
+          // Some tracking pages omit seconds in dates, and some use '/'.
+          var re=/(\d{4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{2}:\d{2}(?::\d{2})?)\s*([\s\S]*?)(?=\d{4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{2}:\d{2}|$)/g,m;
+          while((m=re.exec(txt))&&tracks.length<40){
+            var note=m[2].replace(/\s+/g,' ').trim();
+            if(note)tracks.push({time:m[1],text:note.slice(0,500)});
+          }
+          return JSON.stringify({mail:mail,company:company,
+            latest:tracks[0]?tracks[0].text:'',pickup:code,station:'',tracks:tracks});
         })()
         """#
         private static let taobaoTrackingJS = #"""
