@@ -80,6 +80,45 @@ private enum SyncJSON {
             ($0.expiresDate == nil || ($0.expiresDate ?? .distantPast) > Date())
         }
     }
+    /// Match the cookies WKWebView would send to the exact MTOP host and
+    /// path, not every unrelated Taobao subdomain. Keep only one cookie per
+    /// name so the signed _m_h5_tk matches the Cookie request header.
+    static func mtopCookies(for url: URL, accountID: String) async -> [HTTPCookie] {
+        guard let host = url.host?.lowercased() else { return [] }
+        let path = url.path.isEmpty ? "/" : url.path
+        let saved = await cookieStore(accountID: accountID).allCookies()
+        let matching = saved.filter { cookie in
+            let domain = cookie.domain.lowercased()
+                .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
+            return (host == domain || host.hasSuffix("." + domain)) &&
+                (path == cookiePath || path.hasPrefix(
+                    cookiePath.hasSuffix("/") ? cookiePath : cookiePath + "/")) &&
+                (cookie.expiresDate == nil || cookie.expiresDate! > Date()) &&
+                !cookie.value.isEmpty
+        }.sorted { left, right in
+            // RFC-style precedence: the most specific path/domain first.
+            if left.path.count != right.path.count {
+                return left.path.count > right.path.count
+            }
+            return left.domain.count > right.domain.count
+        }
+        var names = Set<String>()
+        return matching.filter { names.insert($0.name).inserted }
+    }
+
+    static func mtopHeaders(for url: URL, accountID: String) async throws -> [String: String] {
+        let cookies = await mtopCookies(for: url, accountID: accountID)
+        guard !cookies.isEmpty else {
+            throw NativeSyncError.noLogin("未检测到当前账号的淘宝网页会话")
+        }
+        return [
+            "Cookie": cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; "),
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1",
+            "Accept": "application/json"
+        ]
+    }
+
     static func headers(domain: String, accountID: String? = nil) async throws -> [String: String] {
         let cookies = await cookies(domain: domain, accountID: accountID)
         guard !cookies.isEmpty else {
@@ -177,9 +216,12 @@ private enum SyncJSON {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             self.continuation = continuation
             webView.load(URLRequest(url: URL(string: "https://h5.m.taobao.com/")!))
-            Task { @MainActor [weak self] in
+            // Retain the refresh owner until its continuation is resumed.
+            // WKNavigationDelegate is weak; a weak timeout can otherwise
+            // leave this async refresh suspended indefinitely.
+            Task { @MainActor in
                 try? await Task.sleep(for: .seconds(8))
-                self?.finish()
+                self.finish()
             }
         }
     }
@@ -635,17 +677,23 @@ private enum SyncJSON {
             throw NativeSyncError.badResponse("请求参数编码失败")
         }
         let selected = accountID ?? ParcelAccounts.activeID(for: "taobao")
-        var cookies = await WebCookieRequest.cookies(domain: "taobao.com", accountID: selected)
-        guard !cookies.isEmpty else { throw NativeSyncError.noLogin("请先登录淘宝/菜鸟") }
+        let gateway = URL(string: "https://h5api.m.taobao.com/h5/\(api.lowercased())/1.0/")!
+        var cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
+        guard !cookies.isEmpty else {
+            throw NativeSyncError.noLogin("未检测到当前账号的淘宝网页会话")
+        }
         var lastFailure = "接口请求失败"
-        for attempt in 0..<2 {
+        // Session errors may mean a stale MTOP gateway token rather than a
+        // revoked account login. Rotate the gateway token before asking the
+        // user to visit account authorization. Bound total attempts to three.
+        for attempt in 0..<3 {
             let token = cookies.first(where: { $0.name == "_m_h5_tk" })?.value
                 .components(separatedBy: "_").first ?? ""
             let time = String(Int64(Date().timeIntervalSince1970 * 1000))
             let signed = "\(token)&\(time)&12574478&\(json)"
             let hash = Insecure.MD5.hash(data: Data(signed.utf8))
                 .map { String(format: "%02x", $0) }.joined()
-            var components = URLComponents(string: "https://h5api.m.taobao.com/h5/\(api.lowercased())/1.0/")!
+            var components = URLComponents(url: gateway, resolvingAgainstBaseURL: false)!
             components.queryItems = [
                 .init(name: "jsv", value: "2.7.4"),
                 .init(name: "appKey", value: "12574478"),
@@ -657,33 +705,44 @@ private enum SyncJSON {
                 .init(name: "dataType", value: "json"),
                 .init(name: "data", value: json)
             ]
-            var headers = try await WebCookieRequest.headers(domain: "taobao.com", accountID: selected)
+            var headers = try await WebCookieRequest.mtopHeaders(for: gateway, accountID: selected)
             headers["Referer"] = "https://h5.m.taobao.com/"
             let (result, response) = try await WebCookieRequest.request(components.url!, headers: headers)
             let returned = (result["ret"] as? [String])?.first ?? ""
             if returned.hasPrefix("SUCCESS") { return result }
             lastFailure = returned.isEmpty ? "MTOP 业务返回失败" : returned
-            let refresh = ["TOKEN_EMPTY", "TOKEN_EXPIRED", "TOKEN_EXOIRED", "ILLEGAL_ACCESS"]
-            guard attempt == 0 && refresh.contains(where: { returned.uppercased().contains($0) }) else { break }
-            // Cookie rotation from the gateway response. No credential is logged.
+            let failure = returned.uppercased()
+            let recoverable = ["TOKEN_EMPTY", "TOKEN_EXPIRED", "TOKEN_EXOIRED",
+                               "ILLEGAL_ACCESS", "SESSION_EXPIRED"]
+                .contains(where: { failure.contains($0) })
+            guard attempt < 2 && recoverable else { break }
+
+            // Persist gateway-issued replacement cookies back into the
+            // SAME isolated WebKit store; URLSession has another cookie jar.
             let headerFields = response.allHeaderFields.reduce(into: [String: String]()) { out, item in
                 out[String(describing: item.key)] = String(describing: item.value)
             }
-            let fresh = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: components.url!)
-            for cookie in fresh {
+            let rotated = HTTPCookie.cookies(withResponseHeaderFields: headerFields,
+                                              for: gateway)
+            for cookie in rotated {
+                let domain = cookie.domain.lowercased()
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                guard domain == "taobao.com" || domain.hasSuffix(".taobao.com") else { continue }
                 await WebCookieRequest.cookieStore(accountID: selected).setCookie(cookie)
             }
-            cookies = await WebCookieRequest.cookies(domain: "taobao.com", accountID: selected)
-            let refreshedToken = cookies.first(where: { $0.name == "_m_h5_tk" })?
+            cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
+            let newer = cookies.first(where: { $0.name == "_m_h5_tk" })?
                 .value.components(separatedBy: "_").first ?? ""
-            if refreshedToken.isEmpty || refreshedToken == token {
-                // URLSession and WKWebView use different cookie stores. Match
-                // the uploaded Scripting refreshTbToken() fallback by using
-                // this same account's WebKit profile to refresh H5 cookies.
+            if newer.isEmpty || newer == token {
+                // Bootstrap a fresh H5 token without ever displaying a login
+                // form. Never clear the user's persistent authorization data.
                 await CainiaoMtopTokenRefresh(accountID: selected).run()
-                cookies = await WebCookieRequest.cookies(
-                    domain: "taobao.com", accountID: selected)
+                cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
             }
+        }
+        if lastFailure.uppercased().contains("SESSION_EXPIRED") {
+            throw NativeSyncError.unavailable(
+                "淘宝/菜鸟会话自动恢复失败，请在「账号授权」检查当前账号；已有包裹及登录数据均已保留")
         }
         throw NativeSyncError.unavailable("菜鸟 MTOP 请求失败：\(lastFailure)")
     }
