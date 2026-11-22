@@ -201,13 +201,14 @@ private struct WebShipment: Decodable {
             let accountID = activeAccountID ?? ParcelAccounts.activeID(for: platform)
             for index in scoped.indices { scoped[index].accountID = accountID }
             let baselineKey = "native.sync.baseline.web." + platform + "." + accountID
+            let syncedAt = Date().timeIntervalSince1970
+            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
             let merged = NativeParcelSync.merge(scoped,
                 notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
+            if merged == 0 { ParcelStore.shared.persist() }
             UserDefaults.standard.set(true, forKey: baselineKey)
-            let syncedAt = Date().timeIntervalSince1970
             UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success." + platform)
-            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
             description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(packages.count) 件，导入或更新 \(merged) 件。"
         }
         UserDefaults.standard.set(description, forKey: "native.sync.result." + platform)
@@ -298,10 +299,13 @@ struct NativeWebOrderPage: View {
                         let selected = accountID ?? ParcelAccounts.activeID(for: platform)
                         for index in scoped.indices { scoped[index].accountID = selected }
                         let baselineKey = "native.sync.baseline.web." + platform + "." + selected
+                        let syncedAt = Date().timeIntervalSince1970
+                        UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
                         let count = NativeParcelSync.merge(scoped,
                             notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
+                        if count == 0 { ParcelStore.shared.persist() }
                         UserDefaults.standard.set(true, forKey: baselineKey)
-                        UserDefaults.standard.set(Date().timeIntervalSince1970,
+                        UserDefaults.standard.set(syncedAt,
                                                   forKey: "native.sync.success." + platform)
                         detail = "\(platform == "jd" ? "京东" : "淘宝")：读取 \(packages.count) 件有效物流包裹，导入或更新 \(count) 件。"
                     }

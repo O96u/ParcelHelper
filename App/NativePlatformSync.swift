@@ -543,7 +543,7 @@ private enum SyncJSON {
             // Missing title, ETA, source app, order ID or receiver changes
             // here previously caused genuine server updates to be discarded.
             if p.hasSyncedContentChange(comparedTo: previous) {
-                store.upsert(p)
+                store.upsert(p, persistNow: false)
                 if previous != nil {
                     Task { await ParcelNotifications.notifyUpdate(previous: previous, current: p) }
                 } else if notifyNewArrival && p.isPending && newArrivalNotifications < 3 {
@@ -555,6 +555,7 @@ private enum SyncJSON {
                 changed += 1
             }
         }
+        if changed > 0 { store.persist() }
         return changed
     }
 

@@ -196,10 +196,16 @@ import WidgetKit
         let enabled = snapshot.preferences.liveActivityEnabled
         Task { await LiveActivityCoordinator.update(with: enabled ? rows : []) }
     }
-    func upsert(_ parcel: Parcel) {
-        if let i = snapshot.parcels.firstIndex(where: { $0.uuid == parcel.uuid }) { snapshot.parcels[i] = parcel }
-        else { snapshot.parcels.insert(parcel, at: 0) }
-        persist()
+    func upsert(_ parcel: Parcel, persistNow: Bool = true) {
+        if let i = snapshot.parcels.firstIndex(where: { $0.uuid == parcel.uuid }) {
+            snapshot.parcels[i] = parcel
+        } else {
+            snapshot.parcels.insert(parcel, at: 0)
+        }
+        // Platform sync merges can import dozens of records. Defer one disk,
+        // WidgetKit and Live Activity update until the whole batch is merged.
+        // Interactive edits still use the default immediate persistence.
+        if persistNow { persist() }
     }
     /// Avoid duplicates when an SMS automation runs more than once. A pickup
     /// code is not globally unique: only match it together with its station
