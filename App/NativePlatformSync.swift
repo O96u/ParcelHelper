@@ -107,8 +107,7 @@ private enum SyncJSON {
         return matching.filter { names.insert($0.name).inserted }
     }
 
-    static func mtopHeaders(for url: URL, accountID: String) async throws -> [String: String] {
-        let cookies = await mtopCookies(for: url, accountID: accountID)
+    static func mtopHeaders(cookies: [HTTPCookie]) throws -> [String: String] {
         guard !cookies.isEmpty else {
             throw NativeSyncError.noLogin("未检测到当前账号的淘宝网页会话")
         }
@@ -134,6 +133,9 @@ private enum SyncJSON {
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 18)
         req.httpMethod = method
         req.httpBody = body
+        // Explicit cookies come from the selected WebKit account. Do not mix
+        // them with URLSession.shared's unrelated system cookie jar.
+        req.httpShouldHandleCookies = false
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         let (data, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse else {
@@ -705,7 +707,7 @@ private enum SyncJSON {
                 .init(name: "dataType", value: "json"),
                 .init(name: "data", value: json)
             ]
-            var headers = try await WebCookieRequest.mtopHeaders(for: gateway, accountID: selected)
+            var headers = try WebCookieRequest.mtopHeaders(cookies: cookies)
             headers["Referer"] = "https://h5.m.taobao.com/"
             let (result, response) = try await WebCookieRequest.request(components.url!, headers: headers)
             let returned = (result["ret"] as? [String])?.first ?? ""
