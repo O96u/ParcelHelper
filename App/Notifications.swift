@@ -20,20 +20,22 @@ enum ParcelNotifications {
     /// can be discovered or notified until the next allowed refresh.
     @MainActor
     static func notifyUpdate(previous: Parcel?, current: Parcel) async {
-        guard let old = previous,
-              ParcelStore.shared.snapshot.preferences.reminderEnabled,
+        guard ParcelStore.shared.snapshot.preferences.reminderEnabled,
               !current.pickedByUser else { return }
 
-        let wasSigned = old.isSigned
-        let wasPending = old.isPending
+        let wasSigned = previous?.isSigned ?? false
+        let wasPending = previous?.isPending ?? false
         let isSigned = current.isSigned
         let isPending = current.isPending
-        let before = (old.trackLatest ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let before = (previous?.trackLatest ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let latest = (current.trackLatest ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let changedText = !latest.isEmpty && latest != before
-        let isNewPickup = isPending && !wasPending && !old.isDone
-        let isNewSignature = isSigned && !wasSigned && !old.isDone
-        let isNewCompletion = current.isDone && !old.isDone
+        let alreadyKnown = previous != nil
+        let wasDone = previous?.isDone ?? false
+        let isNewArrival = !alreadyKnown && isPending
+        let isNewPickup = alreadyKnown && isPending && !wasPending && !wasDone
+        let isNewSignature = alreadyKnown && isSigned && !wasSigned && !wasDone
+        let isNewCompletion = alreadyKnown && current.isDone && !wasDone
         let isOutForDelivery = ["派送中", "正在派送", "开始派送", "派件中", "正在投递", "配送中", "派送员"]
             .contains(where: latest.contains)
         let isTransit = ["运输中", "运输至", "已发出", "已到达", "到达", "离开",
@@ -48,10 +50,10 @@ enum ParcelNotifications {
         } else if isNewSignature {
             category = "signed"
             title = "包裹已签收"
-        } else if isNewPickup {
+        } else if isNewPickup || isNewArrival {
             guard UserDefaults.standard.object(forKey: "native.reminder.arrival") as? Bool ?? true else { return }
             category = "arrived"
-            title = "快递已到站，等待取件"
+            title = isNewArrival ? "新增待取包裹" : "快递已到站，等待取件"
         } else if changedText && isOutForDelivery && !current.isDone && !isSigned {
             guard UserDefaults.standard.object(forKey: "native.reminder.dispatch") as? Bool ?? true else { return }
             category = "delivery"
@@ -88,6 +90,39 @@ enum ParcelNotifications {
             UserDefaults.standard.set(event, forKey: key)
         } catch {
             print("Parcel status notification failed: \(error)")
+        }
+    }
+
+    /// Failure notifications are opt-in and heavily throttled. Never put
+    /// raw platform errors, cookies or tracking IDs in the notification text.
+    /// An account failure is not evidence that its authorization was revoked.
+    @MainActor
+    static func notifySyncFailure(platform: String, accountID: String) async {
+        guard ParcelStore.shared.snapshot.preferences.reminderEnabled,
+              UserDefaults.standard.object(forKey: "native.reminder.failure") as? Bool ?? true
+        else { return }
+        let key = "native.reminder.failure.at." + platform + "." + accountID
+        let now = Date().timeIntervalSince1970
+        guard now - UserDefaults.standard.double(forKey: key) >= 6 * 3600 else { return }
+        let center = UNUserNotificationCenter.current()
+        let status = (await center.notificationSettings()).authorizationStatus
+        guard status == .authorized || status == .provisional ||
+              status == .ephemeral else { return }
+        let names = ["cainiao": "菜鸟", "taobao": "淘宝", "jd": "京东",
+                     "pdd": "拼多多", "mi": "小米", "fengchao": "丰巢"]
+        let content = UNMutableNotificationContent()
+        content.title = (names[platform] ?? "包裹") + "同步未完成"
+        content.body = "本次未能更新物流状态，请打开包裹助手检查网络或账号授权。已有包裹不会删除。"
+        content.sound = .default
+        content.threadIdentifier = "parcel-sync-" + platform
+        let request = UNNotificationRequest(
+            identifier: "parcel-sync-failure-" + platform + "-" + accountID,
+            content: content, trigger: nil)
+        do {
+            try await center.add(request)
+            UserDefaults.standard.set(now, forKey: key)
+        } catch {
+            NSLog("ParcelHelper sync-failure notification failed: %@", String(describing: error))
         }
     }
 

@@ -554,7 +554,7 @@ struct ReminderSettingsPage: View {
                     set: { value in store.changePreferences { $0.reminderAfterHours = value } }), in: 1...168)
             }
             Section {
-                Text("已启用通知并获得 iOS 权限后，App 同步到新的运输节点、派送、到站或签收状态时发送本地通知。普通运输节点通知默认关闭，避免过多提醒。只有成功读取到新的物流状态才会提醒；App 被 iOS 挂起时无法保证实时同步。同步失败提醒暂未接入自动通知。")
+                Text("已启用通知并获得 iOS 权限后，App 同步到新的运输节点、派送、到站或签收状态时发送本地通知。普通运输节点通知默认关闭，避免过多提醒。只有成功读取到新的物流状态才会提醒；App 被 iOS 挂起时无法保证实时同步。同步失败提醒默认开启，针对同一账号最多每 6 小时通知一次。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }.navigationTitle("取件提醒")

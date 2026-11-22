@@ -46,6 +46,15 @@ struct Parcel: Codable, Identifiable, Hashable {
     var arrivedAt: Double? = nil
     var closed: String? = nil
     var id: String { uuid }
+    /// Compare all persisted parcel content, not a manually maintained subset
+    /// of fields. The last-fetch timestamp alone is not a user-visible update.
+    func hasSyncedContentChange(comparedTo previous: Parcel?) -> Bool {
+        guard var previous else { return true }
+        var updated = self
+        updated.trackUpdatedAt = nil
+        previous.trackUpdatedAt = nil
+        return updated != previous
+    }
     var title: String { [userTitle, itemTitle, trackCompany].compactMap { $0 }.first(where: { !$0.isEmpty }) ?? "快递包裹" }
     /// Confirm a recipient's completed collection, not a station's signature
     /// or a courier's pickup. The word order matters: delivery services use

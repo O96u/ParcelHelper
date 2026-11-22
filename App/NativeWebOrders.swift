@@ -48,6 +48,13 @@ private struct WebShipment: Decodable {
     }
 
     func refreshAvailable() async {
+        // Foreground timer checks once a minute, but reading WebKit cookies
+        // for every account each minute is unnecessary and power-hungry.
+        let now = Date().timeIntervalSince1970
+        let key = "native.web.autosync.lastSweep"
+        let interval = TimeInterval(RefreshPolicy.minutes) * 60
+        guard now - UserDefaults.standard.double(forKey: key) >= interval else { return }
+        UserDefaults.standard.set(now, forKey: key)
         for platform in ["jd", "taobao", "pdd"] {
             for profile in await ParcelAccounts.authorizedAccounts(for: platform) {
                 _ = await request(platform, accountID: profile.id)
@@ -129,6 +136,10 @@ private struct WebShipment: Decodable {
         timeoutTask?.cancel()
         timeoutTask = nil
         recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
+        if !succeeded, let accountID = activeAccountID {
+            Task { await ParcelNotifications.notifySyncFailure(
+                platform: "pdd", accountID: accountID) }
+        }
         if succeeded {
             let syncedAt = Date().timeIntervalSince1970
             UserDefaults.standard.set(syncedAt,
@@ -154,6 +165,10 @@ private struct WebShipment: Decodable {
         timeoutTask?.cancel()
         timeoutTask = nil
         recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
+        if failure != nil, let accountID = activeAccountID {
+            Task { await ParcelNotifications.notifySyncFailure(
+                platform: platform, accountID: accountID) }
+        }
         let description: String
         if let failure {
             description = (platform == "jd" ? "京东" : "淘宝") + "自动同步： " + failure
@@ -161,7 +176,10 @@ private struct WebShipment: Decodable {
             var scoped = packages
             let accountID = activeAccountID ?? ParcelAccounts.activeID(for: platform)
             for index in scoped.indices { scoped[index].accountID = accountID }
-            let merged = NativeParcelSync.merge(scoped)
+            let baselineKey = "native.sync.baseline.web." + platform + "." + accountID
+            let merged = NativeParcelSync.merge(scoped,
+                notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
+            UserDefaults.standard.set(true, forKey: baselineKey)
             let syncedAt = Date().timeIntervalSince1970
             UserDefaults.standard.set(syncedAt,
                                       forKey: "native.sync.success." + platform)
@@ -246,7 +264,10 @@ struct NativeWebOrderPage: View {
                         var scoped = packages
                         let selected = accountID ?? ParcelAccounts.activeID(for: platform)
                         for index in scoped.indices { scoped[index].accountID = selected }
-                        let count = NativeParcelSync.merge(scoped)
+                        let baselineKey = "native.sync.baseline.web." + platform + "." + selected
+                        let count = NativeParcelSync.merge(scoped,
+                            notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
+                        UserDefaults.standard.set(true, forKey: baselineKey)
                         UserDefaults.standard.set(Date().timeIntervalSince1970,
                                                   forKey: "native.sync.success." + platform)
                         detail = "\(platform == "jd" ? "京东" : "淘宝")：读取 \(packages.count) 件有效物流包裹，导入或更新 \(count) 件。"
