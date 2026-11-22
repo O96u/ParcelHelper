@@ -7,10 +7,12 @@ on:
       - "App/**"
       - "Shared/**"
       - "Tests/**"
+      - "scripts/**"
       - "Widget/**"
       - "Resources/**"
       - "ParcelHelper.xcodeproj/**"
       - ".github/workflows/pr-validation.yml"
+      - "CHANGELOG.md"
   workflow_dispatch:
 
 # Never sign or publish a release from a PR validation build.
@@ -30,6 +32,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Show Xcode version
         run: xcodebuild -version
+      - name: Require Chinese CHANGELOG for source PRs
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_BRANCH"
+          changed="$(git diff --name-only FETCH_HEAD HEAD)"
+          if printf '%s\n' "$changed" | grep -Eq '^(App|Shared|Widget|Resources|scripts)/'; then
+            if ! printf '%s\n' "$changed" | grep -qx 'CHANGELOG.md'; then
+              echo "::error::源码改动请同步更新 CHANGELOG.md 的「未发布」中文记录。"
+              exit 1
+            fi
+          fi
+      - name: Check release-notes generator
+        run: |
+          swift scripts/generate_release_notes.swift
+          test -s build/release-notes.md
       - name: Generate dark App Icon like release workflow
         run: swift scripts/create_dark_icon.swift
       - name: Run pure Swift model regression tests

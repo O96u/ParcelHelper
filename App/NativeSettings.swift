@@ -65,30 +65,24 @@ struct PlatformImportHubPage: View {
 
 struct ShortcutsSettingsPage: View {
     @AppStorage("native.clipboard.autoRecognize") private var autoRecognizeClipboard = true
-    @State private var showCopied = false
+
     var body: some View {
         Form {
             Section("系统快捷指令") {
-                ShortcutsLink()
-                    .shortcutsLinkStyle(.automatic)
-                Text("上方入口会打开包裹助手的快捷指令页面，而不只是快捷指令首页。可以选择「导入快递文字」或「识别剪贴板」。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                ShortcutsLink().shortcutsLinkStyle(.automatic)
                 Toggle("打开 App 时识别剪贴板", isOn: $autoRecognizeClipboard)
-                Text("复制快递取件短信后打开包裹助手，会识别新复制的文字并询问是否导入。只在确认后保存；iOS 可能弹出粘贴权限提示。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text("系统动作：① 导入快递文字（接收短信正文） ② 识别剪贴板（读取已复制的快递短信）。首次安装后如未出现，请运行一次包裹助手并在快捷指令 App 的动作搜索中查找。")
-                    .font(.subheadline)
+                Text("复制取件短信后打开 App，可确认是否导入。")
+                    .font(.footnote).foregroundStyle(.secondary)
                 ShareLink(item: "包裹助手支持复制物流短信或订单文字，然后在包裹页面中选择平台物流导入。") {
                     Label("分享导入说明", systemImage: "square.and.arrow.up")
                 }
             }
-            Section("自动化说明") {
-                Text("iOS 不允许第三方 App 任意读取短信或其他 App 的订单。可以在快捷指令中手动复制文本，再回到包裹助手执行导入。")
-                Text("想在收到短信后自动执行：打开快捷指令 App → 自动化 → 信息 → 设置发件人或短信关键词 → 添加「包裹助手·导入快递文字」并传入消息正文。系统可能要求确认，且 App 无法替你自动创建该触发器。")
+            Section("短信自动化") {
+                Text("在「快捷指令 → 自动化 → 信息」设置触发条件，添加「包裹助手·导入快递文字」动作。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
-        }.navigationTitle("快捷指令与自动化")
+        }
+        .navigationTitle("快捷指令与自动化")
     }
 }
 
@@ -554,7 +548,8 @@ struct ReminderSettingsPage: View {
                     set: { value in store.changePreferences { $0.reminderAfterHours = value } }), in: 1...168)
             }
             Section {
-                Text("已启用通知并获得 iOS 权限后，App 同步到新的运输节点、派送、到站或签收状态时发送本地通知。普通运输节点通知默认关闭，避免过多提醒。只有成功读取到新的物流状态才会提醒；App 被 iOS 挂起时无法保证实时同步。同步失败提醒默认开启，针对同一账号最多每 6 小时通知一次。")
+                Text("仅在成功同步到新状态时提醒；后台通知时机由 iOS 决定。")
+                    .font(.footnote).foregroundStyle(.secondary)
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }.navigationTitle("取件提醒")
@@ -710,7 +705,7 @@ struct HomeWidgetSettingsPage: View {
 
                     Divider()
                         .frame(maxWidth: .infinity)
-                    Text("这是当前 App 本地数据的预览。桌面组件按照相同的蓝色卡片布局绘制，但真实内容需要可用的 App Group 共享快照。")
+                    Text("预览使用当前本地包裹。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -720,8 +715,7 @@ struct HomeWidgetSettingsPage: View {
             }
             Section("显示") {
                 Toggle("包含在途包裹", isOn: showTransit)
-                Text("优先展示待取件：小号最多两条，中号三条，大号七条；有剩余空间才显示在途包裹。")
-                    .font(.footnote).foregroundStyle(.secondary)
+
             }
             Section("共享数据与签名") {
                 LabeledContent("App Groups",
@@ -734,23 +728,15 @@ struct HomeWidgetSettingsPage: View {
                         .textSelection(.enabled)
                         .multilineTextAlignment(.trailing)
                 }
-                LabeledContent("构建共享组访问") {
-                    Text(HomeWidgetSharedStore.activeGroup == nil ? "不可访问" : "可访问")
-                        .font(.caption)
-                        .foregroundStyle(HomeWidgetSharedStore.isAvailable ? .green : .orange)
-                }
-                Text("需要使用桌面小组件？请在 GitHub Actions → Build ParcelHelper IPA → Run workflow 中填写你证书允许的 App Group（widget_group）。该手动构建为预发布版，不会替代最新正式 Release。签名时主 App 与 Widget 须保留同一组。")
+                Text("自签小组件须使用证书允许的 App Group，并为主 App 和 Widget 配置相同的共享组。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Link(destination: URL(string: "https://github.com/O96u/ParcelHelper/actions/workflows/build-ipa.yml")!) {
                     Label("前往 GitHub 自定义小组件构建", systemImage: "arrow.up.right.square")
                         .font(.subheadline)
                 }
-                Text("本页仅验证构建时指定的共享组，不能读取第三方证书中全部 App Groups。以后经常构建，可在仓库变量 PH_WIDGET_GROUP 中设置默认值。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                 if !HomeWidgetSharedStore.isAvailable {
-                    Label("当前签名无法访问该共享组；仅重新写入数据无法修复，须重新签名主 App 与 Widget 扩展。",
+                    Label("共享组不可访问，请检查主 App 与 Widget 签名。",
                           systemImage: "exclamationmark.shield")
                         .font(.footnote).foregroundStyle(.orange)
                 } else if HomeWidgetSharedStore.canReadSnapshot {
@@ -775,11 +761,9 @@ struct HomeWidgetSettingsPage: View {
                 if let writeStatus {
                     Text(writeStatus).font(.footnote).foregroundStyle(.secondary)
                 }
-                Text("主 App 和 Widget 扩展必须分别签名，使用双方描述文件都允许的同一个 App Group。签名器如果替换了扩展标识或权限，即使组件能显示也无法共享数据。")
-                    .font(.footnote).foregroundStyle(.secondary)
             }
             Section("安装提示") {
-                Text("桌面长按空白处 → 编辑 → 添加小组件 → 包裹助手。组件读取本地快照，不会后台运行电商 WebView。iOS 决定 WidgetKit 实际刷新时机。")
+                Text("桌面长按空白处 → 编辑 → 添加小组件 → 包裹助手。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
@@ -933,24 +917,16 @@ struct RefreshSettingsPage: View {
         Form {
             Section("前台自动同步") {
                 Stepper("刷新间隔：\(appMin) 分钟", value: $appMin, in: 5...120, step: 5)
-                Text("打开 App、返回前台，或持续使用 App 时，按所设最短间隔自动检查已授权平台。前台每分钟检查一次是否到期，并非每分钟向平台请求。淘宝、京东订单网页同步使用相同间隔；默认 15 分钟。")
+                Text("达到间隔时尝试同步；手动刷新不受此间隔限制。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("后台智能刷新") {
-                Text("有活跃包裹时，App 会请求 iOS 在合适的时间执行轻量后台刷新。目前仅尝试小米和丰巢的原生 API；淘宝、京东、拼多多网页及菜鸟可能需要 WebKit 的路径仍需打开 App 同步。")
-                Text("当前设置为每 \(appMin) 分钟的前台最短检查间隔。后台根据该偏好和包裹状态自动采用更保守的建议间隔：待取最早 \(max(30, appMin)) 分钟、运输中最早 \(max(180, appMin)) 分钟、无活跃包裹最早 \(max(720, appMin)) 分钟。实际执行时间由 iOS 决定。")
+                Text("后台由 iOS 调度，仅小米、丰巢等轻量接口可以尝试运行；强制关闭 App 后不保证更新。")
                     .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section("刷新说明") {
-                Text("这里设置的是前台最短自动检查间隔，并不是后台任务的执行周期。强制关闭 App 后不能保证后台查询。")
-                Text("首页刷新、包裹列表下拉或账号授权页「立即同步」会启动原生接口刷新，并安排授权平台的网页订单读取；网页任务依次执行，按钮完成并不代表所有网页已同步成功。平台安全限制及请求频率限制仍然适用。")
-                Text("桌面小组件读取 App 保存到共享 App Group 的快照。WidgetKit 会安排时间线更新，但不会保证固定间隔联网；灵动岛实时活动单独更新。")
             }
         }
         .navigationTitle("刷新频率")
         .onChange(of: appMin) { _, _ in
-            // The preference also affects the next BGTask request and
-            // WidgetKit's future snapshot timeline; no immediate network call.
             ParcelBackgroundRefresh.scheduleNext()
             ParcelStore.shared.persist()
         }
