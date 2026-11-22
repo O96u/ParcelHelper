@@ -1244,13 +1244,16 @@ private enum SyncJSON {
         var results: [String] = []
         var interrupted: [String] = []
 
+        ParcelRunLog.record("前台同步", force ? "手动刷新开始" : "按刷新间隔检查")
         for id in NativeParcelSync.platforms {
             if id == "mi" {
                 guard NativeMiExpress.hasSession else { continue }
                 do {
                     let result = try await NativeParcelSync.run("mi", force: force)
+                    ParcelRunLog.record("小米", "发现 \(result.found) 件，合并 \(result.imported) 件")
                     results.append(result.description)
                 } catch {
+                    ParcelRunLog.record("小米", "原生查询失败（详见平台同步结果）")
                     if force { results.append("小米：" + error.localizedDescription) }
                 }
                 continue
@@ -1266,18 +1269,22 @@ private enum SyncJSON {
                 do {
                     let result = try await NativeParcelSync.run(id, force: force,
                                                                  accountID: account.id)
+                    ParcelRunLog.record(id, "原生接口：发现 \(result.found) 件，合并 \(result.imported) 件")
                     results.append(account.nickname + " · " + result.description)
                 } catch {
                     if isCancelledRequest(error) {
+                        ParcelRunLog.record(id, "原生接口请求被取消")
                         interrupted.append(id)
-                    } else if force {
-                        results.append(account.nickname + "：" + error.localizedDescription)
+                    } else {
+                        ParcelRunLog.record(id, "原生接口失败（详见平台同步结果）")
+                        if force { results.append(account.nickname + "：" + error.localizedDescription) }
                     }
                 }
             }
         }
 
         ParcelStore.shared.persist()
+        ParcelRunLog.record("前台同步", "原生接口阶段结束；结果 \(results.count) 条，中断 \(interrupted.count) 条")
         // Only record a successful foreground refresh if a provider actually
         // succeeded. A failed or empty pass must not claim fresh logistics.
         // Provider-specific native.sync.success.* keys remain authoritative.
@@ -1304,6 +1311,7 @@ private enum SyncJSON {
             }
         }
         if queued > 0 {
+            ParcelRunLog.record("前台同步", "网页读取已安排 \(queued) 个任务，尚未执行完毕")
             messages.append("已安排 \(queued) 个网页订单同步任务，结果稍后在账号授权页显示。")
         }
         return messages
