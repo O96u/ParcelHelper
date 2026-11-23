@@ -2,7 +2,7 @@
 
 ParcelHelper 的 `Build ParcelHelper IPA` 工作流在 **推送 v* 正式版标签** 和 **Actions → Run workflow 手动预发布构建** 时，都会在构建结束后执行 Telegram 通知。
 
-- 构建成功：通过 `sendDocument` 发送真实的 `ParcelHelper.ipa` 文件，附简短发布介绍、可折叠更新摘要、GitHub Release 及 Actions 链接。
+- 构建成功：优先通过 `sendRichMessage` 在同一条富文本消息内嵌真实 IPA 文件（显示名为 `包裹助手_v版本号.ipa`），提供双列表格、可折叠更新日志和项目截图、GitHub 链接。若 Telegram 明确拒绝富文本请求，则回退 `sendDocument` 发送真实 IPA 附件。
 - 构建失败：通过 `sendMessage` 发送失败提示和 Actions 构建日志链接。
 - 无需为 Telegram 另外触发一次 IPA 构建；通知是构建工作流的第二个 Job。
 - 未配置接收信息时，通知步骤会输出中文警告并跳过，不会将密钥写入源代码或日志。
@@ -24,5 +24,9 @@ ParcelHelper 的 `Build ParcelHelper IPA` 工作流在 **推送 v* 正式版标�
 
 - 只有 `build-ipa.yml` 的构建触发通知，`pr-validation.yml` 的 PR 代码检查不打包 IPA，因此不发送。
 - 机器人不能主动发私聊给从未点过 **Start** 的用户。
-- Telegram 的文件标题、大小和附件 UI 是 Telegram 客户端原生生成，Bot API 不支持在消息中嵌入真正的双列表格。折叠更新日志使用 HTML `<blockquote expandable>`，客户端显示效果可能略有差异。
+- 新版 Telegram Bot API 的 `sendRichMessage` 支持真正的表格、`<details>` 折叠区域和内嵌文件。旧版客户端可能无法完整呈现；富文本消息明确被拒绝时回退普通 `sendDocument` 文件消息。
 - 如果构建成功但 Telegram 发送失败，`telegram-notify` Job 会失败并可在 Actions 查看原因；已经发布的 GitHub Release 不受影响。
+
+## 富文本资源帖
+
+发送脚本优先使用 Bot API 10.3 的 `sendRichMessage`：按参考图布局展示包裹助手标题、已发布 IPA、系统要求/功能表格、折叠更新日志、可展开的六张官方仓库截图以及 GitHub 链接。通过 `InputRichMessage.media` + multipart 文件上传保证 IPA 作为真实附件，而非仅写文件名。更新摘要最多提取四个不同类别的条目，并剥除 Markdown 加粗标记。Telegram 是否完整渲染取决于客户端版本。
