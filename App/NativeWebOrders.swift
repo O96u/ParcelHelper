@@ -480,6 +480,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var emptyReadAttempts = 0
         var trackingReadAttempts = 0
         var missingTracking = 0
+        private var trackingPageSerial = 0
+        private var trackingPageTimeout: DispatchWorkItem?
 
         private func record(_ stage: String) {
             let category = platform == "jd" ? "京东网页" : "淘宝网页"
@@ -501,6 +503,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             if (error as NSError).domain == NSURLErrorDomain &&
                 (error as NSError).code == NSURLErrorCancelled { return }
             if stage == .tracking {
+                trackingPageTimeout?.cancel()
                 record("物流详情页无法打开：已跳过第 \(position + 1) 笔")
                 missingTracking += 1
                 position += 1
@@ -528,9 +531,11 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     }
                 }
             } else if stage == .tracking {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self, weak webView] in
-                    guard let self, let view = webView, !self.finished else { return }
-                    self.readTracking(view)
+                let serial = trackingPageSerial
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self, weak webView] in
+                    guard let self, let view = webView, !self.finished,
+                          self.trackingPageSerial == serial else { return }
+                    self.readTracking(view, pageVersion: serial)
                 }
             }
         }
@@ -595,6 +600,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         }
         private func next(_ webView: WKWebView) {
             guard !finished else { return }
+            trackingPageTimeout?.cancel()
             if position >= orders.count {
                 record("物流详情读取结束：成功 \(loaded.count) 件，未取得有效单号 \(missingTracking) 笔")
                 if loaded.isEmpty && !orders.isEmpty {
@@ -615,13 +621,33 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 url = "https://pages-g.m.taobao.com/wow/z/app/mtb/logisticsV2/h5-detail?x-ssr=true&bizOrderId=\(order.id)&viewLogisticDetail=true&skipEnterAnimation=true&forceThemis=true&disableNav=YES"
             }
             guard let parsed = URL(string: url) else { position += 1; next(webView); return }
+            trackingPageSerial += 1
+            if platform == "jd" {
+                let version = trackingPageSerial
+                let index = position
+                let watchdog = DispatchWorkItem { [weak self, weak webView] in
+                    guard let self, let view = webView, !self.finished,
+                          self.position == index, self.trackingPageSerial == version else { return }
+                    self.record("第 \(index + 1) 笔：京东物流页单笔等待超时，继续下一笔")
+                    self.missingTracking += 1
+                    self.position += 1
+                    self.next(view)
+                }
+                trackingPageTimeout = watchdog
+                DispatchQueue.main.asyncAfter(deadline: .now() + 11, execute: watchdog)
+            }
             webView.load(URLRequest(url: parsed))
         }
-        private func readTracking(_ webView: WKWebView) {
-            guard !finished, position < orders.count else { return }
+        private func readTracking(_ webView: WKWebView, pageVersion: Int) {
+            guard !finished, position < orders.count,
+                  trackingPageSerial == pageVersion else { return }
+            let expectedIndex = position
             let script = platform == "jd" ? Self.jdTrackingJS : Self.taobaoTrackingJS
             webView.evaluateJavaScript(script) { [weak self, weak webView] value, scriptError in
-                guard let self, let webView, !self.finished, self.position < self.orders.count else { return }
+                guard let self, let webView, !self.finished,
+                      self.position == expectedIndex,
+                      self.trackingPageSerial == pageVersion,
+                      self.position < self.orders.count else { return }
                 if scriptError == nil,
                    let json = value as? String, let data = json.data(using: .utf8),
                    let shipment = try? JSONDecoder().decode(WebShipment.self, from: data) {
@@ -637,7 +663,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     }
                     if shipment.mail.range(of: #"^[A-Za-z0-9-]{8,40}$"#,
                                            options: .regularExpression) == nil {
-                        self.retryTracking(webView)
+                        self.retryTracking(webView, pageVersion: pageVersion)
                         return
                     }
                     let order = self.orders[self.position]
@@ -654,26 +680,29 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     item.tracks = shipment.tracks
                     item.arrived = !shipment.pickup.isEmpty
                     self.loaded.append(item)
+                    self.trackingPageTimeout?.cancel()
                     self.onParcel?(item)
                     self.record("第 \(self.position + 1) 笔：已识别有效运单及 \(shipment.tracks.count) 条轨迹")
                     self.position += 1
                     self.next(webView)
                     return
                 }
-                self.retryTracking(webView)
+                self.retryTracking(webView, pageVersion: pageVersion)
             }
         }
 
-        private func retryTracking(_ webView: WKWebView) {
-            guard !finished else { return }
+        private func retryTracking(_ webView: WKWebView, pageVersion: Int) {
+            guard !finished, trackingPageSerial == pageVersion else { return }
             if trackingReadAttempts < 2 {
                 trackingReadAttempts += 1
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) { [weak self, weak webView] in
-                    guard let self, let view = webView, !self.finished else { return }
-                    self.readTracking(view)
+                    guard let self, let view = webView, !self.finished,
+                          self.trackingPageSerial == pageVersion else { return }
+                    self.readTracking(view, pageVersion: pageVersion)
                 }
                 return
             }
+            trackingPageTimeout?.cancel()
             record("第 \(position + 1) 笔：物流页无有效运单号或解析失败（重试后）")
             missingTracking += 1
             position += 1
@@ -681,6 +710,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         }
         private func complete(_ error: String) {
             guard !finished else { return }
+            trackingPageTimeout?.cancel()
             finished = true
             onComplete(loaded, error)
         }
