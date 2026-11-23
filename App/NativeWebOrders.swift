@@ -486,7 +486,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var desc=[msg,promptValue,clean(p.tip,200),status].join(' ');
         var code=pickup(desc);
         var link=jdURL(p.progressLink);
-        var verified=p.progressId==='logistics'||!!link;
+        var verified=p.progressId==='logistics'||/deal_wuliu|logistics|ordertrack|expressdetail/i.test(link);
         var active=/待发货|待收货|待出库|运输|配送|派送|待取|已出库|正在出库|waitreceive|shipping|delivering/i.test(status);
         // Ignore unrelated orders: a structured courier link/track or an
         // active shipping state/pickup code is required.
@@ -781,10 +781,12 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 self.orders = Array(result.orders.filter { order in
                     !order.id.isEmpty &&
                     order.id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil &&
-                    !["退款", "已关闭", "已完成", "交易成功", "已签收",
+                    !["退款", "已关闭", "已完成", "交易成功",
                       "已收货", "已取件", "确认收货"].contains {
                         order.status.contains($0)
-                    }
+                    } &&
+                    (!order.status.contains("已签收") ||
+                     (self.platform == "jd" && !(order.code ?? "").isEmpty))
                 }.prefix(self.platform == "jd" ? 15 : 10))
                 self.record("筛选后可查询 \(self.orders.count) 笔订单")
                 if self.orders.isEmpty && result.structured == true {
