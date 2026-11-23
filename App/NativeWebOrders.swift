@@ -679,6 +679,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var scanning = false
         var finished = false
         var usedJDFallback = false
+        private var orderPageVersion = 0
         var emptyReadAttempts = 0
         var structuredReadWaits = 0
         var trackingReadAttempts = 0
@@ -717,22 +718,41 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 complete("页面加载失败：\(error.localizedDescription)")
             }
         }
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            if stage == .orderList {
+                orderPageVersion += 1
+                scanning = false
+                structuredReadWaits = 0
+                emptyReadAttempts = 0
+            }
+        }
+        private func scheduleOrderRead(_ webView: WKWebView, after delay: TimeInterval) {
+            let version = orderPageVersion
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
+                guard let self, let view = webView, !self.finished,
+                      self.stage == .orderList, self.orderPageVersion == version else { return }
+                self.readOrders(view)
+            }
+        }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard !finished else { return }
             if stage == .orderList && !scanning {
                 scanning = true
                 if platform == "jd" && usedJDFallback {
-                    webView.evaluateJavaScript(Self.openJDOrders) { _, _ in
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self, weak webView] in
-                            guard let self, let view = webView, !self.finished else { return }
-                            self.readOrders(view)
+                    let version = orderPageVersion
+                    webView.evaluateJavaScript(Self.openJDOrders) { [weak self, weak webView] value, _ in
+                        guard let self, let view = webView, !self.finished,
+                              self.stage == .orderList, self.orderPageVersion == version else { return }
+                        if value as? Bool == true {
+                            self.record("个人首页已触发订单入口，等待页面切换")
+                            self.scheduleOrderRead(view, after: 4.0)
+                        } else {
+                            self.record("个人首页未找到订单入口")
+                            self.complete("京东个人首页未提供可用订单入口，请检查账号登录状态后重试")
                         }
                     }
                 } else {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self, weak webView] in
-                        guard let self, let view = webView, !self.finished else { return }
-                        self.readOrders(view)
-                    }
+                    scheduleOrderRead(webView, after: 3.0)
                 }
             } else if stage == .tracking {
                 let serial = trackingPageSerial
@@ -754,6 +774,9 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     self.complete("订单列表解析失败，页面可能已变更")
                     return
                 }
+                if self.platform == "jd" && self.emptyReadAttempts == 0 && self.structuredReadWaits == 0 {
+                    self.record("订单页环境：\(result.page ?? "未知")，官方接口：\(result.structured == true ? "已识别" : "未识别")")
+                }
                 self.record("订单页检查：候选 \(result.orders.count) 笔，来源 \(result.source ?? "网页")")
                 // JD's asynchronous order_list_m response can arrive after
                 // the first DOM render. Let the document-start hook settle
@@ -766,6 +789,11 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                               self.stage == .orderList else { return }
                         self.readOrders(view)
                     }
+                    return
+                }
+                if self.platform == "jd" && result.page == "登录页" {
+                    self.record("京东订单请求重定向到登录页")
+                    self.complete("京东订单页面仍要求登录，请完成账号验证后再同步")
                     return
                 }
                 if result.verify {
@@ -801,6 +829,11 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                             guard let self, let view = webView, !self.finished else { return }
                             self.readOrders(view)
                         }
+                        return
+                    }
+                    if self.platform == "jd" && result.page == "个人首页" && self.usedJDFallback {
+                        self.record("备用入口仍停留在个人首页")
+                        self.complete("京东个人首页未成功进入订单列表，请检查账号登录状态")
                         return
                     }
                     if self.platform == "jd" && !self.usedJDFallback {
@@ -1014,6 +1047,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             let orders: [WebOrder]
             let source: String?
             let structured: Bool?
+            let page: String?
         }
         private static let openJDOrders = #"""
         (function(){
@@ -1030,13 +1064,17 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private static let jdOrdersJS = #"""
         (function(){
           var body=(document.body&&document.body.innerText||'').slice(0,4500);
+          var path=(location.pathname||'').toLowerCase();
+          var page=/login|passport|plogin/.test(location.hostname+path)?'登录页':
+            /orderlist|order\/list/.test(path)?'订单页':
+            /myjd|index\.html|\/home/.test(path)?'个人首页':'其他页面';
           try{
             var hooked=window.ParcelHelperJD&&window.ParcelHelperJD.snapshot();
             if(hooked&&hooked.received){
               return JSON.stringify({
                 login:/请登录|登录后查看|账号登录/.test(body)&&!hooked.orders.length,
                 verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
-                source:'官方接口订单列表',structured:true,orders:hooked.orders
+                source:'官方接口订单列表',structured:true,page:page,orders:hooked.orders
               });
             }
           }catch(e){}
@@ -1101,7 +1139,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             login:/请登录|登录后查看|账号登录/.test(body)&&!orders.length,
             verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
             source:'属性'+stats.attrs+' 链接'+stats.links+' 页面状态'+stats.state,
-            structured:false,orders:orders.slice(0,45)
+            structured:false,page:page,orders:orders.slice(0,45)
           });
         })()
         """#
