@@ -232,17 +232,20 @@ private struct WebShipment: Decodable {
         let retained = activeAccountID.map { accountID in
             ParcelAccounts.accounts(for: platform).contains(where: { $0.id == accountID })
         } ?? false
+        // A partial capture is useful work, not a completely failed account.
+        // Keep normal foreground retries available on the next refresh cycle.
+        let recovered = packages.isEmpty ? partialPackages : packages
         if retained {
-            recordOutcome(platform: platform, accountID: activeAccountID, success: failure == nil)
+            recordOutcome(platform: platform, accountID: activeAccountID,
+                          success: failure == nil || !recovered.isEmpty)
         }
-        if failure != nil, retained, let accountID = activeAccountID {
+        if failure != nil, recovered.isEmpty, retained, let accountID = activeAccountID {
             Task { await ParcelNotifications.notifySyncFailure(
                 platform: platform, accountID: accountID) }
         }
         let description: String
         // A failed/expired WebKit read may still have captured valid shipments.
         // Persist these without claiming the *entire account* was synced.
-        let recovered = packages.isEmpty ? partialPackages : packages
         if !retained {
             description = "账号已解除授权，忽略滞后的网页同步结果"
         } else {
