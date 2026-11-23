@@ -32,6 +32,9 @@ private struct WebShipment: Decodable {
     private var isRunning = false
     private var timeoutTask: Task<Void, Never>?
     private var queueDecisions: [String: String] = [:]
+    // A WebKit task may time out after some orders were already parsed.
+    // Keep verified parcels for the *current generation*, never discard them.
+    private var partialPackages: [NativeSyncParcel] = []
 
     private init() {}
 
@@ -126,6 +129,20 @@ private struct WebShipment: Decodable {
         return true
     }
 
+    func checkpoint(_ parcel: NativeSyncParcel, platform: String,
+                    accountID: String, generation: Int) {
+        guard activePlatform == platform, activeAccountID == accountID,
+              sequence == generation,
+              ParcelAccounts.accounts(for: platform).contains(where: { $0.id == accountID })
+        else { return }
+        guard !partialPackages.contains(where: {
+            $0.mailNo.caseInsensitiveCompare(parcel.mailNo) == .orderedSame &&
+            $0.orderID == parcel.orderID
+        }) else { return }
+        partialPackages.append(parcel)
+        ParcelRunLog.record(platform, "已暂存第 \(partialPackages.count) 件有效物流；整轮超时仍会导入")
+    }
+
     private func startNext() {
         guard activePlatform == nil, !pending.isEmpty else { return }
         let job = pending.removeFirst().components(separatedBy: "|")
@@ -144,6 +161,7 @@ private struct WebShipment: Decodable {
             return
         }
         sequence += 1
+        partialPackages = []
         isRunning = true
         ParcelRunLog.record(platform, "开始读取官方订单网页")
         activePlatform = platform
@@ -154,7 +172,7 @@ private struct WebShipment: Decodable {
         timeoutTask?.cancel()
         timeoutTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(nanoseconds: platform == "jd" ? 75_000_000_000 : 35_000_000_000)
+                try await Task.sleep(nanoseconds: platform == "jd" ? 115_000_000_000 : 35_000_000_000)
             } catch { return }
             guard let self,
                   activePlatform == platform && activeAccountID == accountID &&
@@ -163,7 +181,7 @@ private struct WebShipment: Decodable {
             if platform == "pdd" {
                 finishPdd("拼多多购物订单：网页读取超时，请稍后重试", succeeded: false)
             } else {
-                finish(platform, packages: [], failure: "网页同步超时，请稍后重试或打开官方订单页检查")
+                finish(platform, packages: partialPackages, failure: "网页同步超时，请稍后重试或打开官方订单页检查")
             }
         }
     }
@@ -198,6 +216,7 @@ private struct WebShipment: Decodable {
         }
         activePlatform = nil
         activeAccountID = nil
+        partialPackages = []
         isRunning = false
         DispatchQueue.main.async { [weak self] in self?.startNext() }
     }
@@ -221,31 +240,40 @@ private struct WebShipment: Decodable {
                 platform: platform, accountID: accountID) }
         }
         let description: String
+        // A failed/expired WebKit read may still have captured valid shipments.
+        // Persist these without claiming the *entire account* was synced.
+        let recovered = packages.isEmpty ? partialPackages : packages
         if !retained {
             description = "账号已解除授权，忽略滞后的网页同步结果"
-        } else if let failure {
-            description = (platform == "jd" ? "京东" : "淘宝") + "自动同步： " + failure
         } else {
-            var scoped = packages
+            var scoped = recovered
             let accountID = activeAccountID ?? ParcelAccounts.activeID(for: platform)
             for index in scoped.indices { scoped[index].accountID = accountID }
             let baselineKey = "native.sync.baseline.web." + platform + "." + accountID
             let syncedAt = Date().timeIntervalSince1970
-            UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
-            let merged = NativeParcelSync.merge(scoped,
-                notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
-            ParcelRunLog.record(platform, "有效运单 \(scoped.count) 件，新增或更新 \(merged) 件（其余可能已存在、已完成或无变化）")
-            if merged == 0 { ParcelStore.shared.persist() }
-            UserDefaults.standard.set(true, forKey: baselineKey)
-            UserDefaults.standard.set(syncedAt,
-                                      forKey: "native.sync.success." + platform)
-            UserDefaults.standard.set(syncedAt,
-                                      forKey: "native.sync.success." + platform + "." + accountID)
-            description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(packages.count) 件，导入或更新 \(merged) 件。"
+            let merged = scoped.isEmpty ? 0 :
+                NativeParcelSync.merge(scoped,
+                    notifyNewArrival: failure == nil &&
+                        UserDefaults.standard.bool(forKey: baselineKey))
+            ParcelRunLog.record(platform,
+                "有效物流 \(scoped.count) 件，成功合并 \(merged) 件；" +
+                (failure == nil ? "本轮结束" : "本轮未完成，但已保留有效结果"))
+            if failure == nil {
+                if merged == 0 { ParcelStore.shared.persist() }
+                UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
+                UserDefaults.standard.set(true, forKey: baselineKey)
+                UserDefaults.standard.set(syncedAt, forKey: "native.sync.success." + platform)
+                UserDefaults.standard.set(syncedAt,
+                                          forKey: "native.sync.success." + platform + "." + accountID)
+                description = "\(platform == "jd" ? "京东" : "淘宝")：识别 \(scoped.count) 件，导入或更新 \(merged) 件。"
+            } else if let failure {
+                description = "\(platform == "jd" ? "京东" : "淘宝")：本轮已保留 \(scoped.count) 件有效物流（合并 \(merged) 件），但仍有订单未完成：" + failure
+                ParcelRunLog.record(platform, "本轮网页读取未完整结束；已保存的包裹不会回滚")
+            } else {
+                description = "同步任务未完成"
+            }
         }
-        if failure != nil {
-            ParcelRunLog.record(platform, "网页同步未完成；详情请查看账号同步结果")
-        }
+        partialPackages = []
         UserDefaults.standard.set(description, forKey: "native.sync.result." + platform)
         if let accountID = activeAccountID {
             UserDefaults.standard.set(description, forKey: "native.sync.result." + platform + "." + accountID)
@@ -287,15 +315,23 @@ struct NativeWebAutoSyncHost: View {
                             }
                         }
                     } else {
-                        NativeWebOrderReader(platform: platform, accountID: accountID) { _ in
-                            // Progress is available in the explicit manual sync screen.
-                        } onComplete: { packages, error in
-                            Task { @MainActor in
-                                sync.finish(platform, packages: packages, failure: error,
-                                            expectedAccountID: accountID,
-                                            expectedSequence: generation)
+                        NativeWebOrderReader(
+                            platform: platform, accountID: accountID,
+                            onProgress: { _ in },
+                            onComplete: { packages, error in
+                                Task { @MainActor in
+                                    sync.finish(platform, packages: packages, failure: error,
+                                                expectedAccountID: accountID,
+                                                expectedSequence: generation)
+                                }
+                            },
+                            onParcel: { parcel in
+                                Task { @MainActor in
+                                    sync.checkpoint(parcel, platform: platform,
+                                                    accountID: accountID, generation: generation)
+                                }
                             }
-                        }
+                        )
                     }
                 }
                 .id("\(platform)-\(sync.sequence)")
@@ -373,9 +409,11 @@ private struct NativeWebOrderReader: UIViewRepresentable {
     var accountID: String? = nil
     let onProgress: (String) -> Void
     let onComplete: ([NativeSyncParcel], String?) -> Void
+    var onParcel: ((NativeSyncParcel) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(platform: platform, accountID: accountID, onProgress: onProgress, onComplete: onComplete)
+        Coordinator(platform: platform, accountID: accountID, onProgress: onProgress,
+                    onComplete: onComplete, onParcel: onParcel)
     }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -431,6 +469,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         let accountID: String?
         let onProgress: (String) -> Void
         let onComplete: ([NativeSyncParcel], String?) -> Void
+        let onParcel: ((NativeSyncParcel) -> Void)?
         var stage = Stage.orderList
         var orders: [WebOrder] = []
         var loaded: [NativeSyncParcel] = []
@@ -449,11 +488,13 @@ private struct NativeWebOrderReader: UIViewRepresentable {
 
         init(platform: String, accountID: String?,
              onProgress: @escaping (String) -> Void,
-             onComplete: @escaping ([NativeSyncParcel], String?) -> Void) {
+             onComplete: @escaping ([NativeSyncParcel], String?) -> Void,
+             onParcel: ((NativeSyncParcel) -> Void)?) {
             self.platform = platform
             self.accountID = accountID
             self.onProgress = onProgress
             self.onComplete = onComplete
+            self.onParcel = onParcel
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -613,6 +654,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     item.tracks = shipment.tracks
                     item.arrived = !shipment.pickup.isEmpty
                     self.loaded.append(item)
+                    self.onParcel?(item)
                     self.record("第 \(self.position + 1) 笔：已识别有效运单及 \(shipment.tracks.count) 条轨迹")
                     self.position += 1
                     self.next(webView)
