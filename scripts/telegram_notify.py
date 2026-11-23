@@ -34,6 +34,9 @@ def release_info():
     )
     with urllib.request.urlopen(request, timeout=20) as resp:
         releases = json.load(resp)
+    override = os.environ.get("TELEGRAM_RELEASE_TAG", "").strip()
+    if override:
+        return next((r for r in releases if r.get("tag_name") == override), None)
     if EVENT == "workflow_dispatch":
         wanted = f"-pre.{RUN_NUMBER}"
         return next((r for r in releases if r.get("tag_name", "").endswith(wanted)), None)
@@ -90,7 +93,7 @@ def main():
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         print("::warning::读取 GitHub Release 失败，仍尝试发送 IPA。")
         release = None
-    tag = (release or {}).get("tag_name") or REF_NAME
+    tag = (release or {}).get("tag_name") or os.environ.get("TELEGRAM_RELEASE_TAG") or REF_NAME
     link = (release or {}).get("html_url") or RELEASES_LINK
     body = (release or {}).get("body") or ""
     # Telegram 文件 caption 最大 1024 字符；仅保留简短概要，其余通过 Release 链接查看。
@@ -100,7 +103,7 @@ def main():
     caption = (
         "<b>📦 ParcelHelper｜包裹助手</b>\n"
         f"<b>✅ {html.escape(tag)} 构建成功</b>\n"
-        f"🔹 {'手动预发布' if EVENT == 'workflow_dispatch' else '正式版本'} · iOS 17+\n"
+        f"🔹 {'手动重新发送' if os.environ.get('TELEGRAM_RELEASE_TAG') else ('手动预发布' if EVENT == 'workflow_dispatch' else '正式版本')} · iOS 17+\n"
         "📦 ParcelHelper.ipa（未签名，需自行签名）\n"
         "✨ 订单同步 · 物流追踪 · 取件码 · 灵动岛 · 桌面小组件\n"
     )
