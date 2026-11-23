@@ -967,6 +967,7 @@ struct CacheSettingsPage: View {
     @EnvironmentObject private var store: ParcelStore
     @State private var confirmOldParcels = false
     @State private var confirmingHistory = false
+    @State private var confirmingCache = false
     @State private var clearing = false
     @State private var cacheBytes: Int64 = 0
     @State private var notice: String?
@@ -992,7 +993,7 @@ struct CacheSettingsPage: View {
                 Text("包含网络响应和 App 缓存目录。网页缓存也会清理，但 WebKit 不提供精确字节统计。")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button {
-                    Task { await clearCaches() }
+                    confirmingCache = true
                 } label: {
                     HStack {
                         Label("清除实际缓存", systemImage: "trash")
@@ -1027,6 +1028,14 @@ struct CacheSettingsPage: View {
         }
         .navigationTitle("清除缓存")
         .task { updateCacheSize() }
+        .alert("确认清除缓存？", isPresented: $confirmingCache) {
+            Button("取消", role: .cancel) {}
+            Button("清除缓存", role: .destructive) {
+                Task { await clearCaches() }
+            }
+        } message: {
+            Text("将删除本机的缓存文件并清理可清除的网页缓存；不会删除包裹、账号授权或登录凭据。")
+        }
         .alert("确认清除查询历史？", isPresented: $confirmingHistory) {
             Button("清空", role: .destructive) {
                 NativeTracking.clearHistory()
