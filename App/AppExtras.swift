@@ -413,11 +413,48 @@ struct ParcelUpdatePage: View {
     private static let key = "native.runtime.diagnostics.v1"
     private static let maximumEntries = 240
 
+    // Keep source IDs unchanged in sync/storage. Translate only text that
+    // reaches the diagnostic interface or its shareable export.
+    private static let subsystemNames: [String: String] = [
+        "jd": "京东", "taobao": "淘宝", "cainiao": "菜鸟",
+        "pdd": "拼多多", "fengchao": "丰巢", "mi": "小米",
+        "douyin": "抖音", "kdniao": "快递鸟",
+        "kuaidi100": "快递100", "publictracking": "免费物流查询",
+        "sf": "顺丰", "zto": "中通", "yto": "圆通",
+        "sto": "申通", "jtexpress": "极兔", "ems": "邮政"
+    ]
+    static func displaySubsystem(_ raw: String) -> String {
+        subsystemNames[raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] ?? raw
+    }
+    private static func displayEvent(_ raw: String) -> String {
+        // Do not replace fragments of real tracking identifiers or URLs.
+        // Match standalone internal platform keys only (case-insensitive).
+        let tokens: [(String, String)] = [
+            ("publictracking", "免费物流查询"), ("kuaidi100", "快递100"),
+            ("fengchao", "丰巢"), ("cainiao", "菜鸟"),
+            ("taobao", "淘宝"), ("kdniao", "快递鸟"),
+            ("douyin", "抖音"), ("jtexpress", "极兔"),
+            ("pdd", "拼多多"), ("jd", "京东")
+        ]
+        var result = raw
+        for (token, label) in tokens {
+            result = result.replacingOccurrences(
+                of: "(?<![A-Za-z0-9_-])" + token + "(?![A-Za-z0-9_-])",
+                with: label, options: [.regularExpression, .caseInsensitive])
+        }
+        return result
+    }
+    private static func localized(_ entry: Entry) -> Entry {
+        Entry(id: entry.id, date: entry.date,
+              subsystem: displaySubsystem(entry.subsystem),
+              event: displayEvent(entry.event))
+    }
+
     static func entries() -> [Entry] {
         guard let data = UserDefaults.standard.data(forKey: key),
               let items = try? JSONDecoder().decode([Entry].self, from: data)
         else { return [] }
-        return items
+        return items.map(localized)
     }
 
     static func record(_ subsystem: String, _ event: String) {
@@ -436,8 +473,9 @@ struct ParcelUpdatePage: View {
             }
         }
         var items = entries()
-        items.append(Entry(date: Date(), subsystem: redact(subsystem),
-                           event: redact(event)))
+        items.append(Entry(date: Date(),
+                           subsystem: displaySubsystem(redact(subsystem)),
+                           event: displayEvent(redact(event))))
         if items.count > maximumEntries {
             items.removeFirst(items.count - maximumEntries)
         }
@@ -463,49 +501,102 @@ struct ParcelUpdatePage: View {
 
 @MainActor struct ParcelRunLogPage: View {
     @State private var records: [ParcelRunLog.Entry] = []
+    @State private var selectedSource = "全部来源"
     @State private var copied = false
     @State private var confirmClear = false
+
+    private var sourceNames: [String] {
+        ["全部来源"] + Array(Set(records.map(\.subsystem))).sorted()
+    }
+    private var visibleRecords: [ParcelRunLog.Entry] {
+        let items = selectedSource == "全部来源" ? records :
+            records.filter { $0.subsystem == selectedSource }
+        return Array(items.reversed())
+    }
+    private func symbol(for event: String) -> String {
+        if ["失败", "错误", "超时", "失效", "无法", "未完成"].contains(where: event.contains) {
+            return "exclamationmark.circle"
+        }
+        if ["成功", "已完成", "读取结束", "已合并"].contains(where: event.contains) {
+            return "checkmark.circle"
+        }
+        return "circle.dotted"
+    }
 
     var body: some View {
         List {
             Section {
-                LabeledContent("记录数", value: "\(records.count) 条")
-                Button {
-                    UIPasteboard.general.string = ParcelRunLog.export()
-                    copied = true
-                } label: {
-                    Label(copied ? "已复制日志" : "复制日志用于排查", systemImage: "doc.on.doc")
+                HStack {
+                    Label("本地运行记录", systemImage: "list.bullet.rectangle")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Text("\(records.count) 条")
+                        .foregroundStyle(.secondary)
+                        .font(.subheadline.monospacedDigit())
                 }
-                .disabled(records.isEmpty)
-                Button("刷新日志") { reload() }
-                Button("清空运行日志", role: .destructive) {
-                    confirmClear = true
+                HStack(spacing: 12) {
+                    Button {
+                        UIPasteboard.general.string = ParcelRunLog.export()
+                        copied = true
+                    } label: {
+                        Label(copied ? "已复制" : "复制全部", systemImage: "doc.on.doc")
+                    }
+                    .disabled(records.isEmpty)
+                    Spacer()
+                    Button { reload() } label: {
+                        Label("刷新", systemImage: "arrow.clockwise")
+                    }
+                    Button(role: .destructive) { confirmClear = true } label: {
+                        Label("清空", systemImage: "trash")
+                    }
+                    .disabled(records.isEmpty)
                 }
-                .disabled(records.isEmpty)
+                .buttonStyle(.borderless)
             } footer: {
-                Text("只在本机保存最近 240 条诊断记录；不会自动上传，也不保存 Cookie、账号令牌、手机号、运单号、商品名称或物流地址。排查京东问题时先同步，再回来刷新并复制日志。")
+                Text("仅保存在本机，最多 240 条；不包含账号凭据与订单详情。")
             }
-            Section("最新运行记录") {
+
+            Section {
                 if records.isEmpty {
                     ContentUnavailableView("暂无运行日志",
                         systemImage: "text.book.closed",
-                        description: Text("前往账号授权页同步一次包裹后，可在这里查看记录"))
+                        description: Text("同步包裹后可在这里查看记录"))
                 } else {
-                    ForEach(records.reversed()) { item in
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text(item.subsystem)
-                                    .font(.system(size: 13, weight: .semibold))
-                                Spacer()
-                                Text(item.date.formatted(date: .omitted, time: .standard))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
+                    ForEach(visibleRecords) { item in
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: symbol(for: item.event))
+                                .font(.system(size: 15))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 2)
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack(spacing: 8) {
+                                    Text(item.subsystem)
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer(minLength: 8)
+                                    Text(item.date.formatted(date: .omitted, time: .standard))
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(item.event)
+                                    .font(.subheadline)
+                                    .textSelection(.enabled)
                             }
-                            Text(item.event)
-                                .font(.subheadline)
-                                .textSelection(.enabled)
                         }
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 3)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("运行记录")
+                    Spacer()
+                    if !records.isEmpty {
+                        Picker("筛选来源", selection: $selectedSource) {
+                            ForEach(sourceNames, id: \.self) { name in
+                                Text(name).tag(name)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
                     }
                 }
             }
@@ -525,6 +616,7 @@ struct ParcelUpdatePage: View {
 
     private func reload() {
         records = ParcelRunLog.entries()
+        if !sourceNames.contains(selectedSource) { selectedSource = "全部来源" }
         copied = false
     }
 }
