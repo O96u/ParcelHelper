@@ -13,7 +13,9 @@ private struct ClipboardParcelCandidate {
     let fingerprint: String
 
     var summary: String {
-        var pieces = ["取件码：" + parsed.code]
+        var pieces: [String] = []
+        if !parsed.code.isEmpty { pieces.append("取件码：" + parsed.code) }
+        if !parsed.trackingNumber.isEmpty { pieces.append("运单号：" + parsed.trackingNumber) }
         if !parsed.station.isEmpty { pieces.append("取件点：" + parsed.station) }
         if !parsed.company.isEmpty { pieces.append("快递公司：" + parsed.company) }
         if !parsed.address.isEmpty { pieces.append("地址：" + parsed.address) }
@@ -47,10 +49,15 @@ private struct ClipboardParcelCandidate {
         let hash = SHA256.hash(data: Data(raw.utf8))
             .map { String(format: "%02x", $0) }.joined()
         guard hash != UserDefaults.standard.string(forKey: processedKey) else { return }
-        let keywords = ["取件", "取货", "提货", "开柜", "快递", "包裹", "驿站", "兔喜"]
-        guard keywords.contains(where: raw.contains) else { return }
         let parsed = SMSParser.parse(raw)
         guard !parsed.code.isEmpty || !parsed.trackingNumber.isEmpty else { return }
+        let keywords = ["取件", "取货", "提货", "开柜", "快递", "包裹",
+                        "驿站", "兔喜", "运单", "物流", "单号",
+                        "顺丰", "中通", "极兔", "圆通", "申通"]
+        // Standalone prefixed waybills are valid candidates without SMS
+        // keywords; keep numeric-only clipboard text excluded.
+        guard keywords.contains(where: raw.contains) ||
+              SMSParser.isCarrierTrackingNumber(parsed.trackingNumber) else { return }
         candidate = ClipboardParcelCandidate(text: raw, parsed: parsed, fingerprint: hash)
     }
 
@@ -72,12 +79,13 @@ private struct ClipboardParcelCandidate {
         parcel.trackCompany = parsed.company.isEmpty ? nil : parsed.company
         parcel.smsContent = candidate.text
         parcel.source = "clipboard"
-        parcel.userTitle = "短信智能识别"
+        parcel.userTitle = parsed.code.isEmpty ? "剪贴板运单导入" : "短信智能识别"
         if !parsed.code.isEmpty { parcel.arrivedAt = Date().timeIntervalSince1970 * 1000 }
         let wasUpdated = ParcelStore.shared.upsertRecognizedText(parcel)
         UserDefaults.standard.set(candidate.fingerprint, forKey: processedKey)
         self.candidate = nil
-        outcome = wasUpdated ? "已更新已有包裹，没有创建重复记录。" : "取件信息已添加到包裹助手。"
+        outcome = wasUpdated ? "已更新已有包裹，没有创建重复记录。" :
+            (parsed.code.isEmpty ? "运单号已添加，可在包裹详情查询物流。" : "取件信息已添加到包裹助手。")
     }
 }
 
@@ -151,7 +159,7 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                         await NativeWebAutoSync.shared.refreshAvailable()
                     }
                 }
-                .alert(clipboardMonitor.candidate == nil ? "剪贴板识别" : "识别到快递取件信息",
+                .alert(clipboardMonitor.candidate == nil ? "剪贴板识别" : "识别到快递信息",
                        isPresented: Binding(
                     get: { clipboardMonitor.candidate != nil || clipboardMonitor.outcome != nil },
                     set: { if !$0 {
