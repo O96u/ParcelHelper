@@ -836,6 +836,11 @@ struct MultiAccountPage: View {
             }
             loginAccount = nil
             await reload()
+            // A verified login should fetch this account's orders immediately;
+            // the normal foreground refresh interval may not be due yet.
+            // Reuse the existing account-specific synchronization path so
+            // Cainiao and Taobao remain distinct and PDD protection is respected.
+            await syncAccount(account)
         }
     }
 
