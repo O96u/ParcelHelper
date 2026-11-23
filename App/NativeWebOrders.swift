@@ -738,7 +738,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             guard !finished else { return }
             if stage == .orderList && !scanning {
                 scanning = true
-                if platform == "jd" && usedJDFallback {
+                if platform == "jd" && usedJDFallback &&
+                   webView.url?.host?.lowercased() == "my.m.jd.com" {
                     let version = orderPageVersion
                     webView.evaluateJavaScript(Self.openJDOrders) { [weak self, weak webView] value, _ in
                         guard let self, let view = webView, !self.finished,
