@@ -172,7 +172,9 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                         await NativeWebAutoSync.shared.refreshAvailable()
                     }
                 }
-                .alert(clipboardMonitor.candidate == nil ? "剪贴板识别" : "识别到快递信息",
+                .alert(clipboardMonitor.candidate == nil ? "剪贴板识别" :
+                       (clipboardMonitor.candidate?.parsed.code.isEmpty == true ?
+                        "添加快递订阅？" : "识别到取件信息"),
                        isPresented: Binding(
                     get: { clipboardMonitor.candidate != nil || clipboardMonitor.outcome != nil },
                     set: { if !$0 {
@@ -182,7 +184,8 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                 )) {
                     if clipboardMonitor.candidate != nil {
                         Button("忽略", role: .cancel) { clipboardMonitor.dismiss() }
-                        Button("导入包裹") { clipboardMonitor.save() }
+                        Button(clipboardMonitor.candidate?.parsed.code.isEmpty == true ?
+                               "添加订阅" : "导入包裹") { clipboardMonitor.save() }
                     } else {
                         Button("确定") { clipboardMonitor.outcome = nil }
                     }
