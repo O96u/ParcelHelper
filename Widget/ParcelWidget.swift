@@ -121,17 +121,22 @@ private struct PickupParcelRow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(code)
-                .font(.system(size: 14, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.60)
-                .frame(maxWidth: 123, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(item.code.isEmpty ? "待出码" : "取件码")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(foreground.opacity(0.65))
+                Text(code)
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.60)
+            }
+            .frame(maxWidth: 123, alignment: .trailing)
         }
         .foregroundStyle(foreground)
         .padding(.horizontal, 10)
-        .frame(height: 39)
-        .background(foreground.opacity(0.075), in: RoundedRectangle(cornerRadius: 12))
+        .frame(height: 44)
+        .background(foreground.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -139,7 +144,7 @@ private struct PickupExpandedView: View {
     let state: PickupActivityAttributes.ContentState
 
     var body: some View {
-        VStack(spacing: 5) {
+        VStack(alignment: .leading, spacing: 5) {
             ForEach(Array(state.items.prefix(2).enumerated()), id: \.offset) { _, item in
                 PickupParcelRow(item: item, foreground: .white,
                                 accent: PickupPalette.accent(state.style))
@@ -149,12 +154,20 @@ private struct PickupExpandedView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.white.opacity(0.70))
                     .frame(maxWidth: .infinity)
-                    .frame(height: 39)
+                    .frame(height: 44)
+            }
+            if state.pending > 2 {
+                Text("另有 \(state.pending - 2) 件待取 · 打开包裹助手查看")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .padding(.horizontal, 8)
             }
         }
         .padding(.horizontal, 4)
         .padding(.top, 1)
-        // A third row/footer can be clipped by Dynamic Island's system mask.
+        // Compact/minimal island unchanged. The expanded bottom area is
+        // bounded to two rows so system cropping doesn't hide pickup codes.
         .widgetURL(URL(string: "parcelhelper://parcel"))
     }
 }
@@ -193,6 +206,12 @@ private struct PickupLockScreenView: View {
             ForEach(Array(state.items.prefix(2).enumerated()), id: \.offset) { _, item in
                 PickupParcelRow(item: item, foreground: foreground, accent: accent)
             }
+            if state.pending > 2 {
+                Text("另有 \(state.pending - 2) 件待取")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(foreground.opacity(0.68))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
             if state.items.isEmpty {
                 Text("暂无待取包裹")
                     .font(.system(size: 12))
@@ -219,6 +238,9 @@ struct PickupActivityWidget: Widget {
                     HStack(spacing: 7) {
                         Image(systemName: "shippingbox.fill")
                             .foregroundStyle(PickupPalette.accent(context.state.style))
+                            .frame(width: 27, height: 27)
+                            .background(PickupPalette.accent(context.state.style).opacity(0.15),
+                                        in: RoundedRectangle(cornerRadius: 9))
                         Text("待取包裹")
                             .foregroundStyle(.white)
                     }
