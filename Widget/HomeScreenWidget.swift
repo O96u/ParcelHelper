@@ -176,12 +176,13 @@ private struct ParcelWidgetRow: View {
                        height: dense ? 22 : (compact ? 24 : 29))
             VStack(alignment: .leading, spacing: 1) {
                 Text(code)
-                    .font(.system(size: compact ? 10 : 12, weight: .semibold))
+                    .font(.system(size: compact ? 11 : 13,
+                                  weight: .bold, design: .rounded))
                     .foregroundStyle(transit ? ParcelWidgetTheme.blue : Color.primary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.75)
                 Text(detail)
-                    .font(.system(size: compact ? 8 : 9))
+                    .font(.system(size: compact ? 9 : 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -204,7 +205,7 @@ private struct ParcelWidgetRow: View {
                 .accessibilityLabel("标记 \(code) 为已取")
             }
         }
-        .frame(height: dense ? 22 : (compact ? 29 : 33))
+        .frame(height: dense ? 25 : (compact ? 31 : 35))
     }
 }
 
@@ -300,7 +301,7 @@ private struct ParcelHomeContent: View {
                 .background(.white.opacity(0.17),
                             in: RoundedRectangle(cornerRadius: 9))
             Text("我的取件")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
             Spacer(minLength: 2)
             HStack(alignment: .firstTextBaseline, spacing: 3) {
                 Text("\(entry.model.pendingTotal)")
@@ -310,9 +311,12 @@ private struct ParcelHomeContent: View {
                     .font(.system(size: 11, weight: .semibold))
             }
             if entry.model.showTransit {
-                Text("· 在途 \(entry.model.transitTotal)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.86))
+                Text("在途 \(entry.model.transitTotal)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(.white.opacity(0.14), in: Capsule())
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -338,12 +342,12 @@ private struct ParcelHomeContent: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                      ? (transit ? "运输中" : "待取件") : item.code)
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 Text(!item.title.isEmpty ? item.title :
                      (!item.station.isEmpty ? item.station : item.company))
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 if !item.station.isEmpty && item.station != item.title {
