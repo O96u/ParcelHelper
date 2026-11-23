@@ -941,7 +941,8 @@ struct FAQSettingsPage: View {
         ("怎样手动标记已取件？", "进入包裹详情点击「标记已取」，或在包裹列表中左滑操作。已取记录会计入取件统计。"),
         ("刷新频率怎样生效？", "设置的分钟数控制前台自动检查，也作为后台和 Widget 智能调度的偏好值。后台有省电下限，且 iOS 不保证按时唤醒；主动下拉刷新可另行触发查询。"),
         ("为什么有些订单或物流轨迹没有同步？", "已授权不代表一定读取成功。淘宝、京东通过独立网页登录会话读取订单和物流，网页未加载完成、安全验证、页面结构变化、运单号暂未生成或每轮数量限制都可能导致漏读。请在「设置 → 运行日志」查看实际读取到的订单数、有效运单数与跳过原因。"),
-        ("京东有物流信息，却显示 0 件或无法重新同步？", "先检查「账号授权 → 京东账号」和「运行日志」。京东读取会逐笔查询物流，如果某笔没有有效运单号，会跳过继续下一笔；整轮超时也会保留前面已识别的有效包裹，并明确标记本轮未完整完成。已授权账号安全验证失效时仍需重新登录。30 秒内重复手动同步会被防重复机制限制。"),
+        ("京东有物流信息，却显示 0 件或无法重新同步？", "先在「账号授权 → 京东账号」确认网页登录有效，再同步并查看「运行日志」。京东优先读取官方订单 JSON 和真实物流进度链接；若暂未生成运单号，但官方订单已有明确的传统快递进度或取件码，也可导入订单关联的物流记录。秒送、虚拟商品、取消订单不会伪装成快递。单笔异常可跳过，整轮部分成功会保留结果；平台安全验证仍需本人完成。"),
+        ("清空日志或 API 配置需要确认吗？", "需要。清空运行日志、清理缓存/查询历史、删除历史包裹、解除账号授权以及清除快递鸟或快递100 的 API 配置，均须在警告弹窗中明确确认；直接返回或点击取消不会执行删除。"),
         ("如何查看或分享运行日志？", "打开「设置 → 运行日志」，先同步目标平台，再回来点「刷新日志」，可查看最近 240 条流程记录或复制文本。日志只记录同步阶段和数量，不会上传 Cookie、Token、手机号、商品名称及完整运单号；仍建议分享前自行检查文本。需要时可直接清空。"),
         ("快递鸟和快递100怎样配置？", "两者是独立的备用物流查询服务。先尝试包裹来源平台的数据，再使用已配置的快递鸟、快递100 API；免费查询是单独开关。快递100需自行申请 Customer 和 Key，并遵守服务次数与费用限制。"),
         ("包裹助手能在后台实时推送物流吗？", "有活跃包裹时，App 会请求系统安排低频轻量 API 刷新，目前仅覆盖小米与丰巢。系统不保证执行时刻，网页平台仍须前台同步，也没有云端 APNs 实时推送。获取到新物流状态后才会安排本地通知。"),
@@ -967,6 +968,7 @@ struct CacheSettingsPage: View {
     @EnvironmentObject private var store: ParcelStore
     @State private var confirmOldParcels = false
     @State private var confirmingHistory = false
+    @State private var confirmingCache = false
     @State private var clearing = false
     @State private var cacheBytes: Int64 = 0
     @State private var notice: String?
@@ -992,7 +994,7 @@ struct CacheSettingsPage: View {
                 Text("包含网络响应和 App 缓存目录。网页缓存也会清理，但 WebKit 不提供精确字节统计。")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button {
-                    Task { await clearCaches() }
+                    confirmingCache = true
                 } label: {
                     HStack {
                         Label("清除实际缓存", systemImage: "trash")
@@ -1027,6 +1029,14 @@ struct CacheSettingsPage: View {
         }
         .navigationTitle("清除缓存")
         .task { updateCacheSize() }
+        .alert("确认清除缓存？", isPresented: $confirmingCache) {
+            Button("取消", role: .cancel) {}
+            Button("清除缓存", role: .destructive) {
+                Task { await clearCaches() }
+            }
+        } message: {
+            Text("将删除本机的缓存文件并清理可清除的网页缓存；不会删除包裹、账号授权或登录凭据。")
+        }
         .alert("确认清除查询历史？", isPresented: $confirmingHistory) {
             Button("清空", role: .destructive) {
                 NativeTracking.clearHistory()

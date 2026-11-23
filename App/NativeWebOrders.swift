@@ -12,6 +12,11 @@ private struct WebOrder: Decodable {
     var status: String
     var sku: String
     var shop: String
+    var link: String? = nil
+    var summary: String? = nil
+    var code: String? = nil
+    var station: String? = nil
+    var verified: Bool? = nil
 }
 private struct WebShipment: Decodable {
     var mail: String
@@ -135,12 +140,18 @@ private struct WebShipment: Decodable {
               sequence == generation,
               ParcelAccounts.accounts(for: platform).contains(where: { $0.id == accountID })
         else { return }
-        guard !partialPackages.contains(where: {
-            $0.mailNo.caseInsensitiveCompare(parcel.mailNo) == .orderedSame &&
-            $0.orderID == parcel.orderID
-        }) else { return }
+        if let index = partialPackages.firstIndex(where: {
+            $0.orderID == parcel.orderID &&
+            ($0.mailNo.isEmpty ||
+             $0.mailNo.caseInsensitiveCompare(parcel.mailNo) == .orderedSame)
+        }) {
+            if !parcel.mailNo.isEmpty || partialPackages[index].mailNo.isEmpty {
+                partialPackages[index] = parcel
+            }
+            return
+        }
         partialPackages.append(parcel)
-        ParcelRunLog.record(platform, "已暂存第 \(partialPackages.count) 件有效物流；整轮超时仍会导入")
+        ParcelRunLog.record(platform, "已暂存第 \(partialPackages.count) 件有效订单物流；整轮超时仍会导入")
     }
 
     private func startNext() {
@@ -234,7 +245,7 @@ private struct WebShipment: Decodable {
         } ?? false
         // A partial capture is useful work, not a completely failed account.
         // Keep normal foreground retries available on the next refresh cycle.
-        let recovered = packages.isEmpty ? partialPackages : packages
+        let recovered = partialPackages.isEmpty ? packages : partialPackages
         if retained {
             recordOutcome(platform: platform, accountID: activeAccountID,
                           success: failure == nil || !recovered.isEmpty)
@@ -418,6 +429,181 @@ private struct NativeWebOrderReader: UIViewRepresentable {
     let onComplete: ([NativeSyncParcel], String?) -> Void
     var onParcel: ((NativeSyncParcel) -> Void)? = nil
 
+
+    // Follow HandyCode's document-start response capture and parcly's
+    // structured logistics metadata, without exporting raw account JSON.
+    // The local snapshot is normalized to safe order fields only.
+    static let jdDocumentHook = #"""
+    (function(){
+      if (window.top!==window || !/(^|\.)jd\.com$/i.test(location.hostname)) return;
+      if (window.ParcelHelperJD) return;
+      var stored=[], structured=false, logistics=null, revision=0;
+      function clean(v,n){return typeof v==='string'?v.slice(0,n):String(v==null?'':v).slice(0,n);}
+      function jdURL(raw){
+        if(typeof raw!=='string'||!raw)return '';
+        try{
+          var url=new URL(raw,location.href);
+          return url.protocol==='https:'&&/(^|\.)jd\.com$/i.test(url.hostname)
+            ? url.href.slice(0,900) : '';
+        }catch(e){return ''}
+      }
+      function pickup(value){
+        var t=clean(value,1800);
+        var m=t.match(/(?:取件码|提货码|取货码|自提码|开箱码|取件密码)\s*(?:为|是)?\s*[:：\s【\[\(（]*([A-Za-z0-9-]{3,16})(?![A-Za-z0-9-])/);
+        if(m)return m[1];
+        m=t.match(/(?:请凭|凭码)\s*([A-Za-z0-9-]{4,14})\s*(?:到|前往|取件|领取)/);
+        return m?m[1]:'';
+      }
+      function station(value){
+        var t=clean(value,1500).replace(/\s+/g,' ');
+        var m=t.match(/【([^】]{2,60}(?:驿站|自提点|代收点|快递柜|自提柜|超市)[^】]{0,25})】/);
+        return m?m[1].slice(0,80):'';
+      }
+      function isInstant(o,progress){
+        var deals=o.specialDealList||[];
+        if(Array.isArray(deals)&&deals.some(function(v){return v&&(v.isStore2Home===true||v.isStore2Home===1||v.isStore2Home==='1')}))return true;
+        var u=clean(progress.progressLink,500).toLowerCase();
+        if(/store2home|daojia|instant/.test(u))return true;
+        var msg=[o.message,o.messageTitle,progress.content,progress.tip].join(' ');
+        return /秒送|京东到家|即时配送|达达|骑手|分钟送达|分钟达/.test(msg);
+      }
+      function order(o){
+        if(!o||typeof o!=='object')return null;
+        var id=clean(o.orderId||o.orderid||o.dealId,80);
+        if(!/^\d{8,}$/.test(id))return null;
+        var info=o.orderStatusInfo||{},p=o.progressInfo||{};
+        var status=clean(info.orderStatusName||o.orderStatusName||o.orderStatus,90);
+        if(/取消|关闭|退款|cancel|close|refund/i.test(status)||isInstant(o,p))return null;
+        var goods=Array.isArray(o.wareInfoList)?o.wareInfoList[0]||{}:{};
+        var sku=clean(goods.skuId||goods.skuid||o.skuId,50);
+        var shop=clean((o.shopInfo||{}).shopId||o.shopId,50);
+        var msg=clean(p.content||p.title||p.subContent||o.messageTitle||o.message,350);
+        var prompt=o.promptInfo||{},promptValue=clean(prompt.content,250);
+        if(Array.isArray(prompt.variableList)){
+          var k=0;
+          promptValue=promptValue.replace(/%%%/g,function(){return clean(prompt.variableList[k++],40)});
+        }
+        var desc=[msg,promptValue,clean(p.tip,200),status].join(' ');
+        var code=pickup(desc);
+        var link=jdURL(p.progressLink);
+        var verified=p.progressId==='logistics'||/deal_wuliu|logistics|ordertrack|expressdetail/i.test(link);
+        var active=/待发货|待收货|待出库|运输|配送|派送|待取|已出库|正在出库|waitreceive|shipping|delivering/i.test(status);
+        // Ignore unrelated orders: a structured courier link/track or an
+        // active shipping state/pickup code is required.
+        if(!verified&&!active&&!code)return null;
+        return {id:id,title:clean(goods.wareName||o.wareName||'京东订单',170),
+          status:status,sku:sku,shop:shop,link:link,
+          summary:msg||clean(p.tip,200)||status,code:code,
+          station:station(desc),verified:verified};
+      }
+      function consume(root){
+        var lists=[],steps=0;
+        function walk(node,depth){
+          if(!node||typeof node!=='object'||depth>12||steps++>5000)return;
+          if(Array.isArray(node)){
+            for(var i=0;i<Math.min(node.length,50);i++)walk(node[i],depth+1);
+            return;
+          }
+          if(Array.isArray(node.orderList)&&node.orderList.some(function(x){return x&&x.orderId})){
+            lists.push(node.orderList.slice(0,100));
+          }
+          Object.keys(node).slice(0,60).forEach(function(key){
+            try{walk(node[key],depth+1)}catch(e){}
+          });
+        }
+        walk(root,0);
+        if(!lists.length)return;
+        structured=true;
+        var rows={},count=0;
+        lists.forEach(function(list){list.forEach(function(item){
+          var out=order(item);
+          if(!out)return;
+          count++;
+          var old=rows[out.id];
+          if(!old||(!old.link&&out.link))rows[out.id]=out;
+        })});
+        var normalized=Object.keys(rows).map(function(k){return rows[k]});
+        // Do not let a later unrelated empty result erase a richer snapshot.
+        if(normalized.length>=stored.length||!stored.length){stored=normalized.slice(0,80);revision++}
+      }
+      function consumeLogistics(root){
+        var steps=0,found=null;
+        function scan(node,depth){
+          if(!node||typeof node!=='object'||depth>9||steps++>5000||found)return;
+          if(Array.isArray(node)){node.slice(0,45).forEach(function(x){scan(x,depth+1)});return}
+          if(Array.isArray(node.tracePointVOList)&&node.tracePointVOList.length){
+            var tracks=node.tracePointVOList.slice(0,45).map(function(x){
+              if(!x||typeof x!=='object')return null;
+              var date=clean(x.createTime,40),desc=clean(x.wlStateDesc,450);
+              if(!date||!desc)return null;
+              if(/^\d{12,13}$/.test(date)){
+                var dt=new Date(Number(date));
+                if(!isNaN(dt.getTime())){
+                  var pad=function(v){return String(v).padStart(2,'0')};
+                  date=dt.getFullYear()+'-'+pad(dt.getMonth()+1)+'-'+pad(dt.getDate())+' '+
+                    pad(dt.getHours())+':'+pad(dt.getMinutes())+':'+pad(dt.getSeconds());
+                }
+              }
+              return {time:date,text:desc};
+            }).filter(Boolean);
+            if(tracks.length){
+              tracks.sort(function(a,b){return b.time.localeCompare(a.time)});
+              found={mail:clean(node.carriageId||node.waybillCode||node.mailNo,40),
+                company:clean(node.carrier,50),latest:tracks[0].text,pickup:'',station:'',tracks:tracks};
+              return;
+            }
+          }
+          Object.keys(node).slice(0,60).forEach(function(k){scan(node[k],depth+1)});
+        }
+        scan(root,0);
+        if(found)logistics=found;
+      }
+      function capture(raw){
+        try{
+          var str=typeof raw==='string'?raw:JSON.stringify(raw);
+          if(!str||str.length>1800000)return;
+          var hasOrders=str.indexOf('"orderList"')>=0;
+          var hasLogs=str.indexOf('"tracePointVOList"')>=0;
+          if(!hasOrders&&!hasLogs)return;
+          var root=typeof raw==='string'?JSON.parse(raw):raw;
+          if(hasOrders)consume(root);
+          if(hasLogs)consumeLogistics(root);
+        }catch(e){}
+      }
+      var originalSend=XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send=function(){
+        this.addEventListener('load',function(){
+          try{
+            var u=new URL(this.responseURL,location.href);
+            if(u.protocol!=='https:'||!/(^|\.)jd\.com$/i.test(u.hostname))return;
+            if(this.responseType==='json')capture(this.response);
+            else if(!this.responseType||this.responseType==='text')capture(this.responseText);
+          }catch(e){}
+        });
+        return originalSend.apply(this,arguments);
+      };
+      var originalFetch=window.fetch;
+      if(originalFetch)window.fetch=function(){
+        var result=originalFetch.apply(this,arguments);
+        if(result&&typeof result.then==='function'){
+          result.then(function(res){
+            try{
+              var u=new URL(res.url,location.href);
+              if(u.protocol==='https:'&&/(^|\.)jd\.com$/i.test(u.hostname)){
+                res.clone().text().then(capture).catch(function(){});
+              }
+            }catch(e){}
+          }).catch(function(){});
+        }
+        return result;
+      };
+      window.ParcelHelperJD={
+        snapshot:function(){return {received:structured,orders:stored.slice(0,50),revision:revision}},
+        logistics:function(){return logistics}
+      };
+    })()
+    """#
+
     func makeCoordinator() -> Coordinator {
         Coordinator(platform: platform, accountID: accountID, onProgress: onProgress,
                     onComplete: onComplete, onParcel: onParcel)
@@ -425,6 +611,15 @@ private struct NativeWebOrderReader: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = ParcelAccounts.webStore(for: platform, accountID: accountID)
+        if platform == "jd" {
+            // Document-start hook captures only JD's own structured
+            // order/logistics responses in the signed-in WKWebView.
+            // No raw response, cookie or token crosses into Swift.
+            config.userContentController.addUserScript(WKUserScript(
+                source: Self.jdDocumentHook,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+        }
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
@@ -485,6 +680,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var finished = false
         var usedJDFallback = false
         var emptyReadAttempts = 0
+        var structuredReadWaits = 0
         var trackingReadAttempts = 0
         var missingTracking = 0
         private var trackingPageSerial = 0
@@ -512,6 +708,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             if stage == .tracking {
                 trackingPageTimeout?.cancel()
                 record("物流详情页无法打开：已跳过第 \(position + 1) 笔")
+                if position < orders.count { preserveJDOrderSummary(orders[position]) }
                 missingTracking += 1
                 position += 1
                 next(webView)
@@ -558,6 +755,19 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     return
                 }
                 self.record("订单页检查：候选 \(result.orders.count) 笔，来源 \(result.source ?? "网页")")
+                // JD's asynchronous order_list_m response can arrive after
+                // the first DOM render. Let the document-start hook settle
+                // before treating a fragile DOM guess as the order list.
+                if self.platform == "jd" && result.structured != true &&
+                   self.structuredReadWaits < 3 && !result.login && !result.verify {
+                    self.structuredReadWaits += 1
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
+                        guard let self, let view = webView, !self.finished,
+                              self.stage == .orderList else { return }
+                        self.readOrders(view)
+                    }
+                    return
+                }
                 if result.verify {
                     self.record("页面要求安全验证，暂停自动读取")
                     self.complete("平台要求安全验证，请在官方页面完成验证后重新同步")
@@ -571,12 +781,19 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 self.orders = Array(result.orders.filter { order in
                     !order.id.isEmpty &&
                     order.id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil &&
-                    !["退款", "已关闭", "已完成", "交易成功", "已签收",
+                    !["退款", "已关闭", "已完成", "交易成功",
                       "已收货", "已取件", "确认收货"].contains {
                         order.status.contains($0)
-                    }
+                    } &&
+                    (!order.status.contains("已签收") ||
+                     (self.platform == "jd" && !(order.code ?? "").isEmpty))
                 }.prefix(self.platform == "jd" ? 15 : 10))
                 self.record("筛选后可查询 \(self.orders.count) 笔订单")
+                if self.orders.isEmpty && result.structured == true {
+                    self.record("官方结构化订单列表已返回，但没有传统快递或待取订单；不把秒送等 DOM 内容误当快递")
+                    self.complete("京东官方订单列表没有可导入的传统物流订单。请在京东核对是否为秒送、虚拟商品或已完成订单。")
+                    return
+                }
                 if self.orders.isEmpty {
                     if self.emptyReadAttempts < 2 {
                         self.emptyReadAttempts += 1
@@ -599,12 +816,54 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     self.record("订单列表及备用页面均未识别到符合条件的订单")
                     self.complete("未识别到可查询的订单。页面可能未加载完毕、账号需要安全验证，或平台调整了订单结构；必要时可打开官方订单页核对。")
                 } else {
+                    if self.platform == "jd" && result.structured == true {
+                        for order in self.orders {
+                            self.preserveJDOrderSummary(order)
+                        }
+                    }
                     self.stage = .tracking
                     self.position = 0
                     self.next(webView)
                 }
             }
         }
+        private func preserveJDOrderSummary(_ order: WebOrder,
+                                            tracks: [TrackNode] = [],
+                                            note: String? = nil) {
+            guard platform == "jd" else { return }
+            let code = (order.code ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let summary = (note ?? order.summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let isVerified = order.verified == true
+            guard !code.isEmpty || (isVerified && !summary.isEmpty) else { return }
+            // A verified courier status or pickup code may exist before JD
+            // generates a waybill. Never use the order number as a fake waybill.
+            if let slot = loaded.firstIndex(where: {
+                $0.orderID == order.id && $0.mailNo.isEmpty
+            }) {
+                if !tracks.isEmpty {
+                    loaded[slot].tracks = tracks
+                    if !summary.isEmpty { loaded[slot].latest = summary }
+                    onParcel?(loaded[slot])
+                    record("官方物流轨迹已补齐（尚无有效运单号）")
+                }
+                return
+            }
+            var item = NativeSyncParcel(source: "jd")
+            item.accountID = accountID ?? ""
+            item.orderID = order.id
+            item.orderStatus = order.status
+            item.verifiedJDOrderLogistics = isVerified
+            item.title = order.title
+            item.code = code
+            item.station = order.station ?? ""
+            item.latest = summary
+            item.tracks = tracks
+            item.arrived = !code.isEmpty
+            loaded.append(item)
+            onParcel?(item)
+            record("订单物流进度已保留（官方结构化订单，暂无有效运单号）")
+        }
+
         private func next(_ webView: WKWebView) {
             guard !finished else { return }
             trackingPageTimeout?.cancel()
@@ -623,7 +882,20 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             onProgress("正在查询 \(position + 1)/\(orders.count) 笔订单的物流")
             let url: String
             if platform == "jd" {
-                url = "https://trade.m.jd.com/order/deal_wuliu_jdm.shtml?from=orderdetail&dealState=7&dealId=\(order.id)&orderType=22&skuid=\(order.sku)&shopid=\(order.shop)&source=m_inner_orderList.track_orderTrack"
+                // Structured order_list_m includes the *real* progressLink.
+                // Do not hard-code dealState=7/orderType=22 or guess SKU IDs.
+                let official = order.link.flatMap(URL.init(string:))
+                let allowed = official?.scheme?.lowercased() == "https" &&
+                    (official?.host?.lowercased() == "jd.com" ||
+                     official?.host?.lowercased().hasSuffix(".jd.com") == true)
+                if allowed, let official {
+                    url = official.absoluteString
+                } else {
+                    var components = URLComponents(string:
+                        "https://trade.m.jd.com/order/deal_wuliu_jdm.shtml")!
+                    components.queryItems = [URLQueryItem(name: "dealId", value: order.id)]
+                    url = components.url!.absoluteString
+                }
             } else {
                 url = "https://pages-g.m.taobao.com/wow/z/app/mtb/logisticsV2/h5-detail?x-ssr=true&bizOrderId=\(order.id)&viewLogisticDetail=true&skipEnterAnimation=true&forceThemis=true&disableNav=YES"
             }
@@ -636,6 +908,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     guard let self, let view = webView, !self.finished,
                           self.position == index, self.trackingPageSerial == version else { return }
                     self.record("第 \(index + 1) 笔：京东物流页单笔等待超时，继续下一笔")
+                    self.preserveJDOrderSummary(self.orders[index])
                     self.missingTracking += 1
                     self.position += 1
                     self.next(view)
@@ -670,7 +943,14 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     }
                     if shipment.mail.range(of: #"^[A-Za-z0-9-]{8,40}$"#,
                                            options: .regularExpression) == nil {
-                        self.retryTracking(webView, pageVersion: pageVersion)
+                        if self.platform == "jd", !shipment.tracks.isEmpty {
+                            self.preserveJDOrderSummary(self.orders[self.position],
+                                tracks: shipment.tracks, note: shipment.latest)
+                            self.position += 1
+                            self.next(webView)
+                        } else {
+                            self.retryTracking(webView, pageVersion: pageVersion)
+                        }
                         return
                     }
                     let order = self.orders[self.position]
@@ -686,7 +966,13 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     item.station = shipment.station
                     item.tracks = shipment.tracks
                     item.arrived = !shipment.pickup.isEmpty
-                    self.loaded.append(item)
+                    if let slot = self.loaded.firstIndex(where: {
+                        $0.orderID == item.orderID && $0.mailNo.isEmpty
+                    }) {
+                        self.loaded[slot] = item
+                    } else {
+                        self.loaded.append(item)
+                    }
                     self.trackingPageTimeout?.cancel()
                     self.onParcel?(item)
                     self.record("第 \(self.position + 1) 笔：已识别有效运单及 \(shipment.tracks.count) 条轨迹")
@@ -711,6 +997,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             }
             trackingPageTimeout?.cancel()
             record("第 \(position + 1) 笔：物流页无有效运单号或解析失败（重试后）")
+            if position < orders.count { preserveJDOrderSummary(orders[position]) }
             missingTracking += 1
             position += 1
             next(webView)
@@ -726,6 +1013,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             let verify: Bool
             let orders: [WebOrder]
             let source: String?
+            let structured: Bool?
         }
         private static let openJDOrders = #"""
         (function(){
@@ -742,6 +1030,16 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private static let jdOrdersJS = #"""
         (function(){
           var body=(document.body&&document.body.innerText||'').slice(0,4500);
+          try{
+            var hooked=window.ParcelHelperJD&&window.ParcelHelperJD.snapshot();
+            if(hooked&&hooked.received){
+              return JSON.stringify({
+                login:/请登录|登录后查看|账号登录/.test(body)&&!hooked.orders.length,
+                verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
+                source:'官方接口订单列表',structured:true,orders:hooked.orders
+              });
+            }
+          }catch(e){}
           var orders=[],seen={},stats={attrs:0,links:0,state:0};
           function cardOf(el){
             if(!el||!el.closest) return document.body;
@@ -803,7 +1101,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             login:/请登录|登录后查看|账号登录/.test(body)&&!orders.length,
             verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
             source:'属性'+stats.attrs+' 链接'+stats.links+' 页面状态'+stats.state,
-            orders:orders.slice(0,45)
+            structured:false,orders:orders.slice(0,45)
           });
         })()
         """#
@@ -835,6 +1133,13 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         """#
         private static let jdTrackingJS = #"""
         (function(){
+          try{
+            var hooked=window.ParcelHelperJD&&window.ParcelHelperJD.logistics();
+            if(hooked&&hooked.tracks&&hooked.tracks.length){
+              hooked.login=false;hooked.verify=false;
+              return JSON.stringify(hooked);
+            }
+          }catch(e){}
           var txt=(document.body&&document.body.innerText||'').split('可能您还想要')[0].slice(0,70000);
           var html=(document.documentElement&&document.documentElement.outerHTML||'').slice(0,450000);
           function get(text,regex){var m=text.match(regex);return m?m[1]:''}

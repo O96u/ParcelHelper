@@ -21,6 +21,9 @@ struct NativeSyncParcel {
     var accountID: String = ""
     var orderID: String = ""
     var orderStatus: String = ""
+    // Only an official, structured JD logistics response may create an
+    // order-linked progress card before a courier waybill is assigned.
+    var verifiedJDOrderLogistics: Bool = false
     var mailNo: String = ""
     var title: String = ""
     var company: String = ""
@@ -437,7 +440,12 @@ private enum SyncJSON {
         for row in rows {
             let mail = row.mailNo.trimmingCharacters(in: .whitespacesAndNewlines)
             let code = normalizedCode(row.code)
-            guard SyncJSON.isMail(mail) || (row.arrived && !code.isEmpty) else { continue }
+            let verifiedOrderProgress = row.source == "jd" &&
+                row.verifiedJDOrderLogistics &&
+                row.orderID.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil &&
+                !row.latest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            guard SyncJSON.isMail(mail) || (row.arrived && !code.isEmpty) ||
+                verifiedOrderProgress else { continue }
             let scopedAccount = row.accountID
             let orderPrefix = scopedAccount.isEmpty ||
                 scopedAccount == ParcelAccounts.legacyID(row.source) ?
@@ -469,9 +477,9 @@ private enum SyncJSON {
             // Do not create records from completed historical orders.
             // Existing records still receive completed/signed tracking updates.
             let finishedOrder = ["交易成功", "已完成", "确认收货", "已收货",
-                                 "已签收", "已取件"].contains {
-                row.orderStatus.contains($0)
-            }
+                                 "已取件", "Accomplish", "Completed"].contains {
+                row.orderStatus.localizedCaseInsensitiveContains($0)
+            } || (row.orderStatus.contains("已签收") && !wasArrived)
             let stationTerms = ["驿站签收", "驿站代签收", "代为签收",
                                 "网点签收", "快递柜签收", "暂存签收",
                                 "包裹已到站", "待取件"]
