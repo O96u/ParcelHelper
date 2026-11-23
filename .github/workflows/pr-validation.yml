@@ -55,6 +55,10 @@ jobs:
         run: |
           swiftc -parse-as-library Shared/Models.swift Tests/ParcelModelTests.swift -o "${RUNNER_TEMP}/parcel-model-tests"
           "${RUNNER_TEMP}/parcel-model-tests"
+      - name: Test clipboard tracking-number parsing
+        run: |
+          swiftc App/Parser.swift Tests/ClipboardParserTests.swift -o "${RUNNER_TEMP}/clipboard-tests"
+          "${RUNNER_TEMP}/clipboard-tests"
       - name: Verify app and widget compile
         run: |
           set -o pipefail
