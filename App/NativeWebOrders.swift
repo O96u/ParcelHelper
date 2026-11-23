@@ -835,7 +835,17 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             guard !code.isEmpty || (isVerified && !summary.isEmpty) else { return }
             // A verified courier status or pickup code may exist before JD
             // generates a waybill. Never use the order number as a fake waybill.
-            if loaded.contains(where: { $0.orderID == order.id }) { return }
+            if let slot = loaded.firstIndex(where: {
+                $0.orderID == order.id && $0.mailNo.isEmpty
+            }) {
+                if !tracks.isEmpty {
+                    loaded[slot].tracks = tracks
+                    if !summary.isEmpty { loaded[slot].latest = summary }
+                    onParcel?(loaded[slot])
+                    record("官方物流轨迹已补齐（尚无有效运单号）")
+                }
+                return
+            }
             var item = NativeSyncParcel(source: "jd")
             item.accountID = accountID ?? ""
             item.orderID = order.id
@@ -931,7 +941,14 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     }
                     if shipment.mail.range(of: #"^[A-Za-z0-9-]{8,40}$"#,
                                            options: .regularExpression) == nil {
-                        self.retryTracking(webView, pageVersion: pageVersion)
+                        if self.platform == "jd", !shipment.tracks.isEmpty {
+                            self.preserveJDOrderSummary(self.orders[self.position],
+                                tracks: shipment.tracks, note: shipment.latest)
+                            self.position += 1
+                            self.next(webView)
+                        } else {
+                            self.retryTracking(webView, pageVersion: pageVersion)
+                        }
                         return
                     }
                     let order = self.orders[self.position]
@@ -1114,6 +1131,13 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         """#
         private static let jdTrackingJS = #"""
         (function(){
+          try{
+            var hooked=window.ParcelHelperJD&&window.ParcelHelperJD.logistics();
+            if(hooked&&hooked.tracks&&hooked.tracks.length){
+              hooked.login=false;hooked.verify=false;
+              return JSON.stringify(hooked);
+            }
+          }catch(e){}
           var txt=(document.body&&document.body.innerText||'').split('可能您还想要')[0].slice(0,70000);
           var html=(document.documentElement&&document.documentElement.outerHTML||'').slice(0,450000);
           function get(text,regex){var m=text.match(regex);return m?m[1]:''}
