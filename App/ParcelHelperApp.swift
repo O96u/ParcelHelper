@@ -220,6 +220,8 @@ private final class ParcelBGTaskCompletion {
 
 @MainActor enum ParcelBackgroundRefresh {
     private static let identifier = "com.muxui.ParcelHelper.refresh"
+    private static let nextScheduledKey = "native.bg.refresh.nextScheduledAt"
+    private static let parcelCursorKey = "native.bg.refresh.trackingCursor"
 
     nonisolated static func register() {
         BGTaskScheduler.shared.register(
@@ -242,19 +244,28 @@ private final class ParcelBGTaskCompletion {
             hasPending: parcels.contains(where: { $0.isPending }),
             hasActive: !parcels.isEmpty
         )
+        // The app may reopen repeatedly while a background request is queued.
+        // Cancelling and rescheduling on every activation pushes its earliest
+        // start farther into the future and can starve background refreshes.
+        let now = Date().timeIntervalSince1970
+        let next = UserDefaults.standard.double(forKey: nextScheduledKey)
+        if next > now { return }
         let request = BGAppRefreshTaskRequest(identifier: identifier)
-        request.earliestBeginDate = Date().addingTimeInterval(interval)
+        let earliest = Date().addingTimeInterval(interval)
+        request.earliestBeginDate = earliest
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
         do {
             try BGTaskScheduler.shared.submit(request)
+            UserDefaults.standard.set(earliest.timeIntervalSince1970, forKey: nextScheduledKey)
         } catch {
+            UserDefaults.standard.removeObject(forKey: nextScheduledKey)
             NSLog("ParcelHelper BGAppRefresh schedule failed: %@", String(describing: error))
         }
     }
 
     private static func handle(_ task: BGAppRefreshTask) {
-        // Schedule the successor before network work, because iOS can
-        // terminate the current execution at any time.
+        // The previous request is now executing; schedule its successor.
+        UserDefaults.standard.removeObject(forKey: nextScheduledKey)
         scheduleNext()
         let completion = ParcelBGTaskCompletion()
         let work = Task { @MainActor in
@@ -276,6 +287,39 @@ private final class ParcelBGTaskCompletion {
             work.cancel()
             watchdog.cancel()
             completion.finish(task, success: false)
+        }
+    }
+
+    private static func refreshOneExistingWaybill() async {
+        guard NativeTracking.isConfigured || NativeTracking.isKuaidi100Configured ||
+              NativeTracking.publicFallbackEnabled else { return }
+        let candidates = ParcelStore.shared.snapshot.parcels.filter {
+            $0.type == "delivery" && !$0.isDone && !$0.isSigned &&
+            $0.closed == nil && ($0.mailNo ?? "").range(
+                of: #"^[A-Za-z0-9-]{8,40}$"#,
+                options: .regularExpression) != nil
+        }
+        guard !candidates.isEmpty else { return }
+        // Round-robin a single shipment per short background invocation to
+        // respect provider rate limits and iOS's limited execution budget.
+        let cursor = UserDefaults.standard.integer(forKey: parcelCursorKey)
+        let candidate = candidates[cursor % candidates.count]
+        UserDefaults.standard.set((cursor + 1) % candidates.count, forKey: parcelCursorKey)
+        guard let mail = candidate.mailNo else { return }
+        do {
+            let found = try await NativeTracking.lookup(
+                mail, source: candidate.source, shipperCode: candidate.shipperCode ?? "",
+                accountIDs: candidate.linkedAccounts ?? [])
+            guard !Task.isCancelled, !found.nodes.isEmpty else { return }
+            var update = NativeSyncParcel(source: candidate.source ?? "clipboard")
+            update.mailNo = mail
+            update.company = found.company
+            update.latest = found.latest.isEmpty ? (found.nodes.first?.text ?? "") : found.latest
+            update.tracks = found.nodes
+            let updated = NativeParcelSync.merge([update])
+            ParcelRunLog.record("后台刷新", "已查询 1 件物流，更新 \(updated) 件")
+        } catch {
+            ParcelRunLog.record("后台刷新", "物流补查未获得有效结果")
         }
     }
 
@@ -309,6 +353,13 @@ private final class ParcelBGTaskCompletion {
             guard Date().timeIntervalSince1970 - last >= 1800 else { continue }
             attempted += 1
             _ = try? await NativeParcelSync.run("fengchao", accountID: account.id)
+        }
+        // JD/Taobao signed-in order pages use WKWebView and cannot be
+        // launched reliably inside a short iOS BGAppRefresh task. Existing
+        // waybills can instead be checked using explicitly configured
+        // HTTPS tracking services, without any WebKit or session scraping.
+        if !Task.isCancelled, Date() < deadline, attempted < 2 {
+            await refreshOneExistingWaybill()
         }
         return !Task.isCancelled
     }
