@@ -85,6 +85,17 @@ struct Parcel: Codable, Identifiable, Hashable {
             trackNodes.contains { Self.confirmsRecipientPickup($0.text) }
     }
     var isDone: Bool { status == 2 || pickedByUser || latestPickupConfirmed }
+    /// Some JD doorstep deliveries say "您的订单已送达" without "已签收".
+    /// Arrival at a pickup location is not confirmation of recipient delivery.
+    static func confirmsFinalDelivery(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let station = ["驿站", "代收点", "快递柜", "自提柜", "自提点", "分拨中心",
+                       "转运中心", "集散中心", "网点", "派送中", "正在派送",
+                       "待取件", "请取件", "暂存", "代签收", "未送达", "未签收"]
+        guard !station.contains(where: text.contains) else { return false }
+        return ["您的订单已送达", "订单已送达", "已送达收件人",
+                "已送达客户", "已送达本人"].contains(where: text.contains)
+    }
     // The courier marked this package delivered, not necessarily picked up
     // personally. Do not conflate signature and user's pickup.
     var isSigned: Bool {
@@ -97,12 +108,15 @@ struct Parcel: Codable, Identifiable, Hashable {
         return ([trackLatest ?? ""] + trackNodes.map(\.text)).contains { text in
             !excluded.contains(where: text.contains) &&
                 (text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "SIGN" ||
-                 signed.contains(where: text.contains))
+                 signed.contains(where: text.contains) ||
+                 Self.confirmsFinalDelivery(text))
         }
     }
     var displayStatus: String {
         if isDone { return "已取件" }
-        if isSigned { return "已签收" }
+        if isSigned {
+            return Self.confirmsFinalDelivery(trackLatest ?? "") ? "已送达" : "已签收"
+        }
         if isPending { return "待取件" }
         return "运输中"
     }
