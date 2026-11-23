@@ -12,6 +12,11 @@ private struct WebOrder: Decodable {
     var status: String
     var sku: String
     var shop: String
+    var link: String? = nil
+    var summary: String? = nil
+    var code: String? = nil
+    var station: String? = nil
+    var verified: Bool? = nil
 }
 private struct WebShipment: Decodable {
     var mail: String
@@ -418,6 +423,181 @@ private struct NativeWebOrderReader: UIViewRepresentable {
     let onComplete: ([NativeSyncParcel], String?) -> Void
     var onParcel: ((NativeSyncParcel) -> Void)? = nil
 
+
+    // Follow HandyCode's document-start response capture and parcly's
+    // structured logistics metadata, without exporting raw account JSON.
+    // The local snapshot is normalized to safe order fields only.
+    static let jdDocumentHook = #"""
+    (function(){
+      if (window.top!==window || !/(^|\.)jd\.com$/i.test(location.hostname)) return;
+      if (window.ParcelHelperJD) return;
+      var stored=[], structured=false, logistics=null, revision=0;
+      function clean(v,n){return typeof v==='string'?v.slice(0,n):String(v==null?'':v).slice(0,n);}
+      function jdURL(raw){
+        if(typeof raw!=='string'||!raw)return '';
+        try{
+          var url=new URL(raw,location.href);
+          return url.protocol==='https:'&&/(^|\.)jd\.com$/i.test(url.hostname)
+            ? url.href.slice(0,900) : '';
+        }catch(e){return ''}
+      }
+      function pickup(value){
+        var t=clean(value,1800);
+        var m=t.match(/(?:取件码|提货码|取货码|自提码|开箱码|取件密码)\s*(?:为|是)?\s*[:：\s【\[\(（]*([A-Za-z0-9-]{3,16})(?![A-Za-z0-9-])/);
+        if(m)return m[1];
+        m=t.match(/(?:请凭|凭码)\s*([A-Za-z0-9-]{4,14})\s*(?:到|前往|取件|领取)/);
+        return m?m[1]:'';
+      }
+      function station(value){
+        var t=clean(value,1500).replace(/\s+/g,' ');
+        var m=t.match(/【([^】]{2,60}(?:驿站|自提点|代收点|快递柜|自提柜|超市)[^】]{0,25})】/);
+        return m?m[1].slice(0,80):'';
+      }
+      function isInstant(o,progress){
+        var deals=o.specialDealList||[];
+        if(Array.isArray(deals)&&deals.some(function(v){return v&&(v.isStore2Home===true||v.isStore2Home===1||v.isStore2Home==='1')}))return true;
+        var u=clean(progress.progressLink,500).toLowerCase();
+        if(/store2home|daojia|instant/.test(u))return true;
+        var msg=[o.message,o.messageTitle,progress.content,progress.tip].join(' ');
+        return /秒送|京东到家|即时配送|达达|骑手|分钟送达|分钟达/.test(msg);
+      }
+      function order(o){
+        if(!o||typeof o!=='object')return null;
+        var id=clean(o.orderId||o.orderid||o.dealId,80);
+        if(!/^\d{8,}$/.test(id))return null;
+        var info=o.orderStatusInfo||{},p=o.progressInfo||{};
+        var status=clean(info.orderStatusName||o.orderStatusName||o.orderStatus,90);
+        if(/取消|关闭|退款|cancel|close|refund/i.test(status)||isInstant(o,p))return null;
+        var goods=Array.isArray(o.wareInfoList)?o.wareInfoList[0]||{}:{};
+        var sku=clean(goods.skuId||goods.skuid||o.skuId,50);
+        var shop=clean((o.shopInfo||{}).shopId||o.shopId,50);
+        var msg=clean(p.content||p.title||p.subContent||o.messageTitle||o.message,350);
+        var prompt=o.promptInfo||{},promptValue=clean(prompt.content,250);
+        if(Array.isArray(prompt.variableList)){
+          var k=0;
+          promptValue=promptValue.replace(/%%%/g,function(){return clean(prompt.variableList[k++],40)});
+        }
+        var desc=[msg,promptValue,clean(p.tip,200),status].join(' ');
+        var code=pickup(desc);
+        var link=jdURL(p.progressLink);
+        var verified=p.progressId==='logistics'||!!link;
+        var active=/待发货|待收货|待出库|运输|配送|派送|待取|已出库|正在出库|waitreceive|shipping|delivering/i.test(status);
+        // Ignore unrelated orders: a structured courier link/track or an
+        // active shipping state/pickup code is required.
+        if(!verified&&!active&&!code)return null;
+        return {id:id,title:clean(goods.wareName||o.wareName||'京东订单',170),
+          status:status,sku:sku,shop:shop,link:link,
+          summary:msg||clean(p.tip,200)||status,code:code,
+          station:station(desc),verified:verified};
+      }
+      function consume(root){
+        var lists=[],steps=0;
+        function walk(node,depth){
+          if(!node||typeof node!=='object'||depth>12||steps++>5000)return;
+          if(Array.isArray(node)){
+            for(var i=0;i<Math.min(node.length,50);i++)walk(node[i],depth+1);
+            return;
+          }
+          if(Array.isArray(node.orderList)&&node.orderList.some(function(x){return x&&x.orderId})){
+            lists.push(node.orderList.slice(0,100));
+          }
+          Object.keys(node).slice(0,60).forEach(function(key){
+            try{walk(node[key],depth+1)}catch(e){}
+          });
+        }
+        walk(root,0);
+        if(!lists.length)return;
+        structured=true;
+        var rows={},count=0;
+        lists.forEach(function(list){list.forEach(function(item){
+          var out=order(item);
+          if(!out)return;
+          count++;
+          var old=rows[out.id];
+          if(!old||(!old.link&&out.link))rows[out.id]=out;
+        })});
+        var normalized=Object.keys(rows).map(function(k){return rows[k]});
+        // Do not let a later unrelated empty result erase a richer snapshot.
+        if(normalized.length>=stored.length||!stored.length){stored=normalized.slice(0,80);revision++}
+      }
+      function consumeLogistics(root){
+        var steps=0,found=null;
+        function scan(node,depth){
+          if(!node||typeof node!=='object'||depth>9||steps++>5000||found)return;
+          if(Array.isArray(node)){node.slice(0,45).forEach(function(x){scan(x,depth+1)});return}
+          if(Array.isArray(node.tracePointVOList)&&node.tracePointVOList.length){
+            var tracks=node.tracePointVOList.slice(0,45).map(function(x){
+              if(!x||typeof x!=='object')return null;
+              var date=clean(x.createTime,40),desc=clean(x.wlStateDesc,450);
+              if(!date||!desc)return null;
+              if(/^\d{12,13}$/.test(date)){
+                var dt=new Date(Number(date));
+                if(!isNaN(dt.getTime())){
+                  var pad=function(v){return String(v).padStart(2,'0')};
+                  date=dt.getFullYear()+'-'+pad(dt.getMonth()+1)+'-'+pad(dt.getDate())+' '+
+                    pad(dt.getHours())+':'+pad(dt.getMinutes())+':'+pad(dt.getSeconds());
+                }
+              }
+              return {time:date,text:desc};
+            }).filter(Boolean);
+            if(tracks.length){
+              tracks.sort(function(a,b){return b.time.localeCompare(a.time)});
+              found={mail:clean(node.carriageId||node.waybillCode||node.mailNo,40),
+                company:clean(node.carrier,50),latest:tracks[0].text,pickup:'',station:'',tracks:tracks};
+              return;
+            }
+          }
+          Object.keys(node).slice(0,60).forEach(function(k){scan(node[k],depth+1)});
+        }
+        scan(root,0);
+        if(found)logistics=found;
+      }
+      function capture(raw){
+        try{
+          var str=typeof raw==='string'?raw:JSON.stringify(raw);
+          if(!str||str.length>1800000)return;
+          var hasOrders=str.indexOf('"orderList"')>=0;
+          var hasLogs=str.indexOf('"tracePointVOList"')>=0;
+          if(!hasOrders&&!hasLogs)return;
+          var root=typeof raw==='string'?JSON.parse(raw):raw;
+          if(hasOrders)consume(root);
+          if(hasLogs)consumeLogistics(root);
+        }catch(e){}
+      }
+      var originalSend=XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send=function(){
+        this.addEventListener('load',function(){
+          try{
+            var u=new URL(this.responseURL,location.href);
+            if(u.protocol!=='https:'||!/(^|\.)jd\.com$/i.test(u.hostname))return;
+            if(this.responseType==='json')capture(this.response);
+            else if(!this.responseType||this.responseType==='text')capture(this.responseText);
+          }catch(e){}
+        });
+        return originalSend.apply(this,arguments);
+      };
+      var originalFetch=window.fetch;
+      if(originalFetch)window.fetch=function(){
+        var result=originalFetch.apply(this,arguments);
+        if(result&&typeof result.then==='function'){
+          result.then(function(res){
+            try{
+              var u=new URL(res.url,location.href);
+              if(u.protocol==='https:'&&/(^|\.)jd\.com$/i.test(u.hostname)){
+                res.clone().text().then(capture).catch(function(){});
+              }
+            }catch(e){}
+          }).catch(function(){});
+        }
+        return result;
+      };
+      window.ParcelHelperJD={
+        snapshot:function(){return {received:structured,orders:stored.slice(0,50),revision:revision}},
+        logistics:function(){return logistics}
+      };
+    })()
+    """#
+
     func makeCoordinator() -> Coordinator {
         Coordinator(platform: platform, accountID: accountID, onProgress: onProgress,
                     onComplete: onComplete, onParcel: onParcel)
@@ -425,6 +605,15 @@ private struct NativeWebOrderReader: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = ParcelAccounts.webStore(for: platform, accountID: accountID)
+        if platform == "jd" {
+            // Document-start hook captures only JD's own structured
+            // order/logistics responses in the signed-in WKWebView.
+            // No raw response, cookie or token crosses into Swift.
+            config.userContentController.addUserScript(WKUserScript(
+                source: Self.jdDocumentHook,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+        }
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
