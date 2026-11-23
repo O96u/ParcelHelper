@@ -1919,6 +1919,7 @@ struct PlatformsHome: View {
     }
 }
 struct CourierSettings: View {
+    @State private var confirmClearCredentials = false
     @State private var businessID = NativeTracking.get("businessID")
     @State private var key = NativeTracking.get("apiKey")
     @State private var configured = NativeTracking.isConfigured
@@ -1949,14 +1950,22 @@ struct CourierSettings: View {
                     } catch { notice = error.localizedDescription }
                 }
                 Button("清除配置", role: .destructive) {
-                    NativeTracking.clearCredential()
-                    businessID = ""
-                    key = ""
-                    configured = false
-                    loggedIn = false
-                    notice = "已清除配置"
+                    confirmClearCredentials = true
                 }
                 .disabled(!configured)
+                .alert("确认清除快递鸟配置？", isPresented: $confirmClearCredentials) {
+                    Button("取消", role: .cancel) {}
+                    Button("清除配置", role: .destructive) {
+                        NativeTracking.clearCredential()
+                        businessID = ""
+                        key = ""
+                        configured = false
+                        loggedIn = false
+                        notice = "已清除配置"
+                    }
+                } message: {
+                    Text("将清除本机保存的快递鸟 API 授权信息，之后需重新配置才能使用备用查询。")
+                }
             }
         }
         .navigationTitle("快递鸟")
@@ -1987,6 +1996,7 @@ struct CourierSettings: View {
 }
 
 struct Kuaidi100Settings: View {
+    @State private var confirmClearCredentials = false
     @State private var customer = NativeTracking.get("kuaidi100Customer")
     @State private var key = NativeTracking.get("kuaidi100Key")
     @State private var configured = NativeTracking.isKuaidi100Configured
@@ -2019,13 +2029,21 @@ struct Kuaidi100Settings: View {
                     } catch { notice = error.localizedDescription }
                 }
                 Button("清除配置", role: .destructive) {
-                    NativeTracking.clearKuaidi100()
-                    customer = ""
-                    key = ""
-                    configured = false
-                    notice = "已清除配置"
+                    confirmClearCredentials = true
                 }
                 .disabled(!configured)
+                .alert("确认清除快递100配置？", isPresented: $confirmClearCredentials) {
+                    Button("取消", role: .cancel) {}
+                    Button("清除配置", role: .destructive) {
+                        NativeTracking.clearKuaidi100()
+                        customer = ""
+                        key = ""
+                        configured = false
+                        notice = "已清除配置"
+                    }
+                } message: {
+                    Text("将清除本机保存的快递100 Customer 和 Key，之后需重新配置。")
+                }
             }
             Section {
                 Text("需要自行申请 API 密钥；查询可能产生费用，同一单号有查询间隔限制。")
