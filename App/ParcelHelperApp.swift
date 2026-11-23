@@ -120,6 +120,7 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
     @StateObject private var clipboardMonitor = ClipboardParcelMonitor()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("native.appearance.color") private var themeColor = "blue"
+    @State private var didCheckInitialNotificationPermission = false
 
     var body: some Scene {
         WindowGroup {
@@ -130,6 +131,18 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                     // Reconcile any widget "marked picked" actions on launch.
                     store.persist()
                     ParcelBackgroundRefresh.scheduleNext()
+                    if !didCheckInitialNotificationPermission {
+                        didCheckInitialNotificationPermission = true
+                        Task {
+                            // Only iOS can show the system alert, and only when
+                            // permission has not been decided. Never re-prompt
+                            // someone who already allowed or denied it.
+                            let status = await UNUserNotificationCenter.current()
+                                .notificationSettings().authorizationStatus
+                            guard status == .notDetermined else { return }
+                            _ = await ParcelNotifications.requestPermission()
+                        }
+                    }
                     clipboardMonitor.checkOnForeground()
                     // Foreground-only update checks never sign or install an IPA.
                     Task { await ParcelUpdateCenter.shared.checkOnLaunch() }
