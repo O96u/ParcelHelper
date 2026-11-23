@@ -907,12 +907,12 @@ struct HomeWidgetSettingsPage: View {
                             .frame(width: 28, height: 28)
                             .background(.white.opacity(0.17),
                                         in: RoundedRectangle(cornerRadius: 9))
-                        Text("我的取件").font(.system(size: 11, weight: .semibold))
+                        Text("我的取件").font(.system(size: 12, weight: .semibold))
                         Spacer(minLength: 2)
                         Text("\(pending.count) 件待取")
                             .font(.system(size: 15, weight: .bold, design: .rounded))
                         if showTransit.wrappedValue {
-                            Text("· 在途 \(transit.count)")
+                            Text("在途 \(transit.count)")
                                 .font(.system(size: 10))
                                 .foregroundStyle(.white.opacity(0.86))
                         }
@@ -934,7 +934,7 @@ struct HomeWidgetSettingsPage: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(parcel.displayCode.isEmpty
                                      ? parcel.displayStatus : parcel.displayCode)
-                                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                                    .font(.system(size: 18, weight: .bold, design: .rounded))
                                     .lineLimit(1)
                                 Text(parcel.itemTitle ?? parcel.trackCompany ?? parcel.stationText)
                                     .font(.system(size: 10))
@@ -1014,8 +1014,8 @@ struct HomeWidgetSettingsPage: View {
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
-                    .frame(height: selectedSize == "small" ? 29 :
-                                   (selectedSize == "medium" ? 22 : 32))
+                    .frame(height: selectedSize == "small" ? 31 :
+                                   (selectedSize == "medium" ? 25 : 35))
                 }
             }
         }
