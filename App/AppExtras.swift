@@ -512,11 +512,14 @@ struct ParcelUpdatePage: View {
         }
         .navigationTitle("运行日志")
         .onAppear(perform: reload)
-        .confirmationDialog("清空全部本地运行日志？", isPresented: $confirmClear) {
-            Button("清空", role: .destructive) {
+        .alert("确认清空运行日志？", isPresented: $confirmClear) {
+            Button("取消", role: .cancel) {}
+            Button("清空日志", role: .destructive) {
                 ParcelRunLog.clear()
                 reload()
             }
+        } message: {
+            Text("将永久删除本机保存的 \(records.count) 条运行记录，无法撤销；不会删除包裹或账号数据。")
         }
     }
 
