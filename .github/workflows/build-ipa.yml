@@ -418,3 +418,32 @@ jobs:
             build/asset-renditions.json
           if-no-files-found: ignore
           retention-days: 14
+
+  telegram-notify:
+    name: 通知 Telegram 构建结果
+    needs: build
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - name: 检出通知脚本
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: 下载成功构建的 IPA
+        if: ${{ needs.build.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ParcelHelper-v*
+          path: telegram-ipa
+          merge-multiple: true
+      - name: 发送 Telegram 消息与 IPA 附件
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ vars.TELEGRAM_TOPIC_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: python3 scripts/telegram_notify.py
