@@ -39,6 +39,17 @@ struct ParcelModelTests {
         incoming.trackLatest = "您已取走"
         precondition(incoming.isDone && !incoming.isPending,
                      "Confirmed collection closes the pickup item")
-        print("PASS: parcel content diff + pickup/signed classification (9 checks)")
+        incoming = initial
+        incoming.trackLatest = "您的订单已送达，如有疑问您可以联系配送员确认。"
+        precondition(incoming.isSigned && !incoming.isTransit && incoming.displayStatus == "已送达",
+                     "JD delivered order must not appear in transit")
+        incoming.trackLatest = "您的订单已送达菜鸟驿站，请凭码取件"
+        precondition(!incoming.isSigned,
+                     "Station arrival must not be mistaken for final delivery")
+        incoming.trackLatest = "订单已送达收件人"
+        precondition(incoming.isSigned, "Recipient delivery should be completed")
+        incoming.trackLatest = "快递员正在派送中，预计今日送达"
+        precondition(!incoming.isSigned, "Out for delivery is not delivered")
+        print("PASS: parcel content diff + pickup/signed classification (13 checks)")
     }
 }
