@@ -75,14 +75,14 @@ def compact_release_notes(markdown):
     current = ""
     for raw in markdown.splitlines():
         line = raw.strip()
-        header = re.match(r"^#{2,4}\\s*(.+)$", line)
+        header = re.match(r"^#{2,4}\s*(.+)$", line)
         if header:
             title = re.sub(r"[*`#]", "", header.group(1)).strip()
             current = title if title in categories else ""
             continue
         if current and line.startswith(("- ", "* ")):
-            item = re.sub(r"\\[([^]]+)\\]\\([^)]*\\)", r"\\1", line[2:])
-            item = re.sub(r"\\*\\*(.*?)\\*\\*", r"\\1", item)
+            item = re.sub(r"\[([^]]+)\]\([^)]*\)", r"\1", line[2:])
+            item = re.sub(r"\*\*(.*?)\*\*", r"\1", item)
             item = item.replace("`", "").strip()
             if item and not any(category == current for category, _ in found):
                 found.append((current, item))
@@ -114,7 +114,7 @@ def main():
         print("::warning::读取 GitHub Release 失败，仍尝试发送 IPA。")
         release = None
     tag = (release or {}).get("tag_name") or os.environ.get("TELEGRAM_RELEASE_TAG") or REF_NAME
-    if not re.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+(?:-pre\\.[0-9]+)?", tag):
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-pre\.[0-9]+)?", tag):
         print("::error::无法从 Release 识别合法版本号，取消发送，避免文件名称错误。")
         return 1
     display_name = f"包裹助手_{tag}.ipa"
@@ -123,25 +123,25 @@ def main():
     kind = ("手动重发" if os.environ.get("TELEGRAM_RELEASE_TAG")
             else "手动构建" if EVENT == "workflow_dispatch" else "正式发布")
     caption = (
-        f"<b>📦 包裹助手 · {html.escape(tag)}</b>\\n"
-        f"🍎 iOS 17+  |  {kind}\\n"
-        "📦 订单同步 · 物流追踪 · 取件码\\n"
-        "🏝 灵动岛 · 桌面小组件 · 智能提醒\\n"
-        "🔐 未签名 IPA，需自行签名安装\\n"
+        f"<b>📦 包裹助手 · {html.escape(tag)}</b>\n"
+        f"🍎 iOS 17+  |  {kind}\n"
+        "📦 订单同步 · 物流追踪 · 取件码\n"
+        "🏝 灵动岛 · 桌面小组件 · 智能提醒\n"
+        "🔐 未签名 IPA，需自行签名安装\n"
     )
     highlights = compact_release_notes(body)
     if highlights:
-        snippet = "\\n".join(
+        snippet = "\n".join(
             f"• {category}：{html.escape(content[:65].rstrip('，、； '))}{'…' if len(content) > 65 else ''}"
             for category, content in highlights
         )
-        caption += f"\\n<blockquote expandable>📝 {html.escape(tag)} 更新日志\\n{snippet}</blockquote>\\n"
-    caption += (f'\\n<a href="{html.escape(link, quote=True)}">完整更新日志</a>'
+        caption += f"\n<blockquote expandable>📝 {html.escape(tag)} 更新日志\n{snippet}</blockquote>\n"
+    caption += (f'\n<a href="{html.escape(link, quote=True)}">完整更新日志</a>'
                 f' · <a href="{RUN_LINK}">构建记录</a>')
     if len(caption) > 950:
         caption = (
-            f"<b>📦 包裹助手 · {html.escape(tag)}</b>\\n"
-            "🍎 iOS 17+ · 未签名 IPA\\n"
+            f"<b>📦 包裹助手 · {html.escape(tag)}</b>\n"
+            "🍎 iOS 17+ · 未签名 IPA\n"
             f'<a href="{html.escape(link, quote=True)}">完整更新日志</a>'
             f' · <a href="{RUN_LINK}">构建记录</a>'
         )
