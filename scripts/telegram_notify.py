@@ -69,7 +69,7 @@ def send(method, fields, filename=None, display_name=None):
     return True
 
 def rich_release_html(tag, kind, link, body):
-    """Telegram Bot API 10.3 富文本：真实表格、IPA 附件及可折叠详情。"""
+    """简洁单版本资源帖：文件和表格直接呈现，日志与可点击图片画廊默认收起。"""
     safe_tag = html.escape(tag)
     highlights = compact_release_notes(body)
     log_items = "".join(
@@ -81,21 +81,19 @@ def rich_release_html(tag, kind, link, body):
         for i in range(1, 7)
     )
     return (
-        '<p><b>📦 包裹助手</b></p>'
-        f'<details open><summary>ParcelHelper {safe_tag} · {html.escape(kind)}</summary>'
+        '<p><b>包裹助手</b></p>'
         '<tg-document src="tg://document?id=parcel_ipa"></tg-document>'
         '<table bordered compact>'
-        '<tr><th>🍎 系统要求</th><td>iOS 17.0 及以上</td></tr>'
-        '<tr><th>📱 应用功能</th><td>订单同步 · 物流追踪 · 取件码</td></tr>'
-        '<tr><th>🧩 扩展功能</th><td>灵动岛 · 锁屏实时活动 · 桌面小组件</td></tr>'
-        '<tr><th>🔐 安装说明</th><td>未签名 IPA，需自行签名</td></tr>'
-        '</table></details>'
-        f'<details><summary>📝 {safe_tag} 更新日志</summary><ul>{log_items}</ul></details>'
-        '<details><summary>🖼 截图预览 · 点击展开</summary>'
+        '<tr><th>系统要求</th><td>iOS 17.0 及以上</td></tr>'
+        '<tr><th>应用功能</th><td>订单同步 · 物流追踪 · 取件码</td></tr>'
+        '<tr><th>扩展功能</th><td>灵动岛 · 锁屏实时活动 · 桌面小组件</td></tr>'
+        '<tr><th>安装说明</th><td>未签名 IPA，需自行签名</td></tr>'
+        '</table>'
+        f'<details><summary>{safe_tag} 更新日志</summary><ul>{log_items}</ul></details>'
+        '<details><summary>截图预览 · 点击展开</summary>'
         f'<tg-collage>{pictures}</tg-collage></details>'
         '<p>'
         f'<a href="{html.escape(link, quote=True)}">完整更新日志</a> · '
-        f'<a href="{RUN_LINK}">构建记录</a> · '
         f'<a href="https://github.com/{REPO}">GitHub</a>'
         '</p>'
     )
@@ -168,9 +166,9 @@ def main():
     if TOPIC_ID:
         common["message_thread_id"] = TOPIC_ID
     if RESULT != "success":
-        status = {"failure": "❌ 构建失败", "cancelled": "⚪ 构建取消", "skipped": "⚪ 构建跳过"}.get(RESULT, "⚠️ 构建未成功")
+        status = {"failure": "构建失败", "cancelled": "构建取消", "skipped": "构建跳过"}.get(RESULT, "构建未成功")
         message = (
-            f"<b>📦 ParcelHelper｜{status}</b>\n"
+            f"<b>包裹助手｜{status}</b>\n"
             f"触发方式：{'手动构建' if EVENT == 'workflow_dispatch' else '标签自动构建'}\n"
             f"引用：<code>{html.escape(REF_NAME)}</code>\n"
             f"<a href=\"{RUN_LINK}\">查看构建日志</a>"
@@ -191,27 +189,27 @@ def main():
     kind = ("手动重发" if os.environ.get("TELEGRAM_RELEASE_TAG")
             else "手动构建" if EVENT == "workflow_dispatch" else "正式发布")
     caption = (
-        f"<b>📦 包裹助手 · {html.escape(tag)}</b>\n"
-        f"🍎 iOS 17+  |  {kind}\n"
-        "📦 订单同步 · 物流追踪 · 取件码\n"
-        "🏝 灵动岛 · 桌面小组件 · 智能提醒\n"
-        "🔐 未签名 IPA，需自行签名安装\n"
+        f"<b>包裹助手 · {html.escape(tag)}</b>\n"
+        "系统要求：iOS 17.0 及以上\n"
+        "应用功能：订单同步、物流追踪、取件码\n"
+        "扩展功能：灵动岛、锁屏实时活动、桌面小组件\n"
+        "安装说明：未签名 IPA，需自行签名\n"
     )
     highlights = compact_release_notes(body)
     if highlights:
         snippet = "\n".join(
-            f"• {category}：{html.escape(content[:65].rstrip('，、； '))}{'…' if len(content) > 65 else ''}"
+            f"• {category}：{html.escape(content[:65])}{'…' if len(content) > 65 else ''}"
             for category, content in highlights
         )
-        caption += f"\n<blockquote expandable>📝 {html.escape(tag)} 更新日志\n{snippet}</blockquote>\n"
+        caption += f"\n<blockquote expandable>{html.escape(tag)} 更新日志\n{snippet}</blockquote>\n"
     caption += (f'\n<a href="{html.escape(link, quote=True)}">完整更新日志</a>'
-                f' · <a href="{RUN_LINK}">构建记录</a>')
+                f' · <a href="https://github.com/{REPO}">GitHub</a>')
     if len(caption) > 950:
         caption = (
-            f"<b>📦 包裹助手 · {html.escape(tag)}</b>\n"
-            "🍎 iOS 17+ · 未签名 IPA\n"
+            f"<b>包裹助手 · {html.escape(tag)}</b>\n"
+            "iOS 17.0 及以上 · 未签名 IPA\n"
             f'<a href="{html.escape(link, quote=True)}">完整更新日志</a>'
-            f' · <a href="{RUN_LINK}">构建记录</a>'
+            f' · <a href="https://github.com/{REPO}">GitHub</a>'
         )
     ipa = Path("telegram-ipa/ParcelHelper.ipa")
     if not ipa.is_file():
