@@ -68,6 +68,74 @@ def send(method, fields, filename=None, display_name=None):
     print(f"Telegram {method} 发送成功。")
     return True
 
+def rich_release_html(tag, kind, link, body):
+    """Telegram Bot API 10.3 富文本：真实表格、IPA 附件及可折叠详情。"""
+    safe_tag = html.escape(tag)
+    highlights = compact_release_notes(body)
+    log_items = "".join(
+        f"<li><b>{html.escape(category)}</b>：{html.escape(item[:115])}</li>"
+        for category, item in highlights
+    ) or "<li>请查看完整更新日志。</li>"
+    pictures = "".join(
+        f'<img src="https://raw.githubusercontent.com/{REPO}/main/docs/screenshots/poster-0{i}.png"/>'
+        for i in range(1, 7)
+    )
+    return (
+        '<p><b>📦 包裹助手</b></p>'
+        f'<details open><summary>ParcelHelper {safe_tag} · {html.escape(kind)}</summary>'
+        '<tg-document src="tg://document?id=parcel_ipa"></tg-document>'
+        '<table bordered compact>'
+        '<tr><th>🍎 系统要求</th><td>iOS 17.0 及以上</td></tr>'
+        '<tr><th>📱 应用功能</th><td>订单同步 · 物流追踪 · 取件码</td></tr>'
+        '<tr><th>🧩 扩展功能</th><td>灵动岛 · 锁屏实时活动 · 桌面小组件</td></tr>'
+        '<tr><th>🔐 安装说明</th><td>未签名 IPA，需自行签名</td></tr>'
+        '</table></details>'
+        f'<details><summary>📝 {safe_tag} 更新日志</summary><ul>{log_items}</ul></details>'
+        '<details><summary>🖼 截图预览 · 点击展开</summary>'
+        f'<tg-collage>{pictures}</tg-collage></details>'
+        '<p>'
+        f'<a href="{html.escape(link, quote=True)}">完整更新日志</a> · '
+        f'<a href="{RUN_LINK}">构建记录</a> · '
+        f'<a href="https://github.com/{REPO}">GitHub</a>'
+        '</p>'
+    )
+
+
+def send_rich_document(common, rich_html, ipa, display_name):
+    """multipart 上传与富文本同一条消息，确定性 API 拒绝才回退旧版。"""
+    import subprocess
+    payload = {
+        "html": rich_html,
+        "media": [{
+            "id": "parcel_ipa",
+            "media": {"type": "document", "media": "attach://parcel_attachment"}
+        }],
+    }
+    args = ["curl", "--silent", "--show-error", "--max-time", "120", "-X", "POST",
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendRichMessage"]
+    for key, value in common.items():
+        args.extend(["--form-string", f"{key}={value}"])
+    args.extend([
+        "--form-string", "rich_message=" + json.dumps(payload, ensure_ascii=False),
+        "-F", f"parcel_attachment=@{ipa};filename={display_name};type=application/octet-stream",
+    ])
+    response = subprocess.run(args, capture_output=True, text=True)
+    # 超时等网络错误无法判断消息是否已经发出，避免重试导致重复消息。
+    if response.returncode:
+        print("::error::Telegram 富文本请求网络错误，未回退以防重复发送。")
+        return False, False
+    try:
+        result = json.loads(response.stdout)
+    except json.JSONDecodeError:
+        print("::error::Telegram 富文本响应无法解析，未回退以防重复发送。")
+        return False, False
+    if result.get("ok"):
+        print("Telegram 富文本发布成功：包含内嵌 IPA、表格、折叠更新日志和截图。")
+        return True, False
+    print("::warning::Telegram 拒绝富文本消息，尝试使用普通 IPA 附件发送。")
+    return False, True
+
+
 def compact_release_notes(markdown):
     """从 Release Markdown 中提取精简中文摘要，不把 ** 等标记原样发到 Telegram。"""
     categories = {"新增", "调整", "修复", "优化", "移除"}
@@ -149,7 +217,14 @@ def main():
     if not ipa.is_file():
         print("::error::构建成功，但没有找到 IPA 工件。")
         return 1
-    return 0 if send("sendDocument", {**common, "caption": caption, "parse_mode": "HTML"}, ipa, display_name) else 1
+    rich_html = rich_release_html(tag, kind, link, body)
+    sent, rejected = send_rich_document(common, rich_html, ipa, display_name)
+    if sent:
+        return 0
+    if rejected:
+        print("::warning::富文本不可用：回退为普通 Telegram 文件消息。")
+        return 0 if send("sendDocument", {**common, "caption": caption, "parse_mode": "HTML"}, ipa, display_name) else 1
+    return 1
 
 if __name__ == "__main__":
     sys.exit(main())
