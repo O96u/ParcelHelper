@@ -1,0 +1,67 @@
+name: 手动发送 IPA 到 Telegram
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '要发送的 Release 标签（留空为最新正式版，例如 v1.2.2）'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    name: 发送已发布 IPA
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出主分支脚本
+        uses: actions/checkout@v4
+
+      - name: 校验 Telegram 配置
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+            echo "::error::请先在 GitHub Actions Secrets 配置 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID。"
+            exit 1
+          fi
+
+      - name: 获取已发布的 IPA
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          tag="$INPUT_TAG"
+          if [[ -z "$tag" ]]; then
+            tag="$(gh release view --json tagName --jq .tagName)"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-pre\.[0-9]+)?$ ]]; then
+            echo "::error::Release 标签格式无效: $tag"
+            exit 1
+          fi
+          mkdir -p telegram-ipa
+          gh release download "$tag" --pattern 'ParcelHelper.ipa' --dir telegram-ipa
+          test -s telegram-ipa/ParcelHelper.ipa
+          echo "TELEGRAM_RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          {
+            echo "## 手动发送 Telegram"
+            echo "- **版本**：$tag"
+            echo "- **文件**：ParcelHelper.ipa"
+            echo "- **Release**：https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 发送 IPA 与更新说明
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ vars.TELEGRAM_TOPIC_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_RESULT: success
+        run: python3 scripts/telegram_notify.py
