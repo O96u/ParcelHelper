@@ -140,12 +140,18 @@ private struct WebShipment: Decodable {
               sequence == generation,
               ParcelAccounts.accounts(for: platform).contains(where: { $0.id == accountID })
         else { return }
-        guard !partialPackages.contains(where: {
-            $0.mailNo.caseInsensitiveCompare(parcel.mailNo) == .orderedSame &&
-            $0.orderID == parcel.orderID
-        }) else { return }
+        if let index = partialPackages.firstIndex(where: {
+            $0.orderID == parcel.orderID &&
+            ($0.mailNo.isEmpty ||
+             $0.mailNo.caseInsensitiveCompare(parcel.mailNo) == .orderedSame)
+        }) {
+            if !parcel.mailNo.isEmpty || partialPackages[index].mailNo.isEmpty {
+                partialPackages[index] = parcel
+            }
+            return
+        }
         partialPackages.append(parcel)
-        ParcelRunLog.record(platform, "已暂存第 \(partialPackages.count) 件有效物流；整轮超时仍会导入")
+        ParcelRunLog.record(platform, "已暂存第 \(partialPackages.count) 件有效订单物流；整轮超时仍会导入")
     }
 
     private func startNext() {
@@ -239,7 +245,7 @@ private struct WebShipment: Decodable {
         } ?? false
         // A partial capture is useful work, not a completely failed account.
         // Keep normal foreground retries available on the next refresh cycle.
-        let recovered = packages.isEmpty ? partialPackages : packages
+        let recovered = partialPackages.isEmpty ? packages : partialPackages
         if retained {
             recordOutcome(platform: platform, accountID: activeAccountID,
                           success: failure == nil || !recovered.isEmpty)
@@ -702,6 +708,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             if stage == .tracking {
                 trackingPageTimeout?.cancel()
                 record("物流详情页无法打开：已跳过第 \(position + 1) 笔")
+                if position < orders.count { preserveJDOrderSummary(orders[position]) }
                 missingTracking += 1
                 position += 1
                 next(webView)
@@ -807,12 +814,44 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     self.record("订单列表及备用页面均未识别到符合条件的订单")
                     self.complete("未识别到可查询的订单。页面可能未加载完毕、账号需要安全验证，或平台调整了订单结构；必要时可打开官方订单页核对。")
                 } else {
+                    if self.platform == "jd" && result.structured == true {
+                        for order in self.orders {
+                            self.preserveJDOrderSummary(order)
+                        }
+                    }
                     self.stage = .tracking
                     self.position = 0
                     self.next(webView)
                 }
             }
         }
+        private func preserveJDOrderSummary(_ order: WebOrder,
+                                            tracks: [TrackNode] = [],
+                                            note: String? = nil) {
+            guard platform == "jd" else { return }
+            let code = (order.code ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let summary = (note ?? order.summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let isVerified = order.verified == true
+            guard !code.isEmpty || (isVerified && !summary.isEmpty) else { return }
+            // A verified courier status or pickup code may exist before JD
+            // generates a waybill. Never use the order number as a fake waybill.
+            if loaded.contains(where: { $0.orderID == order.id }) { return }
+            var item = NativeSyncParcel(source: "jd")
+            item.accountID = accountID ?? ""
+            item.orderID = order.id
+            item.orderStatus = order.status
+            item.verifiedJDOrderLogistics = isVerified
+            item.title = order.title
+            item.code = code
+            item.station = order.station ?? ""
+            item.latest = summary
+            item.tracks = tracks
+            item.arrived = !code.isEmpty
+            loaded.append(item)
+            onParcel?(item)
+            record("订单物流进度已保留（官方结构化订单，暂无有效运单号）")
+        }
+
         private func next(_ webView: WKWebView) {
             guard !finished else { return }
             trackingPageTimeout?.cancel()
@@ -831,7 +870,20 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             onProgress("正在查询 \(position + 1)/\(orders.count) 笔订单的物流")
             let url: String
             if platform == "jd" {
-                url = "https://trade.m.jd.com/order/deal_wuliu_jdm.shtml?from=orderdetail&dealState=7&dealId=\(order.id)&orderType=22&skuid=\(order.sku)&shopid=\(order.shop)&source=m_inner_orderList.track_orderTrack"
+                // Structured order_list_m includes the *real* progressLink.
+                // Do not hard-code dealState=7/orderType=22 or guess SKU IDs.
+                let official = order.link.flatMap(URL.init(string:))
+                let allowed = official?.scheme?.lowercased() == "https" &&
+                    (official?.host?.lowercased() == "jd.com" ||
+                     official?.host?.lowercased().hasSuffix(".jd.com") == true)
+                if allowed, let official {
+                    url = official.absoluteString
+                } else {
+                    var components = URLComponents(string:
+                        "https://trade.m.jd.com/order/deal_wuliu_jdm.shtml")!
+                    components.queryItems = [URLQueryItem(name: "dealId", value: order.id)]
+                    url = components.url!.absoluteString
+                }
             } else {
                 url = "https://pages-g.m.taobao.com/wow/z/app/mtb/logisticsV2/h5-detail?x-ssr=true&bizOrderId=\(order.id)&viewLogisticDetail=true&skipEnterAnimation=true&forceThemis=true&disableNav=YES"
             }
@@ -844,6 +896,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     guard let self, let view = webView, !self.finished,
                           self.position == index, self.trackingPageSerial == version else { return }
                     self.record("第 \(index + 1) 笔：京东物流页单笔等待超时，继续下一笔")
+                    self.preserveJDOrderSummary(self.orders[index])
                     self.missingTracking += 1
                     self.position += 1
                     self.next(view)
@@ -894,7 +947,13 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     item.station = shipment.station
                     item.tracks = shipment.tracks
                     item.arrived = !shipment.pickup.isEmpty
-                    self.loaded.append(item)
+                    if let slot = self.loaded.firstIndex(where: {
+                        $0.orderID == item.orderID && $0.mailNo.isEmpty
+                    }) {
+                        self.loaded[slot] = item
+                    } else {
+                        self.loaded.append(item)
+                    }
                     self.trackingPageTimeout?.cancel()
                     self.onParcel?(item)
                     self.record("第 \(self.position + 1) 笔：已识别有效运单及 \(shipment.tracks.count) 条轨迹")
@@ -919,6 +978,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             }
             trackingPageTimeout?.cancel()
             record("第 \(position + 1) 笔：物流页无有效运单号或解析失败（重试后）")
+            if position < orders.count { preserveJDOrderSummary(orders[position]) }
             missingTracking += 1
             position += 1
             next(webView)
