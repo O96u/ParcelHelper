@@ -59,6 +59,8 @@ jobs:
         run: |
           swiftc App/Parser.swift Tests/ClipboardParserTests.swift -o "${RUNNER_TEMP}/clipboard-tests"
           "${RUNNER_TEMP}/clipboard-tests"
+      - name: Verify JD structured order hook
+        run: node Tests/JDOrdersHookTests.mjs
       - name: Verify app and widget compile
         run: |
           set -o pipefail
