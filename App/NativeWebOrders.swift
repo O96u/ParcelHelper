@@ -363,26 +363,30 @@ struct NativeWebOrderPage: View {
                 Task { @MainActor in
                     guard !received else { return }
                     received = true
+                    var scoped = packages
+                    let selected = accountID ?? ParcelAccounts.activeID(for: platform)
+                    for index in scoped.indices { scoped[index].accountID = selected }
+                    let baselineKey = "native.sync.baseline.web." + platform + "." + selected
+                    let syncedAt = Date().timeIntervalSince1970
+                    // Even when some later order needs verification, save
+                    // already verified shipments rather than discarding them.
+                    let count = scoped.isEmpty ? 0 :
+                        NativeParcelSync.merge(scoped,
+                            notifyNewArrival: failure == nil &&
+                                UserDefaults.standard.bool(forKey: baselineKey))
+                    ParcelRunLog.record(platform, "手动读取：有效运单 \(scoped.count) 件，成功合并 \(count) 件")
                     if let failure {
-                        detail = failure
-                        ParcelRunLog.record(platform, "手动网页读取失败：原因见页面提示")
+                        detail = scoped.isEmpty ? failure :
+                            "已保留 \(scoped.count) 件有效物流（合并 \(count) 件）；其余订单：" + failure
+                        ParcelRunLog.record(platform, "手动网页读取未完整结束，已保留有效包裹")
                     } else {
-                        var scoped = packages
-                        let selected = accountID ?? ParcelAccounts.activeID(for: platform)
-                        for index in scoped.indices { scoped[index].accountID = selected }
-                        let baselineKey = "native.sync.baseline.web." + platform + "." + selected
-                        let syncedAt = Date().timeIntervalSince1970
-                        UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
-                        let count = NativeParcelSync.merge(scoped,
-                            notifyNewArrival: UserDefaults.standard.bool(forKey: baselineKey))
-                        ParcelRunLog.record(platform, "手动读取完成：有效运单 \(scoped.count) 件，新增或更新 \(count) 件")
                         if count == 0 { ParcelStore.shared.persist() }
+                        UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
                         UserDefaults.standard.set(true, forKey: baselineKey)
-                        UserDefaults.standard.set(syncedAt,
-                                                  forKey: "native.sync.success." + platform)
+                        UserDefaults.standard.set(syncedAt, forKey: "native.sync.success." + platform)
                         UserDefaults.standard.set(syncedAt,
                                                   forKey: "native.sync.success." + platform + "." + selected)
-                        detail = "\(platform == "jd" ? "京东" : "淘宝")：读取 \(packages.count) 件有效物流包裹，导入或更新 \(count) 件。"
+                        detail = "\(platform == "jd" ? "京东" : "淘宝")：读取 \(scoped.count) 件有效物流包裹，导入或更新 \(count) 件。"
                     }
                     UserDefaults.standard.set(detail, forKey: "native.sync.result." + platform)
                     // Successfully extracted orders: finish automatically.
