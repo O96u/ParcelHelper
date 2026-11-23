@@ -270,8 +270,9 @@ private struct WebShipment: Decodable {
                     notifyNewArrival: failure == nil &&
                         UserDefaults.standard.bool(forKey: baselineKey))
             ParcelRunLog.record(platform,
-                "有效物流 \(scoped.count) 件，成功合并 \(merged) 件；" +
-                (failure == nil ? "本轮结束" : "本轮未完成，但已保留有效结果"))
+                (failure == nil ? "同步成功" : "同步未完整结束") +
+                "：读取有效物流 \(scoped.count) 件，新增或更新 \(merged) 件" +
+                (failure == nil ? "；已完成或重复包裹不会作为新件导入" : "；已保留有效结果"))
             if failure == nil {
                 if merged == 0 { ParcelStore.shared.persist() }
                 UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
