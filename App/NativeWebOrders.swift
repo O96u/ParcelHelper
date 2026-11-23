@@ -674,6 +674,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var finished = false
         var usedJDFallback = false
         var emptyReadAttempts = 0
+        var structuredReadWaits = 0
         var trackingReadAttempts = 0
         var missingTracking = 0
         private var trackingPageSerial = 0
@@ -747,6 +748,19 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     return
                 }
                 self.record("订单页检查：候选 \(result.orders.count) 笔，来源 \(result.source ?? "网页")")
+                // JD's asynchronous order_list_m response can arrive after
+                // the first DOM render. Let the document-start hook settle
+                // before treating a fragile DOM guess as the order list.
+                if self.platform == "jd" && result.structured != true &&
+                   self.structuredReadWaits < 3 && !result.login && !result.verify {
+                    self.structuredReadWaits += 1
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
+                        guard let self, let view = webView, !self.finished,
+                              self.stage == .orderList else { return }
+                        self.readOrders(view)
+                    }
+                    return
+                }
                 if result.verify {
                     self.record("页面要求安全验证，暂停自动读取")
                     self.complete("平台要求安全验证，请在官方页面完成验证后重新同步")
@@ -766,6 +780,11 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     }
                 }.prefix(self.platform == "jd" ? 15 : 10))
                 self.record("筛选后可查询 \(self.orders.count) 笔订单")
+                if self.orders.isEmpty && result.structured == true {
+                    self.record("官方结构化订单列表已返回，但没有传统快递或待取订单；不把秒送等 DOM 内容误当快递")
+                    self.complete("京东官方订单列表没有可导入的传统物流订单。请在京东核对是否为秒送、虚拟商品或已完成订单。")
+                    return
+                }
                 if self.orders.isEmpty {
                     if self.emptyReadAttempts < 2 {
                         self.emptyReadAttempts += 1
@@ -915,6 +934,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             let verify: Bool
             let orders: [WebOrder]
             let source: String?
+            let structured: Bool?
         }
         private static let openJDOrders = #"""
         (function(){
@@ -931,6 +951,16 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private static let jdOrdersJS = #"""
         (function(){
           var body=(document.body&&document.body.innerText||'').slice(0,4500);
+          try{
+            var hooked=window.ParcelHelperJD&&window.ParcelHelperJD.snapshot();
+            if(hooked&&hooked.received){
+              return JSON.stringify({
+                login:/请登录|登录后查看|账号登录/.test(body)&&!hooked.orders.length,
+                verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
+                source:'官方接口订单列表',structured:true,orders:hooked.orders
+              });
+            }
+          }catch(e){}
           var orders=[],seen={},stats={attrs:0,links:0,state:0};
           function cardOf(el){
             if(!el||!el.closest) return document.body;
@@ -992,7 +1022,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             login:/请登录|登录后查看|账号登录/.test(body)&&!orders.length,
             verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
             source:'属性'+stats.attrs+' 链接'+stats.links+' 页面状态'+stats.state,
-            orders:orders.slice(0,45)
+            structured:false,orders:orders.slice(0,45)
           });
         })()
         """#
