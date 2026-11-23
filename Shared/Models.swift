@@ -130,11 +130,11 @@ struct Station: Codable, Identifiable, Hashable {
     var id: String { courierStationUuid }
 }
 struct Preferences: Codable {
-    var reminderEnabled = false
+    var reminderEnabled = true
     var reminderAfterHours = 24
     var appearanceMode = "system"
     var simpleMode = false
-    var liveActivityEnabled = false
+    var liveActivityEnabled = true
     var widgetShowTransit = true
     var nickName = "包裹助手"
     var kdBusinessID = ""
