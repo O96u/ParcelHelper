@@ -477,9 +477,9 @@ private enum SyncJSON {
             // Do not create records from completed historical orders.
             // Existing records still receive completed/signed tracking updates.
             let finishedOrder = ["交易成功", "已完成", "确认收货", "已收货",
-                                 "已签收", "已取件"].contains {
-                row.orderStatus.contains($0)
-            }
+                                 "已取件", "Accomplish", "Completed"].contains {
+                row.orderStatus.localizedCaseInsensitiveContains($0)
+            } || (row.orderStatus.contains("已签收") && !wasArrived)
             let stationTerms = ["驿站签收", "驿站代签收", "代为签收",
                                 "网点签收", "快递柜签收", "暂存签收",
                                 "包裹已到站", "待取件"]
