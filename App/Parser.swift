@@ -18,6 +18,16 @@ enum SMSParser {
         return String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Only prefixed courier codes are auto-detected from a bare clipboard
+    /// value. Bare numeric values are deliberately not guessed: they could
+    /// be phone numbers, verification codes, or order references.
+    static func isCarrierTrackingNumber(_ value: String) -> Bool {
+        value.range(
+            of: #"^(?:SF|ZT|JT|JD|YT|ST|YD|EMS)[A-Z]{0,2}[0-9]{8,24}[A-Z]{0,2}$"#,
+            options: [.caseInsensitive, .regularExpression]
+        ) != nil
+    }
+
     static func parse(_ original: String) -> ParsedSMS {
         let text = (original.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? original)
             .replacingOccurrences(of: "－", with: "-")
@@ -43,10 +53,17 @@ enum SMSParser {
 
         for pattern in [
             #"(?:运单号|快递单号|物流单号|包裹单号|单号)\s*[:：]?\s*([A-Za-z0-9-]{8,40})"#,
-            #"(?:运单|物流)\s*号码\s*[:：]?\s*([A-Za-z0-9-]{8,40})"#
+            #"(?:运单|物流)\s*号码\s*[:：]?\s*([A-Za-z0-9-]{8,40})"#,
+            // Copying just "SF123...", "ZT123..." or "JT123..." is common
+            // in carrier apps. Require an explicit carrier prefix and at
+            // least eight digits so random text/phone numbers aren't imported.
+            #"(?:^|[^A-Za-z0-9])((?:SF|ZT|JT|JD|YT|ST|YD|EMS)[A-Z]{0,2}[0-9]{8,24}[A-Z]{0,2})(?![A-Za-z0-9])"#
         ] {
             let value = capture(text, pattern)
-            if !value.isEmpty { result.trackingNumber = value; break }
+            if !value.isEmpty {
+                result.trackingNumber = value.uppercased()
+                break
+            }
         }
 
         // Only explicit courier references identify the actual shipper.
@@ -61,6 +78,17 @@ enum SMSParser {
         for (keyword, label) in carriers where text.localizedCaseInsensitiveContains(keyword) {
             result.company = label
             break
+        }
+        if result.company.isEmpty && isCarrierTrackingNumber(result.trackingNumber) {
+            let mail = result.trackingNumber
+            if mail.hasPrefix("SF") { result.company = "顺丰速运" }
+            else if mail.hasPrefix("ZT") { result.company = "中通快递" }
+            else if mail.hasPrefix("JT") { result.company = "极兔速递" }
+            else if mail.hasPrefix("JD") { result.company = "京东物流" }
+            else if mail.hasPrefix("YT") { result.company = "圆通快递" }
+            else if mail.hasPrefix("ST") { result.company = "申通快递" }
+            else if mail.hasPrefix("YD") { result.company = "韵达快递" }
+            else if mail.hasPrefix("EMS") { result.company = "中国邮政EMS" }
         }
 
         // Address is not interchangeable with the pickup station name.
