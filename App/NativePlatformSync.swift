@@ -437,6 +437,9 @@ private enum SyncJSON {
         let store = ParcelStore.shared
         var changed = 0
         var newArrivalNotifications = 0
+        var inserted = 0
+        var updated = 0
+        var historicalSkipped = 0
         for row in rows {
             let mail = row.mailNo.trimmingCharacters(in: .whitespacesAndNewlines)
             let code = normalizedCode(row.code)
@@ -487,10 +490,12 @@ private enum SyncJSON {
                                 "收件人签收", "本人签收", "已从代收点取出"]
             let finishedDelivery = ([row.latest] + row.tracks.map(\.text)).contains { event in
                 Parcel.confirmsRecipientPickup(event) ||
+                Parcel.confirmsFinalDelivery(event) ||
                 (!stationTerms.contains(where: event.contains) &&
                  receiptTerms.contains(where: event.contains))
             }
             if previous == nil && (kind == "picked" || finishedOrder || finishedDelivery) {
+                historicalSkipped += 1
                 continue
             }
             // An old order with no actual route detail should not become a
@@ -567,9 +572,13 @@ private enum SyncJSON {
                     Task { await ParcelNotifications.notifyUpdate(previous: nil, current: p) }
                 }
                 changed += 1
+                if previous == nil { inserted += 1 } else { updated += 1 }
             }
         }
         if changed > 0 { store.persist() }
+        if rows.contains(where: { $0.source == "jd" }) {
+            ParcelRunLog.record("jd", "物流合并结果：新增 \(inserted) 件，更新 \(updated) 件，跳过已完成历史物流 \(historicalSkipped) 件")
+        }
         return changed
     }
 
