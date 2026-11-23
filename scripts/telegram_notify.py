@@ -3,6 +3,7 @@
 import html
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -42,17 +43,15 @@ def release_info():
         return next((r for r in releases if r.get("tag_name", "").endswith(wanted)), None)
     return next((r for r in releases if r.get("tag_name") == REF_NAME), None)
 
-def send(method, fields, filename=None):
+def send(method, fields, filename=None, display_name=None):
     import subprocess
-    import tempfile
-    import uuid
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     args = ["curl", "--fail-with-body", "--silent", "--show-error",
             "--retry", "2", "--max-time", "120", "-X", "POST", url]
     for key, value in fields.items():
         args.extend(["--form-string", f"{key}={value}"])
     if filename:
-        args.extend(["-F", f"document=@{filename};filename=ParcelHelper.ipa;type=application/octet-stream"])
+        args.extend(["-F", f"document=@{filename};filename={display_name or 'ParcelHelper.ipa'};type=application/octet-stream"])
     # 避免 curl 将含 token 的 URL / 机器人响应写入 Actions 日志。
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode:
@@ -68,6 +67,27 @@ def send(method, fields, filename=None):
         return False
     print(f"Telegram {method} 发送成功。")
     return True
+
+def compact_release_notes(markdown):
+    """从 Release Markdown 中提取精简中文摘要，不把 ** 等标记原样发到 Telegram。"""
+    categories = {"新增", "调整", "修复", "优化", "移除"}
+    found = []
+    current = ""
+    for raw in markdown.splitlines():
+        line = raw.strip()
+        header = re.match(r"^#{2,4}\\s*(.+)$", line)
+        if header:
+            title = re.sub(r"[*`#]", "", header.group(1)).strip()
+            current = title if title in categories else ""
+            continue
+        if current and line.startswith(("- ", "* ")):
+            item = re.sub(r"\\[([^]]+)\\]\\([^)]*\\)", r"\\1", line[2:])
+            item = re.sub(r"\\*\\*(.*?)\\*\\*", r"\\1", item)
+            item = item.replace("`", "").strip()
+            if item and not any(category == current for category, _ in found):
+                found.append((current, item))
+    return found[:4]
+
 
 def main():
     if not BOT_TOKEN or not CHAT_ID:
@@ -94,34 +114,42 @@ def main():
         print("::warning::读取 GitHub Release 失败，仍尝试发送 IPA。")
         release = None
     tag = (release or {}).get("tag_name") or os.environ.get("TELEGRAM_RELEASE_TAG") or REF_NAME
+    if not re.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+(?:-pre\\.[0-9]+)?", tag):
+        print("::error::无法从 Release 识别合法版本号，取消发送，避免文件名称错误。")
+        return 1
+    display_name = f"包裹助手_{tag}.ipa"
     link = (release or {}).get("html_url") or RELEASES_LINK
     body = (release or {}).get("body") or ""
-    # Telegram 文件 caption 最大 1024 字符；仅保留简短概要，其余通过 Release 链接查看。
-    lines = [line.strip().lstrip("- ") for line in body.splitlines()
-             if line.strip() and not line.startswith("#") and not line.startswith("##")]
-    notes = "\n".join("• " + html.escape(line[:110]) for line in lines[:6])
+    kind = ("手动重发" if os.environ.get("TELEGRAM_RELEASE_TAG")
+            else "手动构建" if EVENT == "workflow_dispatch" else "正式发布")
     caption = (
-        "<b>📦 ParcelHelper｜包裹助手</b>\n"
-        f"<b>✅ {html.escape(tag)} 构建成功</b>\n"
-        f"🔹 {'手动重新发送' if os.environ.get('TELEGRAM_RELEASE_TAG') else ('手动预发布' if EVENT == 'workflow_dispatch' else '正式版本')} · iOS 17+\n"
-        "📦 ParcelHelper.ipa（未签名，需自行签名）\n"
-        "✨ 订单同步 · 物流追踪 · 取件码 · 灵动岛 · 桌面小组件\n"
+        f"<b>📦 包裹助手 · {html.escape(tag)}</b>\\n"
+        f"🍎 iOS 17+  |  {kind}\\n"
+        "📦 订单同步 · 物流追踪 · 取件码\\n"
+        "🏝 灵动岛 · 桌面小组件 · 智能提醒\\n"
+        "🔐 未签名 IPA，需自行签名安装\\n"
     )
-    if notes:
-        caption += "<blockquote expandable>📝 更新说明\n" + notes + "</blockquote>\n"
-    caption += f'<a href="{html.escape(link, quote=True)}">GitHub Release</a> · <a href="{RUN_LINK}">构建记录</a>'
+    highlights = compact_release_notes(body)
+    if highlights:
+        snippet = "\\n".join(
+            f"• {category}：{html.escape(content[:65].rstrip('，、； '))}{'…' if len(content) > 65 else ''}"
+            for category, content in highlights
+        )
+        caption += f"\\n<blockquote expandable>📝 {html.escape(tag)} 更新日志\\n{snippet}</blockquote>\\n"
+    caption += (f'\\n<a href="{html.escape(link, quote=True)}">完整更新日志</a>'
+                f' · <a href="{RUN_LINK}">构建记录</a>')
     if len(caption) > 950:
         caption = (
-            f"<b>📦 ParcelHelper｜✅ {html.escape(tag)} 构建成功</b>\n"
-            "📦 ParcelHelper.ipa（未签名）\n"
-            f'<a href="{html.escape(link, quote=True)}">查看完整更新日志与下载</a> · '
-            f'<a href="{RUN_LINK}">构建记录</a>'
+            f"<b>📦 包裹助手 · {html.escape(tag)}</b>\\n"
+            "🍎 iOS 17+ · 未签名 IPA\\n"
+            f'<a href="{html.escape(link, quote=True)}">完整更新日志</a>'
+            f' · <a href="{RUN_LINK}">构建记录</a>'
         )
     ipa = Path("telegram-ipa/ParcelHelper.ipa")
     if not ipa.is_file():
         print("::error::构建成功，但没有找到 IPA 工件。")
         return 1
-    return 0 if send("sendDocument", {**common, "caption": caption, "parse_mode": "HTML"}, ipa) else 1
+    return 0 if send("sendDocument", {**common, "caption": caption, "parse_mode": "HTML"}, ipa, display_name) else 1
 
 if __name__ == "__main__":
     sys.exit(main())
