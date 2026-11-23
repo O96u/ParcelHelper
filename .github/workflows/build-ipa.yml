@@ -431,7 +431,7 @@ jobs:
       - name: 检出通知脚本
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.base_ref || github.ref }}
+          ref: main
       - name: 下载成功构建的 IPA
         if: ${{ needs.build.result == 'success' }}
         uses: actions/download-artifact@v4
