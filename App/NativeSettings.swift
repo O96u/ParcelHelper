@@ -290,6 +290,7 @@ struct IdentityDetailPage: View {
                                         return
                                     }
                                     officialPhase = phase
+                                    CainiaoIdentityPhase.remember(phase, accountID: identityAccountID)
                                 }
                                 .id(identityAccountID + ":" + String(officialRefresh))
                                 .opacity(officialPhase == .ready &&
@@ -311,12 +312,18 @@ struct IdentityDetailPage: View {
                             Text(officialPhase == .authorizationRequired
                                  ? "菜鸟身份码需要授权" : "暂未获取有效身份码")
                                 .font(.headline)
-                            NavigationLink {
-                                MultiAccountPage(platformID: "cainiao")
-                            } label: {
-                                Text("前往账号授权").frame(maxWidth: .infinity)
+                            if officialPhase == .authorizationRequired {
+                                NavigationLink {
+                                    MultiAccountPage(platformID: "cainiao")
+                                } label: {
+                                    Text("前往账号授权").frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                            } else {
+                                Button("重新获取") { Task { await refresh() } }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(fetching)
                             }
-                            .buttonStyle(.borderedProminent)
                         }
                     }
                     .padding(18)
@@ -484,13 +491,16 @@ struct IdentityDetailPage: View {
         fetching = true
         defer { fetching = false }
         let generation = ParcelAccounts.syncGeneration(requestedAccountID)
-        identityGeneration = generation
-        if requestedAccountID != identityAccountID {
+        if requestedAccountID != identityAccountID || identityGeneration != generation {
             identity = nil
             authorized = false
             cainiaoOfficialFallback = false
         }
-        if platform == "cainiao" { identityAccountID = requestedAccountID }
+        identityGeneration = generation
+        if platform == "cainiao" {
+            identityAccountID = requestedAccountID
+            identity = nil
+        }
         authorized = await NativeParcelSync.hasIdentitySession(platform)
         guard requestedAccountID == ParcelAccounts.activeID(for: platform),
               generation == ParcelAccounts.syncGeneration(requestedAccountID),
@@ -505,6 +515,7 @@ struct IdentityDetailPage: View {
             if platform == "cainiao" {
                 cainiaoOfficialFallback = true
                 officialPhase = .authorizationRequired
+                CainiaoIdentityPhase.remember(.authorizationRequired, accountID: requestedAccountID)
                 ParcelRunLog.record("菜鸟身份码", "未授权，需前往账号授权")
             }
             return
@@ -520,7 +531,10 @@ struct IdentityDetailPage: View {
             identityAccountID = requestedAccountID
             identity = response
             cainiaoOfficialFallback = false
-            if platform == "cainiao" { ParcelRunLog.record("菜鸟身份码", "原生接口已返回有效身份码") }
+            if platform == "cainiao" {
+                CainiaoIdentityPhase.remember(.ready, accountID: requestedAccountID)
+                ParcelRunLog.record("菜鸟身份码", "原生接口已返回有效身份码")
+            }
             now = Date()
             failure = nil
             nextAttempt = response.expiresAt
@@ -537,7 +551,18 @@ struct IdentityDetailPage: View {
                 failure = nil
                 cainiaoOfficialFallback = true
                 officialPhase = .loading
-                ParcelRunLog.record("菜鸟身份码", "原生接口未获得有效身份码，尝试只读官方页面")
+                // Classify only known failure categories. Never log raw response or credentials.
+                let reason = error.localizedDescription.uppercased()
+                let category: String
+                if reason.contains("SESSION_EXPIRED") { category = "接口会话过期" }
+                else if reason.contains("TOKEN") { category = "网关令牌异常" }
+                else if reason.contains("ILLEGAL_ACCESS") { category = "接口访问受限" }
+                else if reason.contains("TRAFFIC_LIMIT") || reason.contains("RGV") { category = "平台限制访问" }
+                else if reason.contains("有效期") { category = "有效期异常" }
+                else if reason.contains("未返回有效身份码") { category = "响应缺少有效身份码" }
+                else if reason.contains("验证") { category = "平台要求验证或响应异常" }
+                else { category = "原生请求失败" }
+                ParcelRunLog.record("菜鸟身份码", category + "，尝试只读官方页面")
             } else {
                 failure = error.localizedDescription
             }
@@ -549,12 +574,33 @@ struct IdentityDetailPage: View {
 // or phone-binding workflow. The identity screen is a read-only consumer.
 enum CainiaoIdentityPhase: String {
     case loading, ready, authorizationRequired, failed
+
+    var statusText: String {
+        switch self {
+        case .loading: return "正在检查身份码"
+        case .ready: return "上次检查：身份码可用"
+        case .authorizationRequired: return "上次检查：需身份码授权"
+        case .failed: return "上次检查：身份码加载失败"
+        }
+    }
+    static func remember(_ phase: Self, accountID: String) {
+        guard phase != .loading, !accountID.isEmpty else { return }
+        UserDefaults.standard.set(phase.rawValue, forKey: "native.cainiao.identity.check." + accountID)
+    }
+    static func lastCheck(_ accountID: String) -> Self? {
+        UserDefaults.standard.string(forKey: "native.cainiao.identity.check." + accountID).flatMap(Self.init(rawValue:))
+    }
+    static func clear(_ accountID: String) {
+        UserDefaults.standard.removeObject(forKey: "native.cainiao.identity.check." + accountID)
+    }
 }
 
 struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
     let accountID: String
     let authorizationMode: Bool
+    var startWithLogin = false
     let onPhase: (CainiaoIdentityPhase) -> Void
+    private static let loginEntry = URL(string: "https://login.taobao.com/member/login.jhtml")!
     private static let entry = URL(string: "https://page.cainiao.com/cn-app-web/identity-code/index.html#/")!
 
     func makeCoordinator() -> Coordinator {
@@ -569,7 +615,8 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         web.uiDelegate = context.coordinator
         web.isUserInteractionEnabled = authorizationMode
         web.allowsBackForwardNavigationGestures = authorizationMode
-        web.load(URLRequest(url: Self.entry, cachePolicy: .reloadIgnoringLocalCacheData))
+        let url = authorizationMode && startWithLogin ? Self.loginEntry : Self.entry
+        web.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         context.coordinator.start(web)
         return web
     }
@@ -604,6 +651,11 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         if(!visible(f))continue;
         var raw=f.getAttribute('src')||'';
         var r=f.getBoundingClientRect();
+        if(r.width<=0||r.height<=0||
+           (typeof r.right==='number'&&r.right<=0)||
+           (typeof r.bottom==='number'&&r.bottom<=0)||
+           (typeof r.left==='number'&&r.left>=innerWidth)||
+           (typeof r.top==='number'&&r.top>=innerHeight))continue;
         if(!raw||raw==='about:blank'){
           if(r.width>=innerWidth*0.8&&r.height>=innerHeight*0.5)return 'authorizationRequired';
           continue;
@@ -649,6 +701,8 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
             onPhase(next)
             if next == .ready {
                 ParcelRunLog.record("菜鸟身份码", "官方条形码已就绪")
+            } else if next == .failed {
+                ParcelRunLog.record("菜鸟身份码", "官方页面未取得条形码")
             } else if next == .authorizationRequired && !authorizationMode {
                 ParcelRunLog.record("菜鸟身份码", "官方页面要求授权，已停止只读展示")
                 stop()
@@ -656,7 +710,8 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         }
         func start(_ web: WKWebView) {
             task?.cancel()
-            let started = Date()
+            var loadingSince = Date()
+            var authSince: Date?
             task = Task { [weak self, weak web] in
                 while !Task.isCancelled {
                     guard let self, let web, !self.stopped else { return }
@@ -665,14 +720,28 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
                            let value = raw as? String,
                            let next = CainiaoIdentityPhase(rawValue: value) {
                             guard !Task.isCancelled, !self.stopped else { return }
-                            self.report(next)
+                            if next == .authorizationRequired && !self.authorizationMode {
+                                // A login iframe may briefly exist during session restoration.
+                                // Never show it. Wait briefly before declaring authorization required.
+                                if authSince == nil { authSince = Date() }
+                                if self.phase == .ready { self.report(.loading); loadingSince = Date() }
+                                if Date().timeIntervalSince(authSince ?? Date()) >= 2 {
+                                    self.report(.authorizationRequired)
+                                }
+                            } else {
+                                authSince = nil
+                                if next != self.phase && next == .loading { loadingSince = Date() }
+                                self.report(next)
+                            }
                         }
                     }
-                    if !self.authorizationMode && self.phase == .loading &&
-                        Date().timeIntervalSince(started) > 25 {
+                    if self.phase == .loading &&
+                        Date().timeIntervalSince(loadingSince) > 30 {
                         self.report(.failed)
-                        self.stop()
-                        return
+                        if !self.authorizationMode {
+                            self.stop()
+                            return
+                        }
                     }
                     do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
                 }

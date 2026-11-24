@@ -168,6 +168,7 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
         guard unlinking.insert(account.id).inserted else { return }
         defer { unlinking.remove(account.id) }
         invalidateSync(account.id)
+        if account.platform == "taobao" { CainiaoIdentityPhase.clear(account.id) }
         // Capture selection BEFORE removing a UUID profile: after removal,
         // activeID() already falls back to legacy and loses this information.
         let wasDefault = activeID(for: account.platform) == account.id
@@ -614,7 +615,9 @@ struct MultiAccountPage: View {
     @State private var loginError: String?
     @State private var managePhoneAccount: ParcelAccountProfile?
     @State private var cainiaoIdentityAccount: ParcelAccountProfile?
-    @State private var cainiaoIdentityReady = false
+    @State private var cainiaoIdentityPhase: CainiaoIdentityPhase = .loading
+    @State private var cainiaoIdentityLogin = false
+    @State private var cainiaoIdentityRevision = 0
     @State private var renameAccount: ParcelAccountProfile?
     @State private var renameValue = ""
     @State private var removeAccount: ParcelAccountProfile?
@@ -764,12 +767,41 @@ struct MultiAccountPage: View {
             } message: { Text(loginError ?? "") }
         }
         .sheet(item: $cainiaoIdentityAccount, onDismiss: {
-            cainiaoIdentityReady = false
+            cainiaoIdentityPhase = .loading
+            cainiaoIdentityLogin = false
             Task { await reload() }
         }) { account in
             NavigationStack {
-                CainiaoOfficialIdentityWebView(accountID: account.id, authorizationMode: true) { phase in
-                    cainiaoIdentityReady = phase == .ready
+                VStack(spacing: 0) {
+                    CainiaoOfficialIdentityWebView(accountID: account.id, authorizationMode: true,
+                                                   startWithLogin: cainiaoIdentityLogin) { phase in
+                        guard cainiaoIdentityAccount?.id == account.id else { return }
+                        cainiaoIdentityPhase = phase
+                        CainiaoIdentityPhase.remember(phase, accountID: account.id)
+                    }
+                    .id(account.id + ":" + String(cainiaoIdentityRevision))
+                    Divider()
+                    VStack(spacing: 8) {
+                        Text(cainiaoIdentityPhase == .ready ? "身份码已验证" :
+                             cainiaoIdentityPhase == .authorizationRequired ? "请完成官方登录或验证" :
+                             cainiaoIdentityPhase == .failed ? "暂未加载出库码" : "正在检查身份码")
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button("网页登录") {
+                                cainiaoIdentityPhase = .loading
+                                cainiaoIdentityLogin = true
+                                cainiaoIdentityRevision += 1
+                            }
+                            Spacer()
+                            Button("检查身份码") {
+                                cainiaoIdentityPhase = .loading
+                                cainiaoIdentityLogin = false
+                                cainiaoIdentityRevision += 1
+                            }
+                        }
+                        .font(.subheadline)
+                    }
+                    .padding(12)
                 }
                 .navigationTitle("菜鸟身份码授权 · " + account.nickname)
                 .navigationBarTitleDisplayMode(.inline)
@@ -779,7 +811,7 @@ struct MultiAccountPage: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("完成授权") { cainiaoIdentityAccount = nil }
-                            .disabled(!cainiaoIdentityReady)
+                            .disabled(cainiaoIdentityPhase != .ready)
                     }
                 }
             }
@@ -906,6 +938,11 @@ struct MultiAccountPage: View {
                         Text("菜鸟接口会话未恢复（网页登录信息仍保留）")
                             .font(.caption2).foregroundStyle(.orange)
                     }
+                    if brandID == "cainiao", let phase = CainiaoIdentityPhase.lastCheck(account.id) {
+                        Text(phase.statusText)
+                            .font(.caption2)
+                            .foregroundStyle(phase == .ready ? Color.green : Color.orange)
+                    }
                     let updated = UserDefaults.standard.double(forKey: key)
                     if updated > 0 {
                         Text("上次同步 " + Date(timeIntervalSince1970: updated)
@@ -925,6 +962,10 @@ struct MultiAccountPage: View {
                         pendingPddAccount = account
                         pddConsent = true
                     } else {
+                        if kind == "taobao" {
+                            CainiaoIdentityPhase.clear(account.id)
+                            ParcelAccounts.invalidateSync(account.id)
+                        }
                         loginAccount = account
                     }
                 } label: {
@@ -975,7 +1016,9 @@ struct MultiAccountPage: View {
             if brandID == "cainiao" {
                 Button {
                     ParcelAccounts.invalidateSync(account.id)
-                    cainiaoIdentityReady = false
+                    cainiaoIdentityPhase = .loading
+                    cainiaoIdentityLogin = false
+                    cainiaoIdentityRevision += 1
                     cainiaoIdentityAccount = account
                 } label: {
                     Label("身份码授权", systemImage: "qrcode")
