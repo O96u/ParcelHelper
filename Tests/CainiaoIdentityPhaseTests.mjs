@@ -38,4 +38,8 @@ assert.ok(source.includes("lastRevision != navigationRevision"));
 assert.ok(source.includes("pages-fast.m.taobao.com/wow/z/uniapp/1011717/last-mile-fe/end-collect-platform/identity-code"));
 assert.ok(accounts.includes("navigationRevision: cainiaoIdentityRevision"));
 assert.ok(!accounts.includes('.id(account.id + ":" + String(cainiaoIdentityRevision))'));
+assert.ok(source.includes("return child"));
+assert.ok(source.includes("webViewDidClose"));
+assert.ok(source.includes("webView === mainWeb, popupWeb == nil"));
+assert.ok(accounts.includes("cainiaoTaobaoVerified"));
 console.log("PASS: Cainiao identity display phases and authentication isolation");

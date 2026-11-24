@@ -618,6 +618,7 @@ struct MultiAccountPage: View {
     @State private var cainiaoIdentityPhase: CainiaoIdentityPhase = .loading
     @State private var cainiaoIdentityLogin = false
     @State private var cainiaoIdentityRevision = 0
+    @State private var cainiaoTaobaoVerified = false
     @State private var renameAccount: ParcelAccountProfile?
     @State private var renameValue = ""
     @State private var removeAccount: ParcelAccountProfile?
@@ -769,6 +770,7 @@ struct MultiAccountPage: View {
         .sheet(item: $cainiaoIdentityAccount, onDismiss: {
             cainiaoIdentityPhase = .loading
             cainiaoIdentityLogin = false
+            cainiaoTaobaoVerified = false
             Task { await reload() }
         }) { account in
             NavigationStack {
@@ -778,6 +780,7 @@ struct MultiAccountPage: View {
                                                    navigationRevision: cainiaoIdentityRevision) { phase in
                         guard cainiaoIdentityAccount?.id == account.id else { return }
                         cainiaoIdentityPhase = phase
+                        if phase == .taobaoReady { cainiaoTaobaoVerified = true }
                         CainiaoIdentityPhase.remember(phase, accountID: account.id)
                     }
                     .id(account.id)
@@ -785,7 +788,8 @@ struct MultiAccountPage: View {
                     VStack(spacing: 8) {
                         Text(cainiaoIdentityPhase == .ready ? "菜鸟身份码已验证" :
                              cainiaoIdentityPhase == .taobaoReady ? "淘宝码已可用，菜鸟出库码尚未确认" :
-                             cainiaoIdentityPhase == .authorizationRequired ? "菜鸟页面仍要求登录或验证" :
+                             cainiaoIdentityPhase == .authorizationRequired ?
+                                 (cainiaoTaobaoVerified ? "淘宝已验证，菜鸟仍需独立授权" : "菜鸟页面要求登录或验证") :
                              cainiaoIdentityPhase == .failed ? "暂未加载出库码" : "正在检查身份码")
                             .font(.caption).foregroundStyle(.secondary)
                         HStack {
@@ -794,7 +798,7 @@ struct MultiAccountPage: View {
                                 cainiaoIdentityLogin = true
                                 cainiaoIdentityRevision += 1
                             }
-                            .disabled(cainiaoIdentityPhase == .loading || cainiaoIdentityPhase == .taobaoReady)
+                            .disabled(cainiaoIdentityPhase == .loading || cainiaoTaobaoVerified)
                             Spacer()
                             Button("检查菜鸟码") {
                                 cainiaoIdentityPhase = .loading
@@ -811,7 +815,7 @@ struct MultiAccountPage: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button("取消") { cainiaoIdentityAccount = nil }
+                        Button("关闭") { cainiaoIdentityAccount = nil }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("完成授权") { cainiaoIdentityAccount = nil }
@@ -1022,6 +1026,7 @@ struct MultiAccountPage: View {
                     ParcelAccounts.invalidateSync(account.id)
                     cainiaoIdentityPhase = .loading
                     cainiaoIdentityLogin = false
+                    cainiaoTaobaoVerified = false
                     cainiaoIdentityRevision += 1
                     cainiaoIdentityAccount = account
                 } label: {

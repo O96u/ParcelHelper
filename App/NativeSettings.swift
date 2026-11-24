@@ -565,6 +565,7 @@ struct IdentityDetailPage: View {
                 else if reason.contains("ILLEGAL_ACCESS") { category = "接口访问受限" }
                 else if reason.contains("TRAFFIC_LIMIT") || reason.contains("RGV") { category = "平台限制访问" }
                 else if reason.contains("有效期") { category = "有效期异常" }
+                else if reason.contains("仅返回认证状态") { category = "接口只返回认证状态，未下发出库码" }
                 else if reason.contains("未返回有效身份码") { category = "响应缺少有效身份码" }
                 else if reason.contains("验证") { category = "平台要求验证或响应异常" }
                 else { category = "原生请求失败" }
@@ -616,11 +617,22 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(authorizationMode: authorizationMode, onPhase: onPhase)
     }
-    func makeUIView(context: Context) -> WKWebView {
+    func makeUIView(context: Context) -> UIView {
+        let host = UIView()
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
         configuration.defaultWebpagePreferences.preferredContentMode = .mobile
         let web = WKWebView(frame: .zero, configuration: configuration)
+        web.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(web)
+        NSLayoutConstraint.activate([
+            web.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            web.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            web.topAnchor.constraint(equalTo: host.topAnchor),
+            web.bottomAnchor.constraint(equalTo: host.bottomAnchor)
+        ])
+        context.coordinator.host = host
+        context.coordinator.mainWeb = web
         web.navigationDelegate = context.coordinator
         web.uiDelegate = context.coordinator
         web.isUserInteractionEnabled = authorizationMode
@@ -630,9 +642,9 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         web.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         ParcelRunLog.record("菜鸟身份码", authorizationMode ? "打开账号内官方授权页面" : "开始官方 H5 只读检查")
         context.coordinator.start(web)
-        return web
+        return host
     }
-    func updateUIView(_ uiView: WKWebView, context: Context) {
+    func updateUIView(_ uiView: UIView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onPhase = onPhase
         guard authorizationMode, coordinator.lastRevision != navigationRevision else { return }
@@ -641,16 +653,17 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         let url = startWithLogin ? Self.loginEntry : Self.entry
         // Keep the very same WKWebView and browsing session. Do not destroy
         // the active authentication context on a SwiftUI state change.
-        Task { @MainActor [weak uiView, weak coordinator] in
-            guard let uiView, let coordinator, coordinator.lastRevision == revision else { return }
-            coordinator.navigate(uiView, to: url)
+        Task { @MainActor [weak coordinator] in
+            guard let coordinator, let web = coordinator.mainWeb,
+                  coordinator.lastRevision == revision else { return }
+            coordinator.navigate(web, to: url)
         }
     }
-    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
         coordinator.stop()
-        uiView.stopLoading()
-        uiView.navigationDelegate = nil
-        uiView.uiDelegate = nil
+        coordinator.mainWeb?.stopLoading()
+        coordinator.mainWeb?.navigationDelegate = nil
+        coordinator.mainWeb?.uiDelegate = nil
     }
 
     // The script reports only a fixed phase, never the image URL, code,
@@ -725,6 +738,10 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         var lastRevision = 0
         private var navigationEpoch = 0
         private var navigationStarted = Date()
+        weak var host: UIView?
+        weak var mainWeb: WKWebView?
+        private var popupWeb: WKWebView?
+        private var popupPanel: UIView?
 
         init(authorizationMode: Bool, onPhase: @escaping (CainiaoIdentityPhase) -> Void) {
             self.authorizationMode = authorizationMode
@@ -734,6 +751,25 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
             stopped = true
             task?.cancel()
             task = nil
+            closePopup()
+        }
+        @objc private func closePopup() {
+            guard let child = popupWeb else { return }
+            popupWeb = nil
+            child.navigationDelegate = nil
+            child.uiDelegate = nil
+            child.stopLoading()
+            popupPanel?.removeFromSuperview()
+            popupPanel = nil
+            if !stopped {
+                navigationEpoch += 1
+                navigationStarted = Date()
+                report(.loading)
+                ParcelRunLog.record("菜鸟身份码", "官方授权弹窗已关闭，继续检查原页面")
+            }
+        }
+        func webViewDidClose(_ webView: WKWebView) {
+            if webView === popupWeb { closePopup() }
         }
         private func report(_ next: CainiaoIdentityPhase) {
             guard !stopped, phase != next else { return }
@@ -751,7 +787,7 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
             }
         }
         func navigate(_ web: WKWebView, to url: URL) {
-            guard !stopped, authorizationMode else { return }
+            guard !stopped, authorizationMode, popupWeb == nil else { return }
             // Manual retry of a stalled official navigation is allowed.
             navigationEpoch += 1
             navigationStarted = Date()
@@ -767,6 +803,10 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
             task = Task { [weak self, weak web] in
                 while !Task.isCancelled {
                     guard let self, let web, !self.stopped else { return }
+                    if self.popupWeb != nil {
+                        do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                        continue
+                    }
                     if !web.isLoading, let url = web.url, url.absoluteString != "about:blank" {
                         let epoch = self.navigationEpoch
                         if let raw = try? await web.evaluateJavaScript(CainiaoOfficialIdentityWebView.phaseJS),
@@ -823,7 +863,7 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             if authorizationMode {
-                let blankFrame = action.targetFrame?.isMainFrame == false &&
+                let blankFrame = (action.targetFrame?.isMainFrame == false || webView === popupWeb) &&
                     action.request.url?.absoluteString == "about:blank"
                 let allowed = allowsAuthorization(action.request.url) || blankFrame
                 if !allowed {
@@ -856,7 +896,10 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
                      decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
             guard response.isForMainFrame else { decisionHandler(.allow); return }
-            let allowed = authorizationMode ? allowsAuthorization(response.response.url) : officialEntry(response.response.url)
+            let allowed = authorizationMode ?
+                (allowsAuthorization(response.response.url) ||
+                 (webView === popupWeb && response.response.url?.absoluteString == "about:blank")) :
+                officialEntry(response.response.url)
             let status = (response.response as? HTTPURLResponse)?.statusCode
             ParcelRunLog.record("菜鸟身份码", "H5 主页面：\(officialEntry(response.response.url) ? "官方身份码" : allowed ? "官方授权相关页面" : "非预期页面")，HTTP \(status.map { String($0) } ?? "未知")，\(allowed ? "允许" : "已拦截")")
             decisionHandler(allowed ? .allow : .cancel)
@@ -864,12 +907,48 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         }
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                      for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-            if authorizationMode && action.targetFrame == nil && allowsAuthorization(action.request.url) {
-                webView.load(action.request)
-            }
-            return nil
+            guard authorizationMode, !stopped, action.targetFrame == nil,
+                  webView === mainWeb, popupWeb == nil,
+                  allowsAuthorization(action.request.url) || action.request.url?.absoluteString == "about:blank",
+                  let host else { return nil }
+            // Returning a child made with the supplied configuration preserves
+            // window.opener and the platform's normal login callback.
+            let child = WKWebView(frame: .zero, configuration: configuration)
+            child.navigationDelegate = self
+            child.uiDelegate = self
+            child.translatesAutoresizingMaskIntoConstraints = false
+            let panel = UIView()
+            panel.backgroundColor = .systemBackground
+            panel.translatesAutoresizingMaskIntoConstraints = false
+            let close = UIButton(type: .system)
+            close.setTitle("关闭授权窗口", for: .normal)
+            close.addTarget(self, action: #selector(closePopup), for: .touchUpInside)
+            close.translatesAutoresizingMaskIntoConstraints = false
+            host.addSubview(panel)
+            panel.addSubview(close)
+            panel.addSubview(child)
+            NSLayoutConstraint.activate([
+                panel.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+                panel.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+                panel.topAnchor.constraint(equalTo: host.topAnchor),
+                panel.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+                close.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -16),
+                close.topAnchor.constraint(equalTo: panel.topAnchor),
+                close.heightAnchor.constraint(equalToConstant: 44),
+                child.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+                child.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+                child.topAnchor.constraint(equalTo: close.bottomAnchor),
+                child.bottomAnchor.constraint(equalTo: panel.bottomAnchor)
+            ])
+            popupWeb = child
+            popupPanel = panel
+            navigationEpoch += 1
+            report(.loading)
+            ParcelRunLog.record("菜鸟身份码", "官方授权弹窗已打开，保留原页面及登录回调")
+            return child
         }
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            guard webView === mainWeb else { return }
             navigationEpoch += 1
             navigationStarted = Date()
             report(.loading)
@@ -884,14 +963,21 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
             report(.failed)
         }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            navigationFailed(error)
+            if webView === mainWeb { navigationFailed(error) }
+            else if webView === popupWeb {
+                ParcelRunLog.record("菜鸟身份码", "官方授权弹窗导航失败，错误编号 \((error as NSError).code)", level: "警告")
+            }
         }
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            navigationFailed(error)
+            if webView === mainWeb { navigationFailed(error) }
+            else if webView === popupWeb {
+                ParcelRunLog.record("菜鸟身份码", "官方授权弹窗导航失败，错误编号 \((error as NSError).code)", level: "警告")
+            }
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             ParcelRunLog.record("菜鸟身份码", "H5 网页进程已结束", level: "警告")
-            report(.failed)
+            if webView === popupWeb { closePopup() }
+            else { report(.failed) }
         }
     }
 }

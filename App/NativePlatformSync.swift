@@ -857,7 +857,8 @@ enum SyncJSON {
             let knownFields = ["success", "isSuccess", "resultCode", "errorCode", "errorMsg",
                                "message", "msg", "code", "status", "needLogin", "needAuth",
                                "needVerify", "needBindPhone", "certified", "isCertified",
-                               "identityCode", "expireTime", "identityCodeInfo", "identityInfo"]
+                               "identityCode", "expireTime", "identityCodeInfo", "identityInfo",
+                               "certificated", "weakCertificated", "xnCertificated"]
             let present = knownFields.filter { model[$0] != nil }
             let booleanFields = ["success", "isSuccess", "needLogin", "needAuth", "needVerify",
                                  "needBindPhone", "certified", "isCertified"]
@@ -897,10 +898,22 @@ enum SyncJSON {
             ParcelRunLog.record("菜鸟身份码", "响应字段结构：data[" + schema(outer) + "]，model[" + schema(model) + "]")
             ParcelRunLog.record("菜鸟身份码", "业务已知字段：" + (present.isEmpty ? "无" : present.joined(separator: "、")) +
                 "；其他字段 \(max(0, model.count - present.count)) 项；布尔状态：" + (flags.isEmpty ? "无" : flags.joined(separator: "、")))
+            let certificationFields = ["certificated", "weakCertificated", "xnCertificated"]
+            let certification = certificationFields.compactMap { field -> String? in
+                guard let number = model[field] as? NSNumber,
+                      number.doubleValue == 0 || number.doubleValue == 1 else { return nil }
+                return field + "=" + (number.boolValue ? "true" : "false")
+            }
+            if !certification.isEmpty {
+                ParcelRunLog.record("菜鸟身份码", "认证状态：" + certification.joined(separator: "、"))
+            }
             ParcelRunLog.record("菜鸟身份码", "解析检查：model 字段 \(model.count) 项，标准码字段\(shape(model["identityCode"]))，长度 \(code.count)，其他可识别码结构\(hasOtherKnownField ? "存在" : "未识别")，有效期字段\(shape(model["expireTime"]))")
             guard (4...1024).contains(code.count),
                   !code.hasPrefix("{"), !code.hasPrefix("["),
                   !["null", "undefined", "true", "false", "invalid"].contains(code.lowercased()) else {
+                if certificationFields.contains(where: { model[$0] != nil }) {
+                    throw NativeSyncError.badResponse("菜鸟接口仅返回认证状态，未返回有效身份码")
+                }
                 throw NativeSyncError.badResponse(
                     "菜鸟接口未返回有效身份码，请稍后重试或检查当前授权账号")
             }
