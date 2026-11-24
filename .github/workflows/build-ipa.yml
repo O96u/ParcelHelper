@@ -1,7 +1,7 @@
 name: Build ParcelHelper IPA
 
 # 正式版：推送 vMAJOR.MINOR.PATCH 标签 → Latest Release。
-# 预发布：Actions 手动运行，填写 App Group → Pre-release，不会成为 Latest。
+# 预发布：Actions 手动运行，默认使用仓库变量 PH_WIDGET_GROUP，可临时覆盖 → Pre-release。
 on:
   push:
     tags:
@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
     inputs:
       widget_group:
-        description: '主 App 与小组件共用的 App Group，例如 group.your.id'
-        required: true
+        description: '可选：临时覆盖仓库变量 PH_WIDGET_GROUP（留空使用默认值）'
+        required: false
         type: string
       base_ref:
         description: '要构建的分支或提交（默认 main）'
@@ -138,20 +138,19 @@ jobs:
           IS_PRERELEASE: ${{ env.IS_PRERELEASE }}
         run: |
           set -euo pipefail
-          if [[ "$IS_PRERELEASE" == "true" ]]; then
-            group="${MANUAL_WIDGET_GROUP:-}"
-            if [[ -z "$group" ]]; then
-              echo "::error::手动预发布构建必须在 workflow 输入中填写 widget_group。"
-              exit 1
-            fi
-            echo '- **App Group 来源**: 本次手动输入（仅用于此次预发布 IPA）' >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$IS_PRERELEASE" == "true" && -n "${MANUAL_WIDGET_GROUP:-}" ]]; then
+            group="$MANUAL_WIDGET_GROUP"
+            echo '- **App Group 来源**: 本次手动覆盖' >> "$GITHUB_STEP_SUMMARY"
+          elif [[ -n "${REPOSITORY_WIDGET_GROUP:-}" ]]; then
+            group="$REPOSITORY_WIDGET_GROUP"
+            echo '- **App Group 来源**: 仓库变量 PH_WIDGET_GROUP' >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$IS_PRERELEASE" == "true" ]]; then
+            echo "::error::请在仓库 Settings → Secrets and variables → Actions → Variables 配置 PH_WIDGET_GROUP，或填写本次 widget_group。"
+            exit 1
           else
-            group="${REPOSITORY_WIDGET_GROUP:-}"
-            if [[ -z "$group" ]]; then
-              group="group.com.muxui.ParcelHelper"
-              echo "::warning::使用示例 App Group；第三方证书的描述文件未包含该组时，小组件无法跨进程共享数据。"
-              echo '- **注意**: 当前为示例 App Group；正式版可在仓库变量 `PH_WIDGET_GROUP` 中配置默认值。' >> "$GITHUB_STEP_SUMMARY"
-            fi
+            group="group.com.muxui.ParcelHelper"
+            echo "::warning::使用示例 App Group；第三方证书的描述文件未包含该组时，小组件无法跨进程共享数据。"
+            echo '- **注意**: 当前为示例 App Group；可在仓库变量 `PH_WIDGET_GROUP` 中配置默认值。' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ ! "$group" =~ ^group\.[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || [[ "$group" == *..* ]] || [[ "$group" == *. ]]; then
             echo "::error::无效的 App Group: ${group} (应为 group. 开头的合法标识)"
@@ -294,7 +293,7 @@ jobs:
               echo ""
               echo "## 预发布说明"
               echo "- 本次为 **Actions 手动预发布**，**不会**替代 [最新正式版](https://github.com/$GITHUB_REPOSITORY/releases/latest)。"
-              echo "- 嵌入 App Group: \`${PH_WIDGET_GROUP}\`（与你在 Run workflow 中填写的一致）。"
+              echo "- 嵌入 App Group: \`${PH_WIDGET_GROUP}\`（来自仓库变量或本次手动覆盖）。"
               echo "- 构建引用: \`${{ inputs.base_ref }}\` · 提交 \`${GITHUB_SHA:0:7}\`"
               echo ""
               echo "## 安装说明"
