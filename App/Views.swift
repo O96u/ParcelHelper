@@ -243,7 +243,7 @@ struct ParcelCell: View {
     }
     var body: some View {
         HStack(spacing: 12) {
-            CourierBrandView(company: parcel.trackCompany ?? "",
+            CourierBrandView(company: parcel.carrierDisplayName,
                              shipperCode: parcel.shipperCode ?? "",
                              source: parcel.srcApp?.id == "douyin" ? "douyin" :
                                   (parcel.source ?? parcel.srcApp?.id), size: 48)
@@ -523,14 +523,15 @@ struct ParcelsHome: View {
         let rows = store.snapshot.parcels.filter { $0.type == "delivery" }
         return [rows.count, rows.filter(\.isTransit).count,
                 rows.filter(\.isPending).count,
-                rows.filter { $0.isDone || $0.isSigned }.count]
+                rows.filter { $0.isDone || $0.isSigned }.count,
+                 rows.filter(\.isOtherStatus).count]
     }
     private var visible: [Parcel] {
         store.snapshot.parcels.filter { p in
             guard p.type == "delivery" else { return false }
             let state = filter == 0 || (filter == 1 && p.isTransit) ||
                 (filter == 2 && p.isPending) ||
-                (filter == 3 && (p.isDone || p.isSigned))
+                (filter == 3 && (p.isDone || p.isSigned)) || (filter == 4 && p.isOtherStatus)
             let text = [p.title, p.displayCode, p.mailNo ?? "", p.stationText,
                         p.smsContent, p.trackLatest ?? "", p.trackCompany ?? ""]
                 .joined(separator: " ")
