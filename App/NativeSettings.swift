@@ -225,10 +225,13 @@ struct IdentityDetailPage: View {
     @State private var notice: String?
     @State private var cainiaoOfficialFallback = false
     @State private var officialRefresh = 0
+    @State private var identityGeneration = 0
+    @State private var officialPhase: CainiaoIdentityPhase = .loading
     private let blue = Color(red: 0.19, green: 0.49, blue: 0.96)
     private var validCode: String? {
         guard let identity, identity.expiresAt > now, authorized,
-              identityAccountID == ParcelAccounts.activeID(for: platform) else {
+              identityAccountID == ParcelAccounts.activeID(for: platform),
+              identityGeneration == ParcelAccounts.syncGeneration(identityAccountID) else {
             return nil
         }
         return identity.code
@@ -275,21 +278,49 @@ struct IdentityDetailPage: View {
                     }
                 }
                 if platform == "cainiao" && cainiaoOfficialFallback {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("菜鸟官方身份码").font(.headline)
-                        Text("由官方页面自动换码，需要时请在页面内完成登录或验证。")
-                            .font(.caption).foregroundStyle(.secondary)
-                        CainiaoOfficialIdentityWebView(accountID: identityAccountID)
-                            .id(identityAccountID + ":" + String(officialRefresh))
-                            .frame(height: 540)
-                            .background(Color.white, in: RoundedRectangle(cornerRadius: 14))
+                    VStack(spacing: 12) {
+                        if officialPhase == .loading || officialPhase == .ready {
+                            ZStack {
+                                CainiaoOfficialIdentityWebView(
+                                    accountID: identityAccountID, authorizationMode: false
+                                ) { phase in
+                                    guard identityAccountID == ParcelAccounts.activeID(for: "cainiao"),
+                                          identityGeneration == ParcelAccounts.syncGeneration(identityAccountID) else {
+                                        officialPhase = .authorizationRequired
+                                        return
+                                    }
+                                    officialPhase = phase
+                                }
+                                .id(identityAccountID + ":" + String(officialRefresh))
+                                .opacity(officialPhase == .ready &&
+                                         identityAccountID == ParcelAccounts.activeID(for: "cainiao") &&
+                                         identityGeneration == ParcelAccounts.syncGeneration(identityAccountID) ? 1 : 0)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(officialPhase != .ready)
+                                if officialPhase == .loading {
+                                    ProgressView("正在获取菜鸟身份码…")
+                                }
+                            }
+                            .frame(height: 265)
+                            .background(officialPhase == .ready ? Color.white : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 14))
                             .clipShape(RoundedRectangle(cornerRadius: 14))
-                        Button("重新尝试原生获取") {
-                            Task { await refresh(tryNative: true) }
+                        } else {
+                            Image(systemName: "qrcode")
+                                .font(.system(size: 52)).foregroundStyle(.secondary)
+                            Text(officialPhase == .authorizationRequired
+                                 ? "菜鸟身份码需要授权" : "暂未获取有效身份码")
+                                .font(.headline)
+                            NavigationLink {
+                                MultiAccountPage(platformID: "cainiao")
+                            } label: {
+                                Text("前往账号授权").frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        .font(.footnote).disabled(fetching)
                     }
-                    .padding(14)
+                    .padding(18)
+                    .frame(maxWidth: .infinity)
                     .background(Color(uiColor: .secondarySystemGroupedBackground),
                                 in: RoundedRectangle(cornerRadius: 24))
                 } else if !authorized {
@@ -410,11 +441,7 @@ struct IdentityDetailPage: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    if platform == "cainiao" && cainiaoOfficialFallback {
-                        officialRefresh += 1
-                    } else {
-                        Task { await refresh() }
-                    }
+                    Task { await refresh() }
                 } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
                 }.disabled(fetching)
@@ -446,14 +473,18 @@ struct IdentityDetailPage: View {
             Button("确定") { notice = nil }
         } message: { Text(notice ?? "") }
     }
-    @MainActor private func refresh(tryNative: Bool = false) async {
+    @MainActor private func refresh() async {
         guard !fetching else { return }
         let requestedAccountID = ParcelAccounts.activeID(for: platform)
-        if platform == "cainiao" && cainiaoOfficialFallback &&
-            requestedAccountID == identityAccountID && !tryNative { return }
+        if platform == "cainiao" {
+            cainiaoOfficialFallback = false
+            officialPhase = .loading
+            officialRefresh += 1
+        }
         fetching = true
         defer { fetching = false }
         let generation = ParcelAccounts.syncGeneration(requestedAccountID)
+        identityGeneration = generation
         if requestedAccountID != identityAccountID {
             identity = nil
             authorized = false
@@ -473,7 +504,8 @@ struct IdentityDetailPage: View {
             failure = nil
             if platform == "cainiao" {
                 cainiaoOfficialFallback = true
-                ParcelRunLog.record("菜鸟身份码", "原生会话不可用，打开官方身份码页面")
+                officialPhase = .authorizationRequired
+                ParcelRunLog.record("菜鸟身份码", "未授权，需前往账号授权")
             }
             return
         }
@@ -504,7 +536,8 @@ struct IdentityDetailPage: View {
             if platform == "cainiao" {
                 failure = nil
                 cainiaoOfficialFallback = true
-                ParcelRunLog.record("菜鸟身份码", "原生接口未获得有效身份码，切换官方页面")
+                officialPhase = .loading
+                ParcelRunLog.record("菜鸟身份码", "原生接口未获得有效身份码，尝试只读官方页面")
             } else {
                 failure = error.localizedDescription
             }
@@ -512,13 +545,21 @@ struct IdentityDetailPage: View {
     }
 }
 
-// Reference: HandyCode CainiaoPage.java (official H5 entry). The page owns
-// the barcode, expiry, login and binding flow. No JS bridge or code scraping.
-private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
+// Only the account management sheet may interact with the official login
+// or phone-binding workflow. The identity screen is a read-only consumer.
+enum CainiaoIdentityPhase: String {
+    case loading, ready, authorizationRequired, failed
+}
+
+struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
     let accountID: String
+    let authorizationMode: Bool
+    let onPhase: (CainiaoIdentityPhase) -> Void
     private static let entry = URL(string: "https://page.cainiao.com/cn-app-web/identity-code/index.html#/")!
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(authorizationMode: authorizationMode, onPhase: onPhase)
+    }
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
@@ -526,18 +567,124 @@ private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         let web = WKWebView(frame: .zero, configuration: configuration)
         web.navigationDelegate = context.coordinator
         web.uiDelegate = context.coordinator
-        web.allowsBackForwardNavigationGestures = true
+        web.isUserInteractionEnabled = authorizationMode
+        web.allowsBackForwardNavigationGestures = authorizationMode
         web.load(URLRequest(url: Self.entry, cachePolicy: .reloadIgnoringLocalCacheData))
+        context.coordinator.start(web)
         return web
     }
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        context.coordinator.onPhase = onPhase
+    }
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        coordinator.stop()
         uiView.stopLoading()
         uiView.navigationDelegate = nil
         uiView.uiDelegate = nil
     }
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
-        private func allows(_ url: URL?) -> Bool {
+
+    // The script reports only a fixed phase, never the image URL, code,
+    // form contents, phone, cookie, or credentials. Check workflows before
+    // accepting the official, actually loaded barcode.
+    static let phaseJS = #"""
+    (function(){
+      if(location.origin!=='https://page.cainiao.com' ||
+         location.pathname!=='/cn-app-web/identity-code/index.html')return 'authorizationRequired';
+      function visible(node){
+        if(!node||!node.getClientRects().length)return false;
+        for(var n=node;n;n=n.parentElement){
+          var s=getComputedStyle(n);
+          if(s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0)return false;
+        }
+        return true;
+      }
+      var frames=document.querySelectorAll('iframe');
+      for(var i=0;i<frames.length;i++){
+        var f=frames[i];
+        if(!visible(f))continue;
+        var raw=f.getAttribute('src')||'';
+        var r=f.getBoundingClientRect();
+        if(!raw||raw==='about:blank'){
+          if(r.width>=innerWidth*0.8&&r.height>=innerHeight*0.5)return 'authorizationRequired';
+          continue;
+        }
+        try{
+          var u=new URL(raw,location.href);
+          if(/^(login|passport|aq|sec)\./i.test(u.hostname)||
+             /(^|\/)(login|punish|verify|baxia)(\.|\/|_|-|$)/i.test(u.pathname))
+            return 'authorizationRequired';
+        }catch(e){}
+      }
+      var workflow=document.querySelectorAll('[class*="modal-auth-auth-modal-body-"],[class^="bind-phone-root-"],input,textarea,[contenteditable="true"],[role="textbox"]');
+      for(var j=0;j<workflow.length;j++){
+        var node=workflow[j],type=(node.type||'').toLowerCase();
+        if(/^(hidden|checkbox|radio|button|submit|reset|image|range)$/.test(type))continue;
+        if(visible(node))return 'authorizationRequired';
+      }
+      var code=document.getElementById('auth-code-id');
+      if(visible(code)&&code.complete&&code.naturalWidth>0)return 'ready';
+      return 'loading';
+    })()
+    """#
+
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        let authorizationMode: Bool
+        var onPhase: (CainiaoIdentityPhase) -> Void
+        private var task: Task<Void, Never>?
+        private var phase: CainiaoIdentityPhase = .loading
+        private var stopped = false
+
+        init(authorizationMode: Bool, onPhase: @escaping (CainiaoIdentityPhase) -> Void) {
+            self.authorizationMode = authorizationMode
+            self.onPhase = onPhase
+        }
+        func stop() {
+            stopped = true
+            task?.cancel()
+            task = nil
+        }
+        private func report(_ next: CainiaoIdentityPhase) {
+            guard !stopped, phase != next else { return }
+            phase = next
+            onPhase(next)
+            if next == .ready {
+                ParcelRunLog.record("菜鸟身份码", "官方条形码已就绪")
+            } else if next == .authorizationRequired && !authorizationMode {
+                ParcelRunLog.record("菜鸟身份码", "官方页面要求授权，已停止只读展示")
+                stop()
+            }
+        }
+        func start(_ web: WKWebView) {
+            task?.cancel()
+            let started = Date()
+            task = Task { [weak self, weak web] in
+                while !Task.isCancelled {
+                    guard let self, let web, !self.stopped else { return }
+                    if !web.isLoading, let url = web.url, url.absoluteString != "about:blank" {
+                        if let raw = try? await web.evaluateJavaScript(CainiaoOfficialIdentityWebView.phaseJS),
+                           let value = raw as? String,
+                           let next = CainiaoIdentityPhase(rawValue: value) {
+                            guard !Task.isCancelled, !self.stopped else { return }
+                            self.report(next)
+                        }
+                    }
+                    if !self.authorizationMode && self.phase == .loading &&
+                        Date().timeIntervalSince(started) > 25 {
+                        self.report(.failed)
+                        self.stop()
+                        return
+                    }
+                    do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                }
+            }
+        }
+        private func officialEntry(_ url: URL?) -> Bool {
+            guard let url, url.scheme?.lowercased() == "https",
+                  url.user == nil, url.password == nil, url.port == nil || url.port == 443 else { return false }
+            return url.host?.lowercased() == "page.cainiao.com" &&
+                url.path == "/cn-app-web/identity-code/index.html"
+        }
+        private func allowsAuthorization(_ url: URL?) -> Bool {
             guard let url, url.scheme?.lowercased() == "https",
                   url.user == nil, url.password == nil,
                   url.port == nil || url.port == 443,
@@ -548,30 +695,52 @@ private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         }
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            if allows(action.request.url) ||
-                (action.targetFrame?.isMainFrame == false && action.request.url?.absoluteString == "about:blank") {
-                decisionHandler(.allow)
-            } else { decisionHandler(.cancel) }
+            if authorizationMode {
+                let blankFrame = action.targetFrame?.isMainFrame == false &&
+                    action.request.url?.absoluteString == "about:blank"
+                decisionHandler(allowsAuthorization(action.request.url) || blankFrame ? .allow : .cancel)
+                return
+            }
+            // No popups, deep links, or main-frame login navigation in display mode.
+            if action.targetFrame == nil {
+                decisionHandler(.cancel)
+                return
+            }
+            if action.targetFrame?.isMainFrame == true {
+                if officialEntry(action.request.url) {
+                    decisionHandler(.allow)
+                } else {
+                    decisionHandler(.cancel)
+                    if allowsAuthorization(action.request.url) { report(.authorizationRequired) }
+                }
+            } else {
+                let blank = action.request.url?.absoluteString == "about:blank"
+                decisionHandler(allowsAuthorization(action.request.url) || blank ? .allow : .cancel)
+            }
         }
         func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
                      decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
-            if !response.isForMainFrame || allows(response.response.url) {
-                decisionHandler(.allow)
-            } else { decisionHandler(.cancel) }
+            guard response.isForMainFrame else { decisionHandler(.allow); return }
+            let allowed = authorizationMode ? allowsAuthorization(response.response.url) : officialEntry(response.response.url)
+            decisionHandler(allowed ? .allow : .cancel)
+            if !allowed && !authorizationMode { report(.authorizationRequired) }
         }
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                      for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-            if action.targetFrame == nil && allows(action.request.url) { webView.load(action.request) }
+            if authorizationMode && action.targetFrame == nil && allowsAuthorization(action.request.url) {
+                webView.load(action.request)
+            }
             return nil
         }
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            if webView.url?.host == "page.cainiao.com" {
-                ParcelRunLog.record("菜鸟身份码", "官方身份码页面已加载，等待页面自行显示")
-            }
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            report(.loading)
         }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             guard (error as NSError).code != NSURLErrorCancelled else { return }
-            ParcelRunLog.record("菜鸟身份码", "官方身份码页面加载失败，可手动刷新")
+            report(.failed)
+        }
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            report(.failed)
         }
     }
 }

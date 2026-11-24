@@ -19,4 +19,5 @@ run_swift douyin Shared/Models.swift App/Parser.swift App/DouyinImport.swift Tes
 run_swift performance Shared/Models.swift Tests/ParcelPerformanceTests.swift
 echo "== JD order fixtures =="
 node Tests/JDOrdersHookTests.mjs
+node Tests/CainiaoIdentityPhaseTests.mjs
 echo "PASS: all offline regression suites"

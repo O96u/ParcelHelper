@@ -613,6 +613,8 @@ struct MultiAccountPage: View {
     @State private var confirmingLoginID: String?
     @State private var loginError: String?
     @State private var managePhoneAccount: ParcelAccountProfile?
+    @State private var cainiaoIdentityAccount: ParcelAccountProfile?
+    @State private var cainiaoIdentityReady = false
     @State private var renameAccount: ParcelAccountProfile?
     @State private var renameValue = ""
     @State private var removeAccount: ParcelAccountProfile?
@@ -760,6 +762,27 @@ struct MultiAccountPage: View {
             )) {
                 Button("确定") { loginError = nil }
             } message: { Text(loginError ?? "") }
+        }
+        .sheet(item: $cainiaoIdentityAccount, onDismiss: {
+            cainiaoIdentityReady = false
+            Task { await reload() }
+        }) { account in
+            NavigationStack {
+                CainiaoOfficialIdentityWebView(accountID: account.id, authorizationMode: true) { phase in
+                    cainiaoIdentityReady = phase == .ready
+                }
+                .navigationTitle("菜鸟身份码授权 · " + account.nickname)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("取消") { cainiaoIdentityAccount = nil }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("完成授权") { cainiaoIdentityAccount = nil }
+                            .disabled(!cainiaoIdentityReady)
+                    }
+                }
+            }
         }
         .sheet(item: $managePhoneAccount, onDismiss: {
             Task { await reload() }
@@ -949,6 +972,19 @@ struct MultiAccountPage: View {
             }
             .font(.subheadline)
             .controlSize(.regular)
+            if brandID == "cainiao" {
+                Button {
+                    ParcelAccounts.invalidateSync(account.id)
+                    cainiaoIdentityReady = false
+                    cainiaoIdentityAccount = account
+                } label: {
+                    Label("身份码授权", systemImage: "qrcode")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+                .disabled(busy != nil)
+            }
             if kind == "pdd" && validAccounts.contains(account.id) {
                 Button {
                     managePhoneAccount = account
