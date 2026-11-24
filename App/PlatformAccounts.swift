@@ -675,7 +675,7 @@ private struct PlatformAccountDetail: View {
                             .tint(blue)
                             .disabled(isSyncing || !authorized)
                     }
-                    if (platform.id == "jd" || platform.id == "taobao") && authorized {
+                    if platform.id == "taobao" && authorized {
                         Divider()
                         Button {
                             webOrdersPresented = true

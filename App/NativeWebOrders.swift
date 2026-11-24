@@ -224,7 +224,7 @@ private struct WebShipment: Decodable {
             if platform == "pdd" {
                 finishPdd("拼多多购物订单：网页读取超时，请稍后重试", succeeded: false)
             } else {
-                finish(platform, packages: partialPackages, failure: "网页同步超时，请稍后重试或打开官方订单页检查")
+                finish(platform, packages: partialPackages, failure: "网页同步超时，请稍后重试")
             }
         }
     }
@@ -767,7 +767,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             record("京东主页面离开官方域名，已阻止：\(JDOrderNavigation.destination(url))")
             // One bounded alternative; never loop or read the foreign page.
             guard stage == .orderList, !usedJDFallback else {
-                complete("京东订单网页跳转到非官方页面，已停止读取。请打开账号中的官方订单网页排查。")
+                complete("京东订单网页跳转异常，已停止读取，请稍后重试。")
                 return
             }
             usedJDFallback = true
@@ -1114,7 +1114,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                         }
                     }
                     self.record("订单列表及备用页面均未识别到符合条件的订单")
-                    self.complete("未识别到可查询的订单。页面可能未加载完毕、账号需要安全验证，或平台调整了订单结构；必要时可打开官方订单页核对。")
+                    self.complete("未识别到可查询的订单。页面可能未加载完毕、账号需要安全验证，或平台调整了订单结构。")
                 } else {
                     if self.platform == "jd" && result.structured == true {
                         for order in self.orders {

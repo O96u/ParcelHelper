@@ -2,7 +2,6 @@ import SwiftUI
 import UIKit
 import MapKit
 import WebKit
-import UniformTypeIdentifiers
 
 // Colors and card spacing follow theme.ts in the original Scripting project.
 enum AppTheme {
@@ -1555,8 +1554,6 @@ struct SettingsHome: View {
                     Divider().padding(.leading, 58)
                     nativeRow("运行日志", "list.bullet.rectangle.portrait.fill", .blue) { ParcelRunLogPage() }
                     Divider().padding(.leading, 58)
-                    nativeRow("数据备份", "externaldrive.fill", .blue) { LocalBackupPage() }
-                    Divider().padding(.leading, 58)
                     nativeRow("清除缓存", "trash.fill", .gray) { CacheSettingsPage() }
                 }
                 settingsGroup {
@@ -2394,136 +2391,5 @@ private struct BatchWaybillPage: View {
         .alert("导入完成", isPresented: Binding(get: { result != nil }, set: { if !$0 { result = nil } })) {
             Button("确定") { dismiss() }
         } message: { Text("新增 \(result ?? 0) 件，重复运单已跳过。") }
-    }
-}
-
-private struct ParcelBackupDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json] }
-    var data: Data
-    init(data: Data) { self.data = data }
-    init(configuration: ReadConfiguration) throws {
-        guard let data = configuration.file.regularFileContents else { throw CocoaError(.fileReadCorruptFile) }
-        self.data = data
-    }
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: data)
-    }
-}
-
-private struct LocalBackupPage: View {
-    @EnvironmentObject private var store: ParcelStore
-    @State private var exporting = false
-    @State private var importing = false
-    @State private var document = ParcelBackupDocument(data: Data())
-    @State private var importedData: Data?
-    @State private var confirm = false
-    @State private var notice: String?
-    @State private var showResult = false
-
-    private var backupDateText: String {
-        guard let date = store.recoveryBackupDate else { return "暂无" }
-        return date.formatted(date: .numeric, time: .shortened)
-    }
-
-    var body: some View {
-        formContent
-            .navigationTitle("数据备份")
-            .fileExporter(isPresented: $exporting, document: document,
-                          contentType: UTType.json, defaultFilename: "包裹助手备份",
-                          onCompletion: handleExport)
-            .fileImporter(isPresented: $importing, allowedContentTypes: [UTType.json],
-                          onCompletion: handleImport)
-            .confirmationDialog("确认替换本地数据？", isPresented: $confirm, titleVisibility: .visible) {
-                Button("确认恢复", role: .destructive, action: restore)
-                Button("取消", role: .cancel) { importedData = nil }
-            } message: {
-                Text("此操作将替换当前本地包裹、驿站和偏好。")
-            }
-            .alert("备份结果", isPresented: $showResult) {
-                Button("确定", role: .cancel) { notice = nil }
-            } message: {
-                Text(notice ?? "")
-            }
-    }
-
-    private var formContent: some View {
-        Form {
-            fileSection
-            recoverySection
-        }
-    }
-
-    private var fileSection: some View {
-        Section {
-            Button("导出备份", action: prepareExport)
-            Button("导入备份") { importing = true }
-        } header: {
-            Text("备份文件")
-        } footer: {
-            Text("备份含包裹、驿站及本地偏好，请妥善保管。")
-        }
-    }
-
-    private var recoverySection: some View {
-        Section {
-            LabeledContent("最近有效备份", value: backupDateText)
-            Button("恢复上一份备份", role: .destructive) {
-                importedData = nil
-                confirm = true
-            }
-            .disabled(store.recoveryBackupDate == nil)
-        } header: {
-            Text("本地恢复")
-        } footer: {
-            Text("恢复会替换当前包裹、驿站和本地偏好，不会恢复平台登录凭据。")
-        }
-    }
-
-    private func report(_ message: String) {
-        notice = message
-        showResult = true
-    }
-
-    private func prepareExport() {
-        do {
-            document = ParcelBackupDocument(data: try store.exportBackup())
-            exporting = true
-        } catch { report("导出失败") }
-    }
-
-    private func handleExport(_ result: Result<URL, Error>) {
-        if case .failure = result { report("导出失败") }
-    }
-
-    private func handleImport(_ result: Result<URL, Error>) {
-        do {
-            let url = try result.get()
-            let access = url.startAccessingSecurityScopedResource()
-            defer { if access { url.stopAccessingSecurityScopedResource() } }
-            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size <= 20 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
-            let data = try Data(contentsOf: url)
-            guard data.count <= 20 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
-            _ = try JSONDecoder().decode(Snapshot.self, from: data)
-            importedData = data
-            confirm = true
-        } catch {
-            importedData = nil
-            report("无法读取有效备份")
-        }
-    }
-
-    private func restore() {
-        let data = importedData
-        importedData = nil
-        do {
-            if let data {
-                try store.importBackup(data)
-                report("导入成功")
-            } else {
-                try store.restoreRecoveryBackup()
-                report("已恢复本地备份")
-            }
-        } catch { report("恢复失败，请检查备份文件") }
     }
 }

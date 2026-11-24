@@ -598,7 +598,6 @@ struct MultiAccountPage: View {
     @State private var confirmingLoginID: String?
     @State private var loginError: String?
     @State private var managePhoneAccount: ParcelAccountProfile?
-    @State private var inspectJDAccount: ParcelAccountProfile?
     @State private var renameAccount: ParcelAccountProfile?
     @State private var renameValue = ""
     @State private var removeAccount: ParcelAccountProfile?
@@ -746,16 +745,6 @@ struct MultiAccountPage: View {
             )) {
                 Button("确定") { loginError = nil }
             } message: { Text(loginError ?? "") }
-        }
-        .sheet(item: $inspectJDAccount, onDismiss: {
-            Task { await reload() }
-        }) { account in
-            NavigationStack {
-                NativeWebOrderPage(platform: "jd", accountID: account.id) { message in
-                    inspectJDAccount = nil
-                    notice = message
-                }
-            }
         }
         .sheet(item: $managePhoneAccount, onDismiss: {
             Task { await reload() }
@@ -945,20 +934,6 @@ struct MultiAccountPage: View {
             }
             .font(.subheadline)
             .controlSize(.regular)
-            if kind == "jd" && validAccounts.contains(account.id) {
-                Button {
-                    if NativeWebAutoSync.shared.activePlatform != nil {
-                        notice = "已有网页同步正在执行，请在本轮结束后打开订单网页。"
-                    } else {
-                        inspectJDAccount = account
-                    }
-                } label: {
-                    Label("打开官方订单网页排查", systemImage: "globe")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.blue)
-            }
             if kind == "pdd" && validAccounts.contains(account.id) {
                 Button {
                     managePhoneAccount = account
