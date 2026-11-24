@@ -8,10 +8,10 @@ const location = {origin, pathname:"/cn-app-web/identity-code/index.html",href:o
 const image = {getClientRects:()=>[1], complete:true, naturalWidth:200};
 const login = {getClientRects:()=>[1],type:"tel"};
 const frame = {getClientRects:()=>[1], getAttribute:()=>"https://login.taobao.com/member/login.jhtml",getBoundingClientRect:()=>({width:320,height:500})};
-function phase({code=image, controls=[], frames=[], loc=location}={}) {
+function phase({code=image, controls=[], frames=[], loc=location, root=null}={}) {
     return vm.runInNewContext(script,{URL,location:loc,innerWidth:390,innerHeight:700,
         getComputedStyle:()=>({display:"block",visibility:"visible",opacity:"1"}),
-        document:{querySelectorAll:sel=>sel==="iframe"?frames:controls,getElementById:()=>code}});
+        document:{querySelectorAll:sel=>sel==="iframe"?frames:controls,getElementById:()=>code,querySelector:()=>root}});
 }
 assert.equal(phase(),"ready");
 assert.equal(phase({code:null}),"loading");
@@ -24,6 +24,13 @@ assert.equal(phase({frames:[{...frame,getBoundingClientRect:()=>({width:320,heig
 assert.equal(phase({controls:[{getClientRects:()=>[1]}]}),"authorizationRequired");
 assert.equal(phase({loc:{origin:"https://login.taobao.com",pathname:"/member/login.jhtml"}}),"authorizationRequired");
 assert.equal(phase({controls:[{...login,getClientRects:()=>[]}]}),"ready");
+const taobaoLoc = {origin:"https://pages-fast.m.taobao.com", pathname:"/wow/z/uniapp/1011717/last-mile-fe/end-collect-platform/identity-code"};
+const label = {getClientRects:()=>[1],childNodes:[{}]};
+const root = {getClientRects:()=>[1],querySelector:s=>s.includes("code--")?label:image};
+assert.equal(phase({loc:taobaoLoc,root}),"taobaoReady");
+assert.equal(phase({loc:taobaoLoc,root,controls:[login]}),"authorizationRequired");
+assert.equal(phase({loc:taobaoLoc,root:null}),"loading");
+assert.equal(phase({loc:{...taobaoLoc,origin:"https://example.com"},root}),"authorizationRequired");
 // The account authorization flow must preserve its WebView and use an
 // official service entry rather than the unrelated generic login homepage.
 const accounts = fs.readFileSync("App/AccountProfiles.swift","utf8");

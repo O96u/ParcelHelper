@@ -866,6 +866,35 @@ enum SyncJSON {
                       CFGetTypeID(raw) == CFBooleanGetTypeID() else { return nil }
                 return field + "=" + (raw.boolValue ? "true" : "false")
             }
+            // The previous allowlist hid every field in an actual successful
+            // response. Report bounded, schema-like identifiers and types,
+            // never field values, arbitrary map keys, URLs or full JSON.
+            func schema(_ object: [String: Any]) -> String {
+                let keys = object.keys.sorted().prefix(24)
+                var hidden = max(0, object.count - keys.count)
+                var fields: [String] = []
+                for key in keys {
+                    guard key.range(of: #"^[A-Za-z][A-Za-z_]{0,39}$"#, options: .regularExpression) != nil else {
+                        hidden += 1
+                        continue
+                    }
+                    // Avoid logging opaque identifiers disguised as keys.
+                    let lower = key.lowercased()
+                    let schemaWords = ["code", "id", "status", "result", "data", "model", "error", "msg",
+                                       "message", "success", "auth", "login", "bind", "phone", "mobile",
+                                       "cert", "verify", "name", "time", "type", "url", "info", "flag",
+                                       "need", "valid", "pickup", "user", "real", "expire", "sign",
+                                       "enable", "allow", "support", "scene", "token", "reason", "action"]
+                    guard schemaWords.contains(where: { lower.contains($0) }) else {
+                        hidden += 1
+                        continue
+                    }
+                    fields.append(key + ":" + shape(object[key]))
+                }
+                return (fields.isEmpty ? "无可记录字段" : fields.joined(separator: "、")) +
+                    (hidden > 0 ? "；其余字段 \(hidden) 项" : "")
+            }
+            ParcelRunLog.record("菜鸟身份码", "响应字段结构：data[" + schema(outer) + "]，model[" + schema(model) + "]")
             ParcelRunLog.record("菜鸟身份码", "业务已知字段：" + (present.isEmpty ? "无" : present.joined(separator: "、")) +
                 "；其他字段 \(max(0, model.count - present.count)) 项；布尔状态：" + (flags.isEmpty ? "无" : flags.joined(separator: "、")))
             ParcelRunLog.record("菜鸟身份码", "解析检查：model 字段 \(model.count) 项，标准码字段\(shape(model["identityCode"]))，长度 \(code.count)，其他可识别码结构\(hasOtherKnownField ? "存在" : "未识别")，有效期字段\(shape(model["expireTime"]))")

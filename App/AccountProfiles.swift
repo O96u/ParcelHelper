@@ -783,8 +783,9 @@ struct MultiAccountPage: View {
                     .id(account.id)
                     Divider()
                     VStack(spacing: 8) {
-                        Text(cainiaoIdentityPhase == .ready ? "身份码已验证" :
-                             cainiaoIdentityPhase == .authorizationRequired ? "先完成官方登录或验证，再检查身份码" :
+                        Text(cainiaoIdentityPhase == .ready ? "菜鸟身份码已验证" :
+                             cainiaoIdentityPhase == .taobaoReady ? "淘宝码已可用，菜鸟出库码尚未确认" :
+                             cainiaoIdentityPhase == .authorizationRequired ? "菜鸟页面仍要求登录或验证" :
                              cainiaoIdentityPhase == .failed ? "暂未加载出库码" : "正在检查身份码")
                             .font(.caption).foregroundStyle(.secondary)
                         HStack {
@@ -793,9 +794,9 @@ struct MultiAccountPage: View {
                                 cainiaoIdentityLogin = true
                                 cainiaoIdentityRevision += 1
                             }
-                            .disabled(cainiaoIdentityPhase == .loading)
+                            .disabled(cainiaoIdentityPhase == .loading || cainiaoIdentityPhase == .taobaoReady)
                             Spacer()
-                            Button("检查身份码") {
+                            Button("检查菜鸟码") {
                                 cainiaoIdentityPhase = .loading
                                 cainiaoIdentityLogin = false
                                 cainiaoIdentityRevision += 1

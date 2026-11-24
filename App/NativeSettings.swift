@@ -579,12 +579,13 @@ struct IdentityDetailPage: View {
 // Only the account management sheet may interact with the official login
 // or phone-binding workflow. The identity screen is a read-only consumer.
 enum CainiaoIdentityPhase: String {
-    case loading, ready, authorizationRequired, failed
+    case loading, ready, taobaoReady, authorizationRequired, failed
 
     var statusText: String {
         switch self {
         case .loading: return "正在检查身份码"
-        case .ready: return "上次检查：身份码可用"
+        case .ready: return "上次检查：菜鸟身份码可用"
+        case .taobaoReady: return "上次检查：仅淘宝身份码可用"
         case .authorizationRequired: return "上次检查：需身份码授权"
         case .failed: return "上次检查：身份码加载失败"
         }
@@ -657,8 +658,12 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
     // accepting the official, actually loaded barcode.
     static let phaseJS = #"""
     (function(){
-      if(location.origin!=='https://page.cainiao.com' ||
-         location.pathname!=='/cn-app-web/identity-code/index.html')return 'authorizationRequired';
+      var cainiao=location.origin==='https://page.cainiao.com' &&
+          location.pathname==='/cn-app-web/identity-code/index.html';
+      var taobao=(location.origin==='https://pages-fast.m.taobao.com'||
+          location.origin==='https://pages.m.taobao.com') &&
+          location.pathname.replace(/\/$/,'')==='/wow/z/uniapp/1011717/last-mile-fe/end-collect-platform/identity-code';
+      if(!cainiao&&!taobao)return 'authorizationRequired';
       function visible(node){
         if(!node||!node.getClientRects().length)return false;
         for(var n=node;n;n=n.parentElement){
@@ -695,6 +700,16 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         if(/^(hidden|checkbox|radio|button|submit|reset|image|range)$/.test(type))continue;
         if(visible(node))return 'authorizationRequired';
       }
+      if(taobao){
+        // Same selectors as HandyCode official-identity.js. Never promote
+        // a Taobao scan code to a verified Cainiao identity code.
+        var root=document.querySelector('[class*="identity--"]');
+        var value=root&&root.querySelector('[class*="code--"]');
+        var image=root&&root.querySelector('img[class*="width-origin--"],img[class*="width-rotate--"]');
+        if(visible(root)&&visible(value)&&value.childNodes.length>0&&
+           visible(image)&&image.complete&&image.naturalWidth>0)return 'taobaoReady';
+        return 'loading';
+      }
       var code=document.getElementById('auth-code-id');
       if(visible(code)&&code.complete&&code.naturalWidth>0)return 'ready';
       return 'loading';
@@ -726,6 +741,8 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
             onPhase(next)
             if next == .ready {
                 ParcelRunLog.record("菜鸟身份码", "官方条形码已就绪")
+            } else if next == .taobaoReady {
+                ParcelRunLog.record("菜鸟身份码", "淘宝官方身份码已就绪，尚未确认菜鸟出库码")
             } else if next == .failed {
                 ParcelRunLog.record("菜鸟身份码", "官方页面未取得条形码")
             } else if next == .authorizationRequired {
@@ -757,6 +774,10 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
                            let next = CainiaoIdentityPhase(rawValue: value) {
                             guard !Task.isCancelled, !self.stopped else { return }
                             if epoch != self.navigationEpoch { continue }
+                            if next == .taobaoReady && !self.authorizationMode {
+                                self.report(.authorizationRequired)
+                                return
+                            }
                             if next == .authorizationRequired && !self.authorizationMode {
                                 // A login iframe may briefly exist during session restoration.
                                 // Never show it. Wait briefly before declaring authorization required.
