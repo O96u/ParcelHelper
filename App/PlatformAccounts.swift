@@ -97,7 +97,7 @@ enum PlatformCatalog {
     static let rows: [PlatformWebsite] = [
         .init(id: "taobao", title: "淘宝", login: URL(string: "https://login.taobao.com/member/login.jhtml"), validCookie: "unb", domain: "taobao.com", note: "网页登录", home: URL(string: "https://www.taobao.com/") ),
         .init(id: "cainiao", title: "菜鸟", login: URL(string: "https://login.taobao.com/member/login.jhtml"), validCookie: "unb", domain: "taobao.com", note: "网页登录", home: URL(string: "https://www.cainiao.com/") ),
-        .init(id: "jd", title: "京东", login: URL(string: "https://plogin.m.jd.com/login/login?appid=0&returnurl=https%3A%2F%2Fhome.m.jd.com%2FmyJd%2Fnewhome.action"), validCookie: "pt_key", domain: "jd.com", note: "网页登录", home: URL(string: "https://m.jd.com/") ),
+        .init(id: "jd", title: "京东", login: URL(string: "https://plogin.m.jd.com/login/login?appid=100&returnurl=https%3A%2F%2Ftrade.m.jd.com%2Forder%2Forderlist_jdm.shtml"), validCookie: "pt_key", domain: "jd.com", note: "网页登录", home: URL(string: "https://m.jd.com/") ),
         .init(id: "pdd", title: "拼多多", login: URL(string: "https://m.pinduoduo.net/mdkd/package?tab=ID_CODE"), validCookie: "PDDAccessToken", domain: "yangkeduo.com", note: "网页登录", home: URL(string: "https://mobile.yangkeduo.com/") ),
         .init(id: "fengchao", title: "丰巢", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.fcbox.com/") ),
         .init(id: "mi", title: "小米快递聚合", login: nil, validCookie: nil, domain: nil, note: "平台入口", home: URL(string: "https://www.mi.com/") ),
@@ -950,6 +950,7 @@ struct PlatformWebLogin: UIViewRepresentable {
         private var completed = false
         private var verification: Task<Void, Never>?
         private var didLoadPage = false
+        private var jdOrderPageLoaded = false
 
         init(platformID: String, accountID: String?, onAuthenticated: @escaping () -> Void) {
             self.platformID = platformID
@@ -1001,6 +1002,11 @@ struct PlatformWebLogin: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             didLoadPage = true
+            if platformID == "jd" {
+                let host = webView.url?.host?.lowercased() ?? ""
+                let path = webView.url?.path.lowercased() ?? ""
+                jdOrderPageLoaded = host == "trade.m.jd.com" && path.contains("orderlist")
+            }
             if platformID == "pdd",
                let host = webView.url?.host,
                (host == "yangkeduo.com" || host.hasSuffix(".yangkeduo.com") ||
@@ -1038,6 +1044,7 @@ struct PlatformWebLogin: UIViewRepresentable {
                     ok = false
                 }
                 guard ok, !Task.isCancelled, !self.completed else { return }
+                if self.platformID == "jd" && !self.jdOrderPageLoaded { return }
                 self.completed = true
                 self.onAuthenticated()
             }

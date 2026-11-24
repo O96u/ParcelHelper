@@ -438,7 +438,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
     (function(){
       if (window.top!==window || !/(^|\.)jd\.com$/i.test(location.hostname)) return;
       if (window.ParcelHelperJD) return;
-      var stored=[], structured=false, logistics=null, revision=0;
+      var stored=[], structured=false, logistics=null, revision=0, responses=0, orderResponses=0;
       function clean(v,n){return typeof v==='string'?v.slice(0,n):String(v==null?'':v).slice(0,n);}
       function jdURL(raw){
         if(typeof raw!=='string'||!raw)return '';
@@ -508,7 +508,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             for(var i=0;i<Math.min(node.length,50);i++)walk(node[i],depth+1);
             return;
           }
-          if(Array.isArray(node.orderList)&&node.orderList.some(function(x){return x&&(x.orderId||x.orderid||x.dealId)})){
+          if(Array.isArray(node.orderList)&&(node.orderList.length===0||node.orderList.some(function(x){return x&&(x.orderId||x.orderid||x.dealId)}))){
             lists.push(node.orderList.slice(0,100));
           }
           Object.keys(node).slice(0,60).forEach(function(key){
@@ -518,6 +518,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         walk(root,0);
         if(!lists.length)return;
         structured=true;
+        orderResponses++;
         var rows={},count=0;
         lists.forEach(function(list){list.forEach(function(item){
           var out=order(item);
@@ -571,8 +572,9 @@ private struct NativeWebOrderReader: UIViewRepresentable {
       }
       function capture(raw){
         try{
+          responses++;
           var str=typeof raw==='string'?raw:JSON.stringify(raw);
-          if(!str||str.length>1800000)return;
+          if(!str||str.length>2097152)return;
           var hasOrders=str.indexOf('"orderList"')>=0;
           var hasLogs=str.indexOf('"tracePointVOList"')>=0;
           if(!hasOrders&&!hasLogs)return;
@@ -609,7 +611,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         return result;
       };
       window.ParcelHelperJD={
-        snapshot:function(){return {received:structured,orders:stored.slice(0,200),revision:revision}},
+        snapshot:function(){return {received:structured,orders:stored.slice(0,200),revision:revision,responses:responses,orderResponses:orderResponses}},
         logistics:function(){return logistics}
       };
     })()
@@ -636,7 +638,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
         let url = platform == "jd" ?
-            "https://trade.m.jd.com/order/orderlist_jdm.shtml?sceneval=2" :
+            "https://trade.m.jd.com/order/orderlist_jdm.shtml" :
             "https://h5.m.taobao.com/mlapp/olist.html"
         view.load(URLRequest(url: URL(string: url)!))
         return view
@@ -644,6 +646,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        coordinator.finished = true
         uiView.navigationDelegate = nil
         uiView.uiDelegate = nil
         uiView.stopLoading()
@@ -699,6 +702,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private var jdPreviousCount = 0
         private var jdStableReads = 0
         private var jdPendingTabAttempted = false
+        private var jdPageDiagnosticsLogged = false
         private var jdAccumulated: [String: WebOrder] = [:]
         var trackingReadAttempts = 0
         var missingTracking = 0
@@ -742,6 +746,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 scanning = false
                 structuredReadWaits = 0
                 emptyReadAttempts = 0
+                jdPageDiagnosticsLogged = false
             }
         }
         private func scheduleOrderRead(_ webView: WKWebView, after delay: TimeInterval) {
@@ -768,7 +773,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                         } else {
                             self.record("个人首页未找到订单入口，改用官方订单列表")
                             self.usedJDFallback = true
-                            if let url = URL(string: "https://trade.m.jd.com/order/orderlist_jdm.shtml?sceneval=2") {
+                            if let url = URL(string: "https://trade.m.jd.com/order/orderlist_jdm.shtml") {
                                 view.load(URLRequest(url: url))
                             }
                         }
@@ -798,6 +803,10 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     self.complete("订单列表解析失败，页面可能已变更")
                     return
                 }
+                if self.platform == "jd" && !self.jdPageDiagnosticsLogged {
+                    self.jdPageDiagnosticsLogged = true
+                    self.record("页面诊断：\(result.diagnostic ?? "无")")
+                }
                 if self.platform == "jd" && self.emptyReadAttempts == 0 && self.structuredReadWaits == 0 {
                     self.record("订单页环境：\(result.page ?? "未知")，官方接口：\(result.structured == true ? "已识别" : "未识别")")
                 }
@@ -806,9 +815,14 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 // the first DOM render. Let the document-start hook settle
                 // before treating a fragile DOM guess as the order list.
                 if self.platform == "jd" && result.structured != true &&
-                   self.structuredReadWaits < 3 && !result.login && !result.verify {
+                   self.structuredReadWaits < 8 && !result.login && !result.verify && result.problem == nil {
                     self.structuredReadWaits += 1
                     self.scheduleOrderRead(webView, after: 1.5)
+                    return
+                }
+                if self.platform == "jd", let problem = result.problem {
+                    self.record(problem == "busy" ? "京东官方订单服务繁忙" : "京东官方订单页加载异常")
+                    self.complete("京东官方订单页暂时不可用，请稍后重试或在授权页面核对订单")
                     return
                 }
                 if self.platform == "jd" && result.page == "登录页" {
@@ -1159,6 +1173,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             let source: String?
             let structured: Bool?
             let page: String?
+            let diagnostic: String?
+            let problem: String?
         }
         private static let openJDOrders = #"""
         (function(){
@@ -1289,7 +1305,17 @@ private struct NativeWebOrderReader: UIViewRepresentable {
            window.__NEXT_DATA__,window.pageData].forEach(function(v){
               try{walk(v,0)}catch(e){}
            });
+          var notice=document.querySelector&&document.querySelector('[class*="index-module__errorCon"]');
+          var noticeText=notice?String(notice.innerText||'').slice(0,500):'';
+          var problem=null;
+          if(!orders.length){
+            if(/大促异常火爆|快速通道|服务繁忙/.test(noticeText||body))problem='busy';
+            else if(/加载失败|无法加载|重新加载|网络异常|服务异常/.test(noticeText||body))problem='unavailable';
+          }
+          var host=location.hostname==='trade.m.jd.com'?'交易页域名':location.hostname==='my.m.jd.com'?'个人中心域名':location.hostname==='plogin.m.jd.com'?'登录域名':/(^|\.)jd\.com$/.test(location.hostname)?'其他京东域名':'非京东域名';
+          var diagnostic=host+'，文档'+(document.readyState||'未知')+'，正文长度'+body.length+'，捕获器'+(hooked?'已安装':'未安装')+'，响应'+(hooked?hooked.responses||0:0)+'，订单响应'+(hooked?hooked.orderResponses||0:0);
           return JSON.stringify({
+            diagnostic:diagnostic,problem:problem,
             login:/请登录|登录后查看|账号登录/.test(body)&&!orders.length,
             verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
             source:(hooked&&hooked.received?'官方接口 + ':'')+'属性'+stats.attrs+' 链接'+stats.links+' 页面状态'+stats.state,

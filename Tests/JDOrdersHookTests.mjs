@@ -58,6 +58,8 @@ xhr.send();
 
 const list = win.ParcelHelperJD.snapshot();
 assert.equal(list.received, true);
+assert.equal(list.orderResponses, 1);
+assert.equal(list.responses, 1);
 assert.equal(list.orders.length, 1, "instant delivery filtered");
 assert.equal(list.orders[0].id, normal.orderId);
 assert.equal(list.orders[0].link, normal.progressInfo.progressLink);
@@ -69,6 +71,8 @@ assert.equal(list.orders[0].title, "测试鞋子");
 const result = JSON.parse(vm.runInNewContext(orders, context));
 assert.equal(result.structured, true);
 assert.equal(result.orders.length, 1);
+assert.ok(result.diagnostic.includes("捕获器已安装"));
+assert.ok(result.diagnostic.includes("订单响应1"));
 
 const logisticsXHR = new FakeXHR();
 logisticsXHR.responseURL = "https://api.m.jd.com/client.action?functionId=get_logistics_list_by_order_m";
