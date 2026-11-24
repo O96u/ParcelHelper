@@ -223,6 +223,8 @@ struct IdentityDetailPage: View {
     @State private var fullScreen: IdentityPresentation?
     @State private var nextAttempt = Date.distantPast
     @State private var notice: String?
+    @State private var cainiaoOfficialFallback = false
+    @State private var officialRefresh = 0
     private let blue = Color(red: 0.19, green: 0.49, blue: 0.96)
     private var validCode: String? {
         guard let identity, identity.expiresAt > now, authorized,
@@ -272,7 +274,25 @@ struct IdentityDetailPage: View {
                         Text("管理默认账号").font(.subheadline)
                     }
                 }
-                if !authorized {
+                if platform == "cainiao" && cainiaoOfficialFallback {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("菜鸟官方身份码").font(.headline)
+                        Text("由官方页面自动换码，需要时请在页面内完成登录或验证。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        CainiaoOfficialIdentityWebView(accountID: identityAccountID)
+                            .id(identityAccountID + ":" + String(officialRefresh))
+                            .frame(height: 540)
+                            .background(Color.white, in: RoundedRectangle(cornerRadius: 14))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                        Button("重新尝试原生获取") {
+                            Task { await refresh(tryNative: true) }
+                        }
+                        .font(.footnote).disabled(fetching)
+                    }
+                    .padding(14)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 24))
+                } else if !authorized {
                     VStack(spacing: 15) {
                         Image(systemName: "person.badge.key")
                             .font(.system(size: 44)).foregroundStyle(blue)
@@ -390,7 +410,11 @@ struct IdentityDetailPage: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    Task { await refresh() }
+                    if platform == "cainiao" && cainiaoOfficialFallback {
+                        officialRefresh += 1
+                    } else {
+                        Task { await refresh() }
+                    }
                 } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
                 }.disabled(fetching)
@@ -422,44 +446,135 @@ struct IdentityDetailPage: View {
             Button("确定") { notice = nil }
         } message: { Text(notice ?? "") }
     }
-    @MainActor private func refresh() async {
+    @MainActor private func refresh(tryNative: Bool = false) async {
         guard !fetching else { return }
+        let requestedAccountID = ParcelAccounts.activeID(for: platform)
+        if platform == "cainiao" && cainiaoOfficialFallback &&
+            requestedAccountID == identityAccountID && !tryNative { return }
         fetching = true
         defer { fetching = false }
-        let requestedAccountID = ParcelAccounts.activeID(for: platform)
+        let generation = ParcelAccounts.syncGeneration(requestedAccountID)
         if requestedAccountID != identityAccountID {
             identity = nil
             authorized = false
+            cainiaoOfficialFallback = false
         }
+        if platform == "cainiao" { identityAccountID = requestedAccountID }
         authorized = await NativeParcelSync.hasIdentitySession(platform)
-        guard requestedAccountID == ParcelAccounts.activeID(for: platform) else {
+        guard requestedAccountID == ParcelAccounts.activeID(for: platform),
+              generation == ParcelAccounts.syncGeneration(requestedAccountID),
+              !Task.isCancelled else {
             identity = nil
+            cainiaoOfficialFallback = false
             return
         }
         guard authorized else {
             identity = nil
             failure = nil
+            if platform == "cainiao" {
+                cainiaoOfficialFallback = true
+                ParcelRunLog.record("菜鸟身份码", "原生会话不可用，打开官方身份码页面")
+            }
             return
         }
         do {
             let response = try await NativeParcelSync.identityCode(platform)
             guard requestedAccountID == ParcelAccounts.activeID(for: platform),
+                  generation == ParcelAccounts.syncGeneration(requestedAccountID),
+                  !Task.isCancelled,
                   !response.code.isEmpty, response.expiresAt > Date() else {
                 throw NativeSyncError.badResponse("接口未返回有效身份码")
             }
             identityAccountID = requestedAccountID
             identity = response
+            cainiaoOfficialFallback = false
+            if platform == "cainiao" { ParcelRunLog.record("菜鸟身份码", "原生接口已返回有效身份码") }
             now = Date()
             failure = nil
             nextAttempt = response.expiresAt
         } catch {
             // An expired/revoked code must never remain scannable.
             identity = nil
-            failure = error.localizedDescription
+            guard requestedAccountID == ParcelAccounts.activeID(for: platform),
+                  generation == ParcelAccounts.syncGeneration(requestedAccountID),
+                  !Task.isCancelled else {
+                cainiaoOfficialFallback = false
+                return
+            }
+            if platform == "cainiao" {
+                failure = nil
+                cainiaoOfficialFallback = true
+                ParcelRunLog.record("菜鸟身份码", "原生接口未获得有效身份码，切换官方页面")
+            } else {
+                failure = error.localizedDescription
+            }
         }
     }
 }
 
+// Reference: HandyCode CainiaoPage.java (official H5 entry). The page owns
+// the barcode, expiry, login and binding flow. No JS bridge or code scraping.
+private struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
+    let accountID: String
+    private static let entry = URL(string: "https://page.cainiao.com/cn-app-web/identity-code/index.html#/")!
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = ParcelAccounts.websiteDataStore(for: accountID)
+        configuration.defaultWebpagePreferences.preferredContentMode = .mobile
+        let web = WKWebView(frame: .zero, configuration: configuration)
+        web.navigationDelegate = context.coordinator
+        web.uiDelegate = context.coordinator
+        web.allowsBackForwardNavigationGestures = true
+        web.load(URLRequest(url: Self.entry, cachePolicy: .reloadIgnoringLocalCacheData))
+        return web
+    }
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
+        uiView.uiDelegate = nil
+    }
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        private func allows(_ url: URL?) -> Bool {
+            guard let url, url.scheme?.lowercased() == "https",
+                  url.user == nil, url.password == nil,
+                  url.port == nil || url.port == 443,
+                  let host = url.host?.lowercased() else { return false }
+            return ["cainiao.com", "taobao.com", "tmall.com", "alipay.com", "alibaba.com"].contains {
+                host == $0 || host.hasSuffix("." + $0)
+            }
+        }
+        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            if allows(action.request.url) ||
+                (action.targetFrame?.isMainFrame == false && action.request.url?.absoluteString == "about:blank") {
+                decisionHandler(.allow)
+            } else { decisionHandler(.cancel) }
+        }
+        func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                     decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+            if !response.isForMainFrame || allows(response.response.url) {
+                decisionHandler(.allow)
+            } else { decisionHandler(.cancel) }
+        }
+        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                     for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+            if action.targetFrame == nil && allows(action.request.url) { webView.load(action.request) }
+            return nil
+        }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            if webView.url?.host == "page.cainiao.com" {
+                ParcelRunLog.record("菜鸟身份码", "官方身份码页面已加载，等待页面自行显示")
+            }
+        }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            guard (error as NSError).code != NSURLErrorCancelled else { return }
+            ParcelRunLog.record("菜鸟身份码", "官方身份码页面加载失败，可手动刷新")
+        }
+    }
+}
 
 private struct IdentityFullScreenCode: View {
     @Environment(\.dismiss) private var dismiss

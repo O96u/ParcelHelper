@@ -803,14 +803,27 @@ enum SyncJSON {
                 "mtop.cainiao.nbpickup.identitycode.get",
                 data: ["appName": "GUOGUO", "verifyVersion": "V2"],
                 accountID: ParcelAccounts.activeID(for: "taobao"))
-            let model = SyncJSON.dict(identityData(response["data"])["model"])
-            let code = SyncJSON.str(model["identityCode"])
-            guard !code.isEmpty, code.count <= 1024 else {
+            let outer = identityData(response["data"])
+            let rawModel = outer["model"]
+            let model: [String: Any]
+            if let raw = rawModel as? String, let bytes = raw.data(using: .utf8),
+               let decoded = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] {
+                model = decoded
+            } else {
+                model = SyncJSON.dict(rawModel)
+            }
+            let code = SyncJSON.str(model["identityCode"]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (4...1024).contains(code.count),
+                  !code.hasPrefix("{"), !code.hasPrefix("["),
+                  !["null", "undefined", "true", "false", "invalid"].contains(code.lowercased()) else {
                 throw NativeSyncError.badResponse(
                     "菜鸟接口未返回有效身份码，请稍后重试或检查当前授权账号")
             }
             // The reference implementation treats expireTime as seconds.
-            let ttl = max(60, Double(SyncJSON.str(model["expireTime"])) ?? 600)
+            let ttl = Double(SyncJSON.str(model["expireTime"])) ?? 600
+            guard ttl.isFinite, ttl > 0, ttl <= 86400 else {
+                throw NativeSyncError.badResponse("菜鸟身份码有效期异常")
+            }
             return IdentityResult(
                 code: code,
                 expiresAt: Date().addingTimeInterval(ttl),
