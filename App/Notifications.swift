@@ -46,7 +46,11 @@ enum ParcelNotifications {
 
         let title: String
         let category: String
-        if isNewCompletion {
+        if current.hasDeliveryException && previous?.hasDeliveryException != true {
+            guard UserDefaults.standard.object(forKey: "native.reminder.exception") as? Bool ?? true else { return }
+            category = "exception"
+            title = "物流出现异常"
+        } else if isNewCompletion {
             guard UserDefaults.standard.object(forKey: "native.reminder.collected") as? Bool ?? true else { return }
             category = "collected"
             title = "包裹已取件"

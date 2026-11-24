@@ -171,6 +171,7 @@ struct Parcel: Codable, Identifiable, Hashable {
     }
     var displayStatus: String {
         if isDone { return "已取件" }
+        if let closed, !closed.isEmpty { return closed }
         if hasDeliveryException { return "物流异常" }
         if isSigned {
             return Self.confirmsFinalDelivery(currentTrackingText) ? "已送达" : "已签收"
@@ -186,6 +187,20 @@ struct Parcel: Codable, Identifiable, Hashable {
         return !codes.isEmpty
     }
     var isTransit: Bool { !isDone && !isSigned && !isPending && closed == nil }
+    var pickupDuration: TimeInterval? {
+        guard let pickedAt, let arrivedAt, pickedAt >= arrivedAt else { return nil }
+        return (pickedAt - arrivedAt) / 1000
+    }
+    var shippingDuration: TimeInterval? {
+        let dated = trackNodes.compactMap { node -> (Date, String)? in
+            guard let date = TrackMerge.date(node.time) else { return nil }
+            return (date, node.text)
+        }
+        let starts = dated.filter { ["已揽收", "揽收成功", "已收寄"].contains(where: $0.1.contains) }.map { $0.0 }
+        let ends = dated.filter { Parcel.confirmsFinalDelivery($0.1) || Parcel.confirmsRecipientPickup($0.1) || ["已入库", "已入柜", "已到站", "已签收"].contains(where: $0.1.contains) }.map { $0.0 }
+        guard let start = starts.min(), let end = ends.filter({ $0 >= start }).min() else { return nil }
+        return end.timeIntervalSince(start)
+    }
     var stationText: String { !courierStationName.isEmpty ? courierStationName : (!address.isEmpty ? address : "其他驿站") }
     var displayCode: String { code == mailNo ? "" : code }
 }

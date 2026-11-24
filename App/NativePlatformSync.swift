@@ -461,12 +461,12 @@ private enum SyncJSON {
             else { continue }
             // Latest provider state takes precedence over old route events.
             let currentStatus = row.latest.isEmpty ? (row.tracks.first?.text ?? "") : row.latest
-            let newestTrack = row.tracks.first?.text ?? ""
+            let newestTrack = TrackMerge.ordered(row.tracks).first?.text ?? ""
             let trackKind = arrivalKind(newestTrack)
             let kind = trackKind == "picked" ? "picked" : arrivalKind(currentStatus)
             let wasArrived = row.arrived || !code.isEmpty || kind == "arrived"
-            if ["已取消", "退款成功", "已关闭", "退货成功"].contains(where: { row.latest.contains($0) }) {
-                continue
+            let closure = ["已取消", "退款成功", "已关闭", "退货成功"].first {
+                row.latest.contains($0) || row.orderStatus.contains($0)
             }
             let normalizedMail = codeKey(mail)
             let previous = store.snapshot.parcels.first(where: {
@@ -477,6 +477,16 @@ private enum SyncJSON {
                 (mail.isEmpty && wasArrived && !code.isEmpty &&
                  codeKey($0.code) == codeKey(code) && $0.stationText == row.station)
             })
+            if let closure {
+                if var existing = previous, !existing.isDone, !existing.isSigned, existing.closed != closure {
+                    existing.closed = closure
+                    store.upsert(existing, persistNow: false)
+                    ParcelNotifications.cancel(existing.uuid)
+                    changed += 1
+                    updated += 1
+                }
+                continue
+            }
             // Do not create records from completed historical orders.
             // Existing records still receive completed/signed tracking updates.
             let finishedOrder = ["交易成功", "已完成", "确认收货", "已收货",
@@ -543,11 +553,12 @@ private enum SyncJSON {
             }
             if !row.eta.isEmpty && !wasArrived { p.eta = row.eta }
 
-            if !p.isDone && !p.pickedByUser {
-                if kind == "picked" {
+            if !p.pickedByUser {
+                if p.latestPickupConfirmed {
                     p.status = 2
-                    p.pickedAt = p.pickedAt ?? Date().timeIntervalSince1970 * 1000
-                } else if wasArrived && p.arrivedAt == nil {
+                    if p.pickedAt == nil, let node = TrackMerge.ordered(p.trackNodes).first,
+                       let date = TrackMerge.date(node.time) { p.pickedAt = date.timeIntervalSince1970 * 1000 }
+                } else if !p.isDone && !p.isSigned && wasArrived && p.arrivedAt == nil {
                     p.arrivedAt = Date().timeIntervalSince1970 * 1000
                 }
             }

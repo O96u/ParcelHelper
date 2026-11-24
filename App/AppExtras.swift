@@ -409,11 +409,14 @@ struct ParcelUpdatePage: View {
         var subsystem: String
         var event: String
         var level: String? = nil
+        var taskID: String? = nil
+        var elapsed: Double? = nil
         var severity: String { level ?? ParcelRunLog.classify(event) }
     }
 
     nonisolated static func classify(_ event: String) -> String {
-        if ["失败", "错误", "超时", "失效", "无法", "未完成"].contains(where: event.contains) { return "警告" }
+        if ["失败", "错误"].contains(where: event.contains) { return "错误" }
+        if ["超时", "失效", "无法", "未完成"].contains(where: event.contains) { return "警告" }
         if ["成功", "已完成", "读取结束", "已合并"].contains(where: event.contains) { return "成功" }
         return "信息"
     }
@@ -455,7 +458,7 @@ struct ParcelUpdatePage: View {
     private static func localized(_ entry: Entry) -> Entry {
         Entry(id: entry.id, date: entry.date,
               subsystem: displaySubsystem(entry.subsystem),
-              event: displayEvent(entry.event), level: entry.severity)
+              event: displayEvent(entry.event), level: entry.severity, taskID: entry.taskID, elapsed: entry.elapsed)
     }
 
     static func entries() -> [Entry] {
@@ -465,7 +468,7 @@ struct ParcelUpdatePage: View {
         return items.map(localized)
     }
 
-    static func record(_ subsystem: String, _ event: String, level: String? = nil) {
+    static func record(_ subsystem: String, _ event: String, level: String? = nil, taskID: String? = nil, elapsed: Double? = nil) {
         // Defense in depth: replace long identifiers and suspicious values in
         // case a future call accidentally includes a URL or raw platform error.
         func redact(_ raw: String) -> String {
@@ -484,7 +487,7 @@ struct ParcelUpdatePage: View {
         items.append(Entry(date: Date(),
                            subsystem: displaySubsystem(redact(subsystem)),
                            event: displayEvent(redact(event)),
-                           level: level ?? classify(event)))
+                           level: level ?? classify(event), taskID: taskID, elapsed: elapsed))
         if items.count > maximumEntries {
             items.removeFirst(items.count - maximumEntries)
         }
@@ -496,7 +499,9 @@ struct ParcelUpdatePage: View {
     static func export() -> String {
         let lines = entries().map { entry in
             let stamp = entry.date.formatted(date: .numeric, time: .standard)
-            return "[\(stamp)] [\(entry.subsystem)] [\(entry.severity)] \(entry.event)"
+            let context = entry.taskID.map { " [任务 " + $0 + "]" } ?? ""
+            let duration = entry.elapsed.map { String(format: " %.1f秒", $0) } ?? ""
+            return "[\(stamp)] [\(entry.subsystem)] [\(entry.severity)]" + context + " " + entry.event + duration
         }
         return (["ParcelHelper \(ParcelUpdateVersions.installed) · 本地运行日志",
                  "仅包含流程阶段、状态和数量，不包含登录凭据及订单详情。", ""]
@@ -568,7 +573,7 @@ struct ParcelUpdatePage: View {
 
             Section {
                 Picker("级别", selection: $selectedLevel) {
-                    ForEach(["全部", "信息", "成功", "警告"], id: \.self) { Text($0).tag($0) }
+                    ForEach(["全部", "信息", "成功", "警告", "错误"], id: \.self) { Text($0).tag($0) }
                 }.pickerStyle(.segmented)
                 if visibleRecords.isEmpty {
                     ContentUnavailableView("暂无运行日志",

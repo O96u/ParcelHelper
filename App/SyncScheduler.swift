@@ -31,6 +31,39 @@ import SwiftUI
         return await worker.value
     }
 
+    private static func refreshSubscriptions(force: Bool) async -> Int {
+        let store = ParcelStore.shared
+        let candidates = store.snapshot.parcels.filter {
+            $0.isTransit && !$0.hasDeliveryException && $0.mailNo != nil &&
+            ["clipboard", "kdniao", "kuaidi100", "public", ""].contains($0.source ?? "")
+        }.sorted { ($0.trackUpdatedAt ?? 0) < ($1.trackUpdatedAt ?? 0) }
+        var updated = 0
+        let now = Date().timeIntervalSince1970
+        for parcel in candidates.prefix(3) {
+            guard !Task.isCancelled, let mail = parcel.mailNo else { break }
+            let key = "native.subscription.at." + parcel.uuid
+            if !force && now - UserDefaults.standard.double(forKey: key) < Double(RefreshPolicy.minutes * 60) { continue }
+            UserDefaults.standard.set(now, forKey: key)
+            do {
+                let found = try await NativeTracking.lookup(mail, source: parcel.source,
+                    shipperCode: parcel.shipperCode ?? "", phone: NativeTracking.phone(for: mail),
+                    accountIDs: parcel.linkedAccounts ?? [])
+                guard !Task.isCancelled, var current = store.snapshot.parcels.first(where: { $0.uuid == parcel.uuid && $0.mailNo == mail }) else { continue }
+                let previous = current
+                TrackMerge.apply(to: &current, nodes: found.nodes, summary: found.latest)
+                current.trackUpdatedAt = Date().timeIntervalSince1970 * 1000
+                store.upsert(current, persistNow: false)
+                if current.hasSyncedContentChange(comparedTo: previous) {
+                    updated += 1
+                    await ParcelNotifications.notifyUpdate(previous: previous, current: current)
+                }
+            } catch {
+                ParcelRunLog.record("物流订阅", "本次查询失败，等待下一轮重试", level: "警告")
+            }
+        }
+        return updated
+    }
+
     private static func isCancelledRequest(_ error: Error) -> Bool {
         if error is CancellationError { return true }
         let ns = error as NSError
@@ -41,7 +74,10 @@ import SwiftUI
         var results: [String] = []
         var interrupted: [String] = []
 
-        ParcelRunLog.record("前台同步", force ? "手动刷新开始" : "按刷新间隔检查")
+        let taskID = String(UUID().uuidString.prefix(8))
+        let started = Date()
+        ParcelRunLog.record("前台同步", force ? "手动刷新开始" : "按刷新间隔检查", taskID: taskID)
+        defer { ParcelRunLog.record("前台同步", "任务结束", taskID: taskID, elapsed: Date().timeIntervalSince(started)) }
         for id in NativeParcelSync.platforms {
             if id == "mi" {
                 guard NativeMiExpress.hasSession else { continue }
@@ -80,6 +116,8 @@ import SwiftUI
             }
         }
 
+        let subscriptions = await refreshSubscriptions(force: force)
+        if subscriptions > 0 { results.append("已更新订阅物流 \(subscriptions) 件") }
         ParcelStore.shared.persist()
         ParcelRunLog.record("前台同步", "原生接口阶段结束；结果 \(results.count) 条，中断 \(interrupted.count) 条")
         // Only record a successful foreground refresh if a provider actually

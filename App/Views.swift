@@ -1413,8 +1413,17 @@ struct StatsHome: View {
         .background(PH.card, in: RoundedRectangle(cornerRadius: 24))
     }
 
+    private func durationLabel(_ values: [TimeInterval]) -> String {
+        guard !values.isEmpty else { return "暂无有效记录" }
+        return String(format: "%.1f 小时（%d 件）", values.reduce(0, +) / Double(values.count) / 3600, values.count)
+    }
+
     private var arrivalPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
+            let shipping = parcels.compactMap(\.shippingDuration)
+            let pickup = parcels.compactMap(\.pickupDuration)
+            LabeledContent("平均运输耗时", value: durationLabel(shipping))
+            LabeledContent("平均取件耗时", value: durationLabel(pickup))
             if let minutes = averageArrivalMinute {
                 HStack(alignment: .firstTextBaseline) {
                     Text(String(format: "%02d:%02d", minutes / 60, minutes % 60))
