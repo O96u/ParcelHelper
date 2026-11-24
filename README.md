@@ -43,12 +43,12 @@
 | 实时活动与小组件 | 灵动岛、锁屏实时活动及主屏幕小 / 中 / 大 WidgetKit 组件；显示本地包裹快照，App Group 共享依赖实际签名授权 |
 | 软件更新         | 前台定期检查 GitHub Releases、显示更新说明、下载 IPA 并交给 LCSign 等签名工具安装                         |
 | 运行日志         | 「设置 → 运行日志」查看最近 240 条同步阶段、数量与失败分类，可复制/清空；不采集账号凭据或完整运单信息     |
-| 本地保存         | 包裹数据默认保存在 App 沙盒 Documents；卸载或更换 Bundle Identifier 可能导致数据丢失，请先备份            |
+| 本地保存         | 包裹数据默认保存在 App 沙盒 Documents；卸载或更换 Bundle Identifier 可能导致数据丢失；目前不提供手动数据备份            |
 
 平台页面、私有接口及登录策略可能随时变化，**不保证所有订单均能同步**。京东网页同步逐笔查询物流，单笔页面超时会跳过继续下一笔；即使整轮未完成，已提取的有效物流也会保留，运行日志区分「部分保存」与「完整成功」。重要取件信息请以快递公司或平台官方页面为准。
 
 
-手动构建小组件：在仓库 Settings → Secrets and variables → Actions → Variables 中设置 `PH_WIDGET_GROUP`（填写自己的签名 App Group），之后 `widget_group` 可留空；临时填写时仅覆盖本次构建。
+手动构建小组件：在仓库 Settings → Secrets and variables → Actions → Variables 或 Secrets 中设置 `PH_WIDGET_GROUP`（填写自己的签名 App Group），之后 `widget_group` 可留空；临时填写时仅覆盖本次构建。
 
 ## 多账号管理
 
@@ -99,7 +99,7 @@
 | `scripts/create_dark_icon.swift` | 构建时生成深色 App 图标                                                  |
 | `docs/`                          | 小组件签名教程、鸣谢、宣传图及图标来源；删除重复的旧版本说明             |
 | `CHANGELOG.md`                   | 按版本归档的中文新增、修改、修复、优化及移除记录                       |
-| `Tests/`                         | 部分解析逻辑测试                                                         |
+| `Tests/`                         | 模型、解析、京东响应及性能回归测试                                                         |
 
 界面以 SwiftUI 为主；网页登录、剪贴板、远程请求和通知等仍会使用 WebKit、UIKit、Foundation、UserNotifications、ActivityKit 等原生 API。
 
@@ -126,3 +126,7 @@ ParcelHelper 在设计与实现中参考、借鉴了以下社区作品（感谢�
 ## 开源协议
 
 本项目源代码以 **GNU General Public License v3.0（GPL-3.0-only）** 发布，具体条款见 [LICENSE](LICENSE)。你可以在遵守 GPL-3.0 条款的前提下使用、研究、修改和再分发源代码；分发修改后的受 GPL 约束版本时，需要履行相应的源代码及许可义务。
+
+## 开发验证
+
+在仓库根目录运行 `bash scripts/run-regression-tests.sh`（Swift 编译器和 Node.js 22），使用本地合成样本验证数据模型、历史数据兼容、状态分类、剪贴板、抖音解析、京东订单及性能基线。GitHub Actions 中可手动执行 [PR Swift Build](../../actions/workflows/pr-validation.yml) 检查主 App 和小组件的模拟器编译；正式与手动 IPA 构建均在打包前执行同一套回归测试。普通 main 提交不会自动构建。实际平台授权、真机滑动、系统后台调度、灵动岛及签名后的 App Groups 仍需真机验证。

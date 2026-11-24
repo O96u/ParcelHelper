@@ -51,20 +51,11 @@ jobs:
           test -s build/release-notes.md
       - name: Generate dark App Icon like release workflow
         run: swift scripts/create_dark_icon.swift
-      - name: Run pure Swift model regression tests
-        run: |
-          swiftc -parse-as-library Shared/Models.swift Tests/ParcelModelTests.swift -o "${RUNNER_TEMP}/parcel-model-tests"
-          "${RUNNER_TEMP}/parcel-model-tests"
-      - name: Test clipboard tracking-number parsing
-        run: |
-          swiftc App/Parser.swift Tests/ClipboardParserTests.swift -o "${RUNNER_TEMP}/clipboard-tests"
-          "${RUNNER_TEMP}/clipboard-tests"
-      - name: Test Douyin parser
-        run: |
-          swiftc -parse-as-library Shared/Models.swift App/Parser.swift App/DouyinImport.swift Tests/DouyinParserTests.swift -o "${RUNNER_TEMP}/douyin-tests"
-          "${RUNNER_TEMP}/douyin-tests"
-      - name: Verify JD structured order hook
-        run: node Tests/JDOrdersHookTests.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 离线回归测试
+        run: bash scripts/run-regression-tests.sh
       - name: Verify app and widget compile
         run: |
           set -o pipefail

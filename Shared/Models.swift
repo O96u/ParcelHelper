@@ -222,9 +222,9 @@ struct Parcel: Codable, Identifiable, Hashable {
     }
     static func isStationArrival(_ text: String) -> Bool {
         let station = ["驿站", "代收点", "快递柜", "自提点", "自提柜", "取件点"]
-        let handoff = ["已派送至", "派送成功", "已签收", "已送达", "已到达", "已放入", "已存放", "已入库", "已暂存", "已代收", "待取件", "请取件", "送达代收点"]
+        let handoff = ["已派送至", "派送成功", "已签收", "代签收", "代为签收", "驿站签收", "快递柜签收", "已送达", "已到达", "已放入", "已存放", "已入库", "已暂存", "已代收", "待取件", "请取件", "送达代收点"]
         return !isReturn(text) && !confirmsRecipientPickup(text) && !confirmsPersonalSignature(text) &&
-            !["正在派送", "派送途中", "即将送达", "将送达", "预计送达"].contains(where: text.contains) &&
+            !["正在派送", "派送途中", "即将送达", "将送达", "预计送达", "预计到达", "即将到达", "尚未到达", "尚未入库"].contains(where: text.contains) &&
             (["待取件", "已到站", "待自提", "待领取", "已入柜"].contains(where: text.contains) ||
              (station.contains(where: text.contains) && handoff.contains(where: text.contains)))
     }

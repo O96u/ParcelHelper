@@ -1067,10 +1067,10 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     let prefix = (account == ParcelAccounts.legacyID("jd") ? "jd" : "jd:" + account) + ":"
                     var knownIDs = Set(available.map(\.id))
                     let existing = ParcelStore.shared.snapshot.parcels.filter {
-                        ($0.isTransit || $0.isPending) && ($0.orderId ?? "").hasPrefix(prefix)
+                        ($0.isTransit || $0.isPending) && $0.allOrderIDs.contains(where: { $0.hasPrefix(prefix) })
                     }.sorted { ($0.trackUpdatedAt ?? 0) < ($1.trackUpdatedAt ?? 0) }
                     for parcel in existing.prefix(5) {
-                        let id = String((parcel.orderId ?? "").dropFirst(prefix.count))
+                        let id = String((parcel.allOrderIDs.first(where: { $0.hasPrefix(prefix) }) ?? "").dropFirst(prefix.count))
                         guard id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil,
                               knownIDs.insert(id).inserted else { continue }
                         available.insert(WebOrder(id: id, title: parcel.itemTitle ?? "", status: "", sku: "", shop: ""), at: 0)
@@ -1081,7 +1081,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     let account = self.accountID ?? ParcelAccounts.activeID(for: self.platform)
                     let prefix = account == ParcelAccounts.legacyID(self.platform) ? self.platform : self.platform + ":" + account
                     let known = ParcelStore.shared.snapshot.parcels.contains {
-                        $0.orderId == prefix + ":" + order.id && !$0.isDone && !$0.isSigned
+                        $0.allOrderIDs.contains(prefix + ":" + order.id) && !$0.isDone && !$0.isSigned
                     }
                     if known { return true }
                     return !["退款", "已关闭", "已完成", "交易成功", "已收货", "已取件", "确认收货"].contains {

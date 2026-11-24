@@ -196,6 +196,17 @@ jobs:
           echo "- **Xcode**: ${version} · **iOS SDK**: ${sdk_version}" >> "$GITHUB_STEP_SUMMARY"
           xcodebuild -list -project ParcelHelper.xcodeproj
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 发布前离线回归测试
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          bash scripts/run-regression-tests.sh 2>&1 | tee build/regression-tests.log
+          echo '- **离线回归测试**：通过' >> "$GITHUB_STEP_SUMMARY"
+
       - name: 编译主程序与 WidgetKit 扩展
         shell: bash
         run: |

@@ -119,6 +119,26 @@ struct ParcelModelTests {
         precondition(ParcelStatistics.circularMeanMinute([1430, 10]) == 0)
         precondition(ParcelStatistics.circularMeanMinute([0, 720]) == nil)
         precondition(ParcelStatistics.circularMeanMinute([600, 660]) == 630)
-        print("PASS: parcel content, pickup classification, exceptions, durations, statistics and stale tracking merge")
+        var legacyJSON = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(initial)) as! [String: Any]
+        legacyJSON.removeValue(forKey: "linkedOrderIDs")
+        legacyJSON.removeValue(forKey: "retainedLocally")
+        let decodedLegacy = try! JSONDecoder().decode(Parcel.self, from: JSONSerialization.data(withJSONObject: legacyJSON))
+        precondition(decodedLegacy.linkedOrderIDs == nil && decodedLegacy.retainedLocally == nil)
+        for (text, expected) in [
+            ("驿站代签收", "待取件"),
+            ("快递柜签收", "待取件"),
+            ("预计到达菜鸟驿站", "运输中"),
+            ("已派送至本人", "已送达"),
+            ("您已取走", "已取件"),
+            ("包裹退回中", "退回中"),
+            ("派送异常", "物流异常")
+        ] {
+            var parcel = Parcel()
+            parcel.trackLatest = text
+            precondition(parcel.displayStatus == expected, "Wrong status: \(text)")
+            let groups = [parcel.isPending, parcel.isTransit, parcel.isSigned, parcel.isDone, parcel.isOtherStatus]
+            precondition(groups.filter { $0 }.count == 1, "Status groups must be exclusive")
+        }
+        print("PASS: parcel content, pickup classification, exceptions, durations, statistics, legacy decoding and stale tracking merge")
     }
 }

@@ -421,7 +421,6 @@ struct NativeTrackLookup {
             throw NativeSyncError.unavailable("快递鸟没有返回这笔运单的有效物流轨迹")
         }
         if !tail.isEmpty { savePhone(tail,mail:mail) }
-        remember(mail)
         return NativeTrackLookup(mailNo:mail,company:company,shipperCode:chosen,
                                  latest:latest,nodes:Array(traces),provider:"快递鸟")
     }

@@ -144,4 +144,25 @@ pending.responseURL = "https://api.m.jd.com/client.action?functionId=order_list_
 pending.responseText = JSON.stringify({body:{orderList:[{orderId:"777788889999",orderStatusInfo:{orderStatusName:"待收货"},progressInfo:{subContent:"商品正在配送"}}]}});
 pending.send();
 assert.equal(win.ParcelHelperJD.snapshot().orders.find(x=>x.id==="777788889999")?.verified,true);
-console.log("PASS: JD document-start hook, active delivery, structured link, pickup code, logistics, origin guard and instant filter");
+const explicitPickup = new FakeXHR();
+explicitPickup.responseURL = "https://api.m.jd.com/client.action?functionId=get_logistics_list_by_order_m";
+explicitPickup.responseText = JSON.stringify({body:{
+  carriageId:"SF123456789012", carrier:"顺丰速运",
+  pickupCode:"8-1-12345", stationName:"测试驿站",
+  tracePointVOList:[{createTime:"2026-11-24 12:00", wlStateDesc:"已到站"}]
+}});
+explicitPickup.send();
+assert.equal(win.ParcelHelperJD.logistics().pickup, "8-1-12345");
+assert.equal(win.ParcelHelperJD.logistics().station, "测试驿站");
+const empty = new FakeXHR();
+empty.responseURL = "https://api.m.jd.com/client.action?functionId=order_list_m";
+empty.responseText = JSON.stringify({body:{orderList:[]}});
+const countBeforeEmpty = win.ParcelHelperJD.snapshot().orders.length;
+empty.send();
+assert.equal(win.ParcelHelperJD.snapshot().orders.length,countBeforeEmpty);
+const busy = JSON.parse(vm.runInNewContext(orders,{
+  window:{}, location, document:{body:{innerText:"服务繁忙，请稍后重试"}, querySelectorAll:()=>[]}
+}));
+assert.equal(busy.problem,"busy");
+assert.equal(busy.orders.length,0);
+console.log("PASS: JD order fixtures, pagination, explicit pickup, empty responses, busy page and origin isolation");
