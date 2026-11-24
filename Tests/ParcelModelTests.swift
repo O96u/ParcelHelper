@@ -62,13 +62,24 @@ struct ParcelModelTests {
         incoming = initial
         incoming.arrivedAt = 42
         incoming.trackLatest = "派送异常，退回寄件人"
-        precondition(incoming.hasDeliveryException && !incoming.isPending && incoming.displayStatus == "物流异常")
+        precondition(incoming.hasDeliveryException && !incoming.isPending && incoming.displayStatus == "退回中")
         incoming = initial
         incoming.arrivedAt = 1000
         incoming.pickedAt = 3601000
         precondition(incoming.pickupDuration == 3600)
         incoming.closed = "已取消"
         precondition(!incoming.isPending && !incoming.isTransit && incoming.displayStatus == "已取消")
+        incoming = initial
+        incoming.trackLatest = "快件已派送成功（14栋代收点）"
+        precondition(incoming.isPending && !incoming.isSigned)
+        incoming.trackLatest = "您的快件已派送至本人，如有疑问请联系快递员"
+        precondition(incoming.isSigned && !incoming.isTransit)
+        incoming.trackLatest = "包裹退回中"
+        precondition(incoming.displayStatus == "退回中" && !incoming.isTransit)
+        incoming = initial
+        TrackMerge.apply(to: &incoming, nodes: [newest], summary: newest.text)
+        TrackMerge.apply(to: &incoming, nodes: [], summary: "已派送成功（14栋代收点）")
+        precondition(incoming.isPending && !incoming.isSigned)
         print("PASS: parcel content, pickup classification, exceptions, durations and stale tracking merge")
     }
 }

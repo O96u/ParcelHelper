@@ -82,10 +82,10 @@ enum TrackMerge {
         } else if parcel.trackLatest?.isEmpty != false {
             parcel.trackLatest = old.first?.text ?? incoming.first?.text
         }
-        if nodes.isEmpty, Parcel.isStationArrival(summary),
-           !Parcel.confirmsFinalDelivery(old.first?.text ?? ""),
-           !Parcel.confirmsRecipientPickup(old.first?.text ?? ""),
-           !Parcel.isReturn(old.first?.text ?? "") {
+        if Parcel.isStationArrival(summary),
+           !Parcel.confirmsFinalDelivery(latest(parcel.trackNodes)?.text ?? ""),
+           !Parcel.confirmsRecipientPickup(latest(parcel.trackNodes)?.text ?? ""),
+           !Parcel.isReturn(latest(parcel.trackNodes)?.text ?? "") {
             parcel.trackLatest = summary
         }
     }
@@ -238,7 +238,7 @@ struct Parcel: Codable, Identifiable, Hashable {
         // The original model requires a real pickup code or arrival timestamp.
         return !codes.isEmpty
     }
-    var isTransit: Bool { !isDone && !isSigned && !isPending && closed == nil }
+    var isTransit: Bool { !isDone && !isSigned && !isPending && !Self.isReturn(currentTrackingText) && closed == nil }
     var pickupDuration: TimeInterval? {
         guard let pickedAt, let arrivedAt, pickedAt >= arrivedAt else { return nil }
         return (pickedAt - arrivedAt) / 1000

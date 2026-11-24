@@ -636,7 +636,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
         let url = platform == "jd" ?
-            "https://my.m.jd.com/index.html?sceneval=2" :
+            "https://trade.m.jd.com/order/orderlist_jdm.shtml?sceneval=2" :
             "https://h5.m.taobao.com/mlapp/olist.html"
         view.load(URLRequest(url: URL(string: url)!))
         return view
@@ -698,6 +698,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private var jdPageReads = 0
         private var jdPreviousCount = 0
         private var jdStableReads = 0
+        private var jdPendingTabAttempted = false
         private var jdAccumulated: [String: WebOrder] = [:]
         var trackingReadAttempts = 0
         var missingTracking = 0
@@ -755,7 +756,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             guard !finished else { return }
             if stage == .orderList && !scanning {
                 scanning = true
-                if platform == "jd" && !usedJDFallback &&
+                if platform == "jd" &&
                    webView.url?.host?.lowercased() == "my.m.jd.com" {
                     let version = orderPageVersion
                     webView.evaluateJavaScript(Self.openJDOrders) { [weak self, weak webView] value, _ in
@@ -823,6 +824,19 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 if result.login {
                     self.record("订单页出现登录提示，当前网页会话失效")
                     self.complete("未检测到有效账号登录，请先授权")
+                    return
+                }
+                if self.platform == "jd", result.page == "订单页", !self.jdPendingTabAttempted {
+                    self.jdPendingTabAttempted = true
+                    webView.evaluateJavaScript(Self.jdSelectPending) { [weak self, weak webView] value, _ in
+                        guard let self, let webView, !self.finished,
+                              self.stage == .orderList, self.orderPageVersion == version else { return }
+                        if value as? Bool == true {
+                            self.jdAccumulated.removeAll()
+                            self.record("已切换官方待收货筛选")
+                        }
+                        self.scheduleOrderRead(webView, after: 2.5)
+                    }
                     return
                 }
                 var available = result.orders
@@ -907,11 +921,11 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                         return
                     }
                     if self.platform == "jd" && !self.usedJDFallback {
-                        self.record("列表无匹配订单，尝试官方全部订单列表")
+                        self.record("官方订单列表无结果，尝试个人中心备用入口")
                         self.usedJDFallback = true
                         self.emptyReadAttempts = 0
                         self.scanning = false
-                        if let url = URL(string: "https://trade.m.jd.com/order/orderlist_jdm.shtml?sceneval=2") {
+                        if let url = URL(string: "https://my.m.jd.com/index.html?sceneval=2") {
                             webView.load(URLRequest(url: url))
                             return
                         }
@@ -1146,6 +1160,17 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         // JD uses multiple H5 layouts: old data-eparam cards, newer anchor
         // links, and client-side initial state. Read only the current signed-in
         // official page; no private API calls or login/session bypass.
+        private static let jdSelectPending = #"""
+        (function(){
+          var candidates=Array.from(document.querySelectorAll('a,button,[role="tab"],[class*="tab"]'));
+          var tab=candidates.find(function(el){
+            return /^(待收货|等待收货)$/.test((el.textContent||'').trim()) && el.getClientRects().length &&
+              !/active|selected|current/i.test(el.className||'') && el.getAttribute('aria-selected')!=='true';
+          });
+          if(!tab)return false;
+          tab.click();return true;
+        })()
+        """#
         private static let jdLoadNextPage = #"""
         (function(){
           var candidates=Array.from(document.querySelectorAll('button,a,[role="button"]'));

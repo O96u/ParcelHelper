@@ -38,6 +38,7 @@ import SwiftUI
             ["clipboard", "kdniao", "kuaidi100", "public", ""].contains($0.source ?? "")
         }.sorted { ($0.trackUpdatedAt ?? 0) < ($1.trackUpdatedAt ?? 0) }
         var updated = 0
+        var queried = false
         let now = Date().timeIntervalSince1970
         for parcel in candidates.prefix(3) {
             guard !Task.isCancelled, let mail = parcel.mailNo else { break }
@@ -53,6 +54,7 @@ import SwiftUI
                 TrackMerge.apply(to: &current, nodes: found.nodes, summary: found.latest)
                 current.trackUpdatedAt = Date().timeIntervalSince1970 * 1000
                 store.upsert(current, persistNow: false)
+                queried = true
                 if current.hasSyncedContentChange(comparedTo: previous) {
                     updated += 1
                     await ParcelNotifications.notifyUpdate(previous: previous, current: current)
@@ -61,6 +63,7 @@ import SwiftUI
                 ParcelRunLog.record("物流订阅", "本次查询失败，等待下一轮重试", level: "警告")
             }
         }
+        if queried { store.persist() }
         return updated
     }
 
@@ -118,7 +121,6 @@ import SwiftUI
 
         let subscriptions = await refreshSubscriptions(force: force)
         if subscriptions > 0 { results.append("已更新订阅物流 \(subscriptions) 件") }
-        if subscriptions > 0 { ParcelStore.shared.persist() }
         ParcelRunLog.record("前台同步", "原生接口阶段结束；结果 \(results.count) 条，中断 \(interrupted.count) 条")
         // Only record a successful foreground refresh if a provider actually
         // succeeded. A failed or empty pass must not claim fresh logistics.
