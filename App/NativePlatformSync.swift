@@ -16,7 +16,7 @@ enum NativeSyncError: LocalizedError {
         }
     }
 }
-struct NativeSyncParcel {
+struct NativeSyncParcel: Sendable {
     var source: String
     var accountID: String = ""
     var orderID: String = ""
@@ -263,6 +263,7 @@ enum SyncJSON {
     static let platforms = ["pdd", "cainiao", "fengchao", "mi"]
     // Throttle user-triggered refreshes too: no bursts into private endpoints.
     static let minGap: TimeInterval = 30
+    private static var activeJobs = Set<String>()
 
     static func run(_ id: String, force: Bool = false,
                     accountID: String? = nil) async throws -> NativeSyncResult {
@@ -273,6 +274,13 @@ enum SyncJSON {
             throw NativeSyncError.unavailable("拼多多同步已暂停，以保护官方 App 的登录状态。可在拼多多账号详情手动开启。")
         }
         let selected = accountID ?? ParcelAccounts.activeID(for: id)
+        let generation = ParcelAccounts.syncGeneration(selected)
+        guard id == "mi" || ParcelAccounts.canSync(id, accountID: selected) else { throw CancellationError() }
+        let job = id + "|" + selected
+        guard activeJobs.insert(job).inserted else {
+            throw NativeSyncError.unavailable("该账号已有同步任务")
+        }
+        defer { activeJobs.remove(job) }
         let key = "native.sync.at." + id + "." + selected
         let retryKey = "native.sync.retryAfter." + id + "." + selected
         let failuresKey = "native.sync.failures." + id + "." + selected
@@ -332,12 +340,22 @@ enum SyncJSON {
             }
             else if id == "fengchao" { incoming = try await NativeFengchao.packages(accountID: selected) }
             else { incoming = try await NativeMiExpress.packages() }
+            let prepared = await Task.detached(priority: .utility) {
+                incoming.map { value in
+                    var row = value
+                    row.tracks = TrackMerge.ordered(value.tracks)
+                    return row
+                }
+            }.value
             // A background expiration must not merge stale results or update
             // sync-success state after its parent task was cancelled.
             try Task.checkCancellation()
             if id != "mi" {
                 let kind = id == "cainiao" ? "taobao" : id
-                guard ParcelAccounts.accounts(for: kind).contains(where: { $0.id == selected }) else {
+                guard ParcelAccounts.canSync(kind, accountID: selected),
+                      ParcelAccounts.syncGeneration(selected) == generation,
+                      id != "pdd" || PddAccountProtection.webAccessAllowed,
+                      id != "cainiao" || (UserDefaults.standard.object(forKey: "native.platform.enabled.cainiao") as? Bool) != false else {
                     // A removed account can finish an in-flight network
                     // request; never restore its deleted parcels afterward.
                     throw CancellationError()
@@ -345,7 +363,7 @@ enum SyncJSON {
             }
             let baselineKey = "native.sync.baseline." + id + "." + selected
             let hadBaseline = UserDefaults.standard.bool(forKey: baselineKey)
-            let count = merge(incoming, notifyNewArrival: hadBaseline)
+            let count = merge(prepared, notifyNewArrival: hadBaseline)
             UserDefaults.standard.set(true, forKey: baselineKey)
             let result = NativeSyncResult(
                 name: id == "pdd" ? "拼多多驿站包裹" : (id == "cainiao" ? "菜鸟" : (id == "fengchao" ? "丰巢" : "小米")),
@@ -358,15 +376,14 @@ enum SyncJSON {
             UserDefaults.standard.set(syncedAt, forKey: "native.home.lastRefresh")
             UserDefaults.standard.removeObject(forKey: retryKey)
             UserDefaults.standard.removeObject(forKey: failuresKey)
-            if ParcelStore.shared.snapshot.preferences.liveActivityEnabled {
-                await LiveActivityCoordinator.update(with: ParcelStore.shared.snapshot.parcels)
-            }
             return result
         } catch {
             // Cancellation is a scheduler decision, not a provider failure.
             // Propagate it so the background task can stop without poisoning
             // the account's exponential backoff.
-            if error is CancellationError { throw error }
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            if id != "mi" && (!ParcelAccounts.canSync(id, accountID: selected) ||
+                ParcelAccounts.syncGeneration(selected) != generation) { throw CancellationError() }
             let nsError = error as NSError
             if nsError.domain == NSURLErrorDomain &&
                nsError.code == NSURLErrorCancelled { throw error }
@@ -441,7 +458,10 @@ enum SyncJSON {
         var inserted = 0
         var updated = 0
         var historicalSkipped = 0
+        let cutoff = Date().timeIntervalSince1970 * 1000 - 14 * 24 * 3600 * 1000
         for row in rows {
+            if !row.accountID.isEmpty && row.source != "mi",
+               !ParcelAccounts.canSync(row.source, accountID: row.accountID) { continue }
             let mail = row.mailNo.trimmingCharacters(in: .whitespacesAndNewlines)
             let code = normalizedCode(row.code)
             let verifiedOrderProgress = row.source == "jd" &&
@@ -470,14 +490,21 @@ enum SyncJSON {
                 row.latest.contains($0) || row.orderStatus.contains($0)
             }
             let normalizedMail = codeKey(mail)
-            let previous = working.first(where: {
-                (!normalizedMail.isEmpty && codeKey($0.mailNo ?? "") == normalizedMail) ||
-                (!orderKey.isEmpty && $0.orderId == orderKey &&
-                 (mail.isEmpty || ($0.mailNo ?? "").isEmpty ||
-                  codeKey($0.mailNo ?? "") == codeKey(mail))) ||
-                (mail.isEmpty && wasArrived && !code.isEmpty &&
-                 codeKey($0.code) == codeKey(code) && $0.stationText == row.station)
-            })
+            let byMail = normalizedMail.isEmpty ? nil : working.first {
+                codeKey($0.mailNo ?? "") == normalizedMail
+            }
+            let byOrder = orderKey.isEmpty ? nil : working.first {
+                $0.allOrderIDs.contains(orderKey) &&
+                    (mail.isEmpty || ($0.mailNo ?? "").isEmpty ||
+                     codeKey($0.mailNo ?? "") == normalizedMail)
+            }
+            let byCode = (wasArrived && !code.isEmpty && !row.station.isEmpty &&
+                row.station != "其他驿站") ? working.first {
+                    ($0.mailNo ?? "").isEmpty && $0.isPending && $0.createdAt >= cutoff &&
+                    codeKey($0.code) == codeKey(code) && $0.stationText == row.station &&
+                    (($0.linkedAccounts ?? []).isEmpty || $0.linkedAccounts?.contains(scopedAccount) == true)
+            } : nil
+            let previous = byMail ?? byOrder ?? byCode
             if let closure {
                 if var existing = previous, !existing.isDone, !existing.isSigned, existing.closed != closure {
                     existing.closed = closure
@@ -517,13 +544,21 @@ enum SyncJSON {
             if previous == nil && !wasArrived && row.latest.isEmpty && row.tracks.isEmpty { continue }
             var p = previous ?? Parcel()
             let priorSource = p.source
-            if p.orderId == nil && !orderKey.isEmpty { p.orderId = orderKey }
+            if let previous, (previous.linkedAccounts ?? []).isEmpty,
+               previous.orderId == nil,
+               !["jd", "taobao", "pdd", "cainiao", "fengchao", "mi"].contains(previous.source ?? "") {
+                p.retainedLocally = true
+            }
+            if !orderKey.isEmpty {
+                if p.orderId == nil || p.orderId?.isEmpty == true { p.orderId = orderKey }
+                p.linkedOrderIDs = Array(Set(p.allOrderIDs + [orderKey])).sorted()
+            }
             if !scopedAccount.isEmpty {
                 var owners = Set(p.linkedAccounts ?? [])
                 owners.insert(scopedAccount)
                 p.linkedAccounts = owners.sorted()
             }
-            if p.mailNo == nil && !mail.isEmpty { p.mailNo = mail }
+            if (p.mailNo ?? "").isEmpty && !mail.isEmpty { p.mailNo = mail }
 
             if priorSource == nil || priorSource?.isEmpty == true ||
                 (!isAggregator(row.source) && isAggregator(priorSource)) {
@@ -534,10 +569,11 @@ enum SyncJSON {
             }
             if (p.itemTitle == nil || p.itemTitle?.isEmpty == true ||
                 p.itemTitle == "拼多多订单"), !row.title.isEmpty { p.itemTitle = row.title }
-            if (p.trackCompany == nil || p.trackCompany?.isEmpty == true), !row.company.isEmpty {
+            if (p.trackCompany == nil || p.trackCompany?.isEmpty == true ||
+                ["其他快递", "快递包裹", "未知", "未知快递"].contains(p.trackCompany ?? "")), !row.company.isEmpty {
                 p.trackCompany = row.company
             }
-            if !row.station.isEmpty {
+            if !row.station.isEmpty && row.station != "其他驿站" {
                 p.courierStationName = row.station
                 if let station = StationMatcher.match(store.snapshot.stations,
                     text: [row.station, row.latest].joined(separator: " ")) {
@@ -570,10 +606,12 @@ enum SyncJSON {
             if p.pickedByUser { p.status = 2 }
             // Missing title, ETA, source app, order ID or receiver changes
             // here previously caused genuine server updates to be discarded.
-            if p.hasSyncedContentChange(comparedTo: previous) {
+            let contentChanged = p.hasSyncedContentChange(comparedTo: previous)
+            if contentChanged || p.trackUpdatedAt != previous?.trackUpdatedAt {
                 pendingWrites.append(p)
                 if let index = working.firstIndex(where: { $0.uuid == p.uuid }) { working[index] = p }
                 else { working.insert(p, at: 0) }
+                guard contentChanged else { continue }
                 if previous != nil {
                     notificationChanges.append((previous, p))
                 } else if notifyNewArrival && p.isPending && newArrivalNotifications < 3 {
@@ -586,7 +624,7 @@ enum SyncJSON {
                 if previous == nil { inserted += 1 } else { updated += 1 }
             }
         }
-        if changed > 0 { store.applySyncBatch(pendingWrites) }
+        if !pendingWrites.isEmpty { store.applySyncBatch(pendingWrites) }
         if !notificationChanges.isEmpty {
             let changes = notificationChanges
             Task { await ParcelNotifications.notifyBatch(changes) }

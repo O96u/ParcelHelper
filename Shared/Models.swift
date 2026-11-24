@@ -1,6 +1,6 @@
 import Foundation
 
-struct TrackNode: Codable, Hashable, Identifiable {
+struct TrackNode: Codable, Hashable, Identifiable, Sendable {
     var time: String
     var text: String
     var id: String { "\(time)-\(text)" }
@@ -82,7 +82,8 @@ enum TrackMerge {
         } else if parcel.trackLatest?.isEmpty != false {
             parcel.trackLatest = old.first?.text ?? incoming.first?.text
         }
-        if Parcel.isStationArrival(summary),
+        if (oldDate == nil || newDate == nil || accept || newDate == oldDate),
+           Parcel.isStationArrival(summary),
            !Parcel.confirmsFinalDelivery(latest(parcel.trackNodes)?.text ?? ""),
            !Parcel.confirmsRecipientPickup(latest(parcel.trackNodes)?.text ?? ""),
            !Parcel.isReturn(latest(parcel.trackNodes)?.text ?? "") {
@@ -121,6 +122,11 @@ struct Parcel: Codable, Identifiable, Hashable {
     var receiverName: String? = nil
     var receiverPhone: String? = nil
     var orderId: String? = nil
+    var linkedOrderIDs: [String]? = nil
+    var retainedLocally: Bool? = nil
+    var allOrderIDs: [String] {
+        Array(Set((linkedOrderIDs ?? []) + [orderId ?? ""]).subtracting([""])).sorted()
+    }
     var pickedByUser: Bool = false
     var eta: String? = nil
     var etaAt: Double? = nil
@@ -155,7 +161,7 @@ struct Parcel: Codable, Identifiable, Hashable {
         let terms = ["您已取件", "您已取走", "用户已取", "用户取件成功",
                      "取件成功", "取件完成", "完成取件", "已取走",
                      "包裹已取走", "已被取走", "已领取", "已被领取",
-                     "本人签收", "收件人已取", "收件人取件", "已从驿站取出",
+                     "收件人已取", "收件人取件", "已从驿站取出",
                      "已从代收点取出", "已从快递柜取出", "已从自提点取出",
                      "快件已取出签收", "包裹已取出签收", "取出并签收"]
         return terms.contains(where: text.contains)
@@ -176,7 +182,7 @@ struct Parcel: Codable, Identifiable, Hashable {
            !Self.isReturn(latest) { return summary }
         return latest
     }
-    var isDone: Bool { status == 2 || pickedByUser || latestPickupConfirmed }
+    var isDone: Bool { lifecycle == .picked }
     /// Some JD doorstep deliveries say "您的订单已送达" without "已签收".
     /// Arrival at a pickup location is not confirmation of recipient delivery.
     static func confirmsFinalDelivery(_ text: String) -> Bool {
@@ -194,14 +200,11 @@ struct Parcel: Codable, Identifiable, Hashable {
     }
     // The courier marked this package delivered, not necessarily picked up
     // personally. Do not conflate signature and user's pickup.
-    var isSigned: Bool {
-        guard !isDone else { return false }
+    private static func signedText(_ text: String) -> Bool {
         let excluded = ["待签收", "等待签收", "签收中", "未签收", "代签收",
                         "代为签收", "驿站签收", "网点签收", "快递柜签收", "暂存签收"]
         let signed = ["已签收", "签收成功", "已妥投", "本人签收",
                       "收件人签收", "已完成签收", "已送达收件人"]
-        // Also inspect route history when the summary has not caught up.
-        let text = currentTrackingText
         if Self.confirmsPersonalSignature(text) { return !Self.isReturn(text) }
         return !Self.isStationArrival(text) && !Self.isReturn(text) &&
             !excluded.contains(where: text.contains) &&
@@ -225,30 +228,43 @@ struct Parcel: Codable, Identifiable, Hashable {
             (["待取件", "已到站", "待自提", "待领取", "已入柜"].contains(where: text.contains) ||
              (station.contains(where: text.contains) && handoff.contains(where: text.contains)))
     }
-    var hasDeliveryException: Bool {
+    private enum Lifecycle { case picked, signed, pending, transit, returned, exception, closed }
+    private var lifecycle: Lifecycle {
+        if pickedByUser || status == 2 { return .picked }
+        if let closed, !closed.isEmpty { return .closed }
         let text = currentTrackingText
-        return Self.isReturn(text) || ["拒收", "配送异常", "派送异常", "物流异常"].contains(where: text.contains)
+        if Self.isReturn(text) { return .returned }
+        if ["拒收", "配送异常", "派送异常", "物流异常"].contains(where: text.contains) { return .exception }
+        if Self.confirmsRecipientPickup(text) { return .picked }
+        if Self.signedText(text) { return .signed }
+        if arrivedAt != nil || Self.isStationArrival(text) { return .pending }
+        if ([code] + codes).contains(where: {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            $0.caseInsensitiveCompare(mailNo ?? "") != .orderedSame
+        }) { return .pending }
+        return .transit
     }
+    var isSigned: Bool { lifecycle == .signed }
+    var hasDeliveryException: Bool { lifecycle == .returned || lifecycle == .exception }
     var displayStatus: String {
-        if isDone { return "已取件" }
-        if let closed, !closed.isEmpty { return closed }
-        if Self.isReturn(currentTrackingText) { return "退回中" }
-        if hasDeliveryException { return "物流异常" }
-        if isSigned {
-            return Self.confirmsFinalDelivery(currentTrackingText) ? "已送达" : "已签收"
+        switch lifecycle {
+        case .picked: return "已取件"
+        case .closed: return closed ?? "已关闭"
+        case .returned: return "退回中"
+        case .exception: return "物流异常"
+        case .signed: return Self.confirmsFinalDelivery(currentTrackingText) ? "已送达" : "已签收"
+        case .pending: return "待取件"
+        case .transit: return "运输中"
         }
-        if isPending { return "待取件" }
-        return "运输中"
     }
-    var isPending: Bool {
-        guard !isDone, !isSigned, !hasDeliveryException, closed == nil else { return false }
-        if arrivedAt != nil || Self.isStationArrival(currentTrackingText) { return true }
-        if !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && code != mailNo { return true }
-        // The original model requires a real pickup code or arrival timestamp.
-        return !codes.isEmpty
+    var isPending: Bool { lifecycle == .pending }
+    var isTransit: Bool { lifecycle == .transit }
+    var isOtherStatus: Bool {
+        switch lifecycle {
+        case .closed, .returned, .exception: return true
+        default: return false
+        }
     }
-    var isTransit: Bool { !isDone && !isSigned && !isPending && !Self.isReturn(currentTrackingText) && closed == nil }
-    var isOtherStatus: Bool { !isDone && !isSigned && !isPending && !isTransit }
     var carrierDisplayName: String {
         if let name = trackCompany?.trimmingCharacters(in: .whitespacesAndNewlines),
            !name.isEmpty && !["其他快递", "快递包裹", "未知", "未知快递"].contains(name) { return name }

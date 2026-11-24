@@ -72,6 +72,18 @@ private struct WebShipment: Decodable {
     // A WebKit task may time out after some orders were already parsed.
     // Keep verified parcels for the *current generation*, never discard them.
     private var partialPackages: [NativeSyncParcel] = []
+    func cancelAccount(_ accountID: String) {
+        pending.removeAll { $0.hasSuffix("|" + accountID) }
+        guard activeAccountID == accountID else { return }
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        sequence += 1
+        partialPackages = []
+        activePlatform = nil
+        activeAccountID = nil
+        isRunning = false
+        DispatchQueue.main.async { [weak self] in self?.startNext() }
+    }
 
     private init() {}
 
@@ -133,7 +145,11 @@ private struct WebShipment: Decodable {
             ParcelRunLog.record(platform, "自动同步暂缓：此前网页读取失败，等待退避时间")
             return false
         }
-        guard await ParcelAccounts.hasSession(platform, accountID: selected) else {
+        let generation = ParcelAccounts.syncGeneration(selected)
+        guard ParcelAccounts.canSync(platform, accountID: selected),
+              await ParcelAccounts.hasSession(platform, accountID: selected),
+              ParcelAccounts.canSync(platform, accountID: selected),
+              ParcelAccounts.syncGeneration(selected) == generation else {
             queueDecisions[job] = "当前账号网页登录会话失效，请重新登录"
             ParcelRunLog.record(platform, "未排队：当前账号网页登录会话无效")
             return false
@@ -170,7 +186,7 @@ private struct WebShipment: Decodable {
                     accountID: String, generation: Int) {
         guard activePlatform == platform, activeAccountID == accountID,
               sequence == generation,
-              ParcelAccounts.accounts(for: platform).contains(where: { $0.id == accountID })
+              ParcelAccounts.canSync(platform, accountID: accountID)
         else { return }
         if let index = partialPackages.firstIndex(where: {
             $0.orderID == parcel.orderID &&
@@ -193,13 +209,13 @@ private struct WebShipment: Decodable {
         let platform = job[0], accountID = job[1]
         // A queued job must never revive a profile removed during a previous
         // WebKit task. Skip it without creating another WKWebsiteDataStore.
-        guard ParcelAccounts.accounts(for: platform)
-            .contains(where: { $0.id == accountID }) else {
+        guard ParcelAccounts.canSync(platform, accountID: accountID) else {
             startNext()
             return
         }
         // Consent may have been revoked while this reader was queued.
-        if platform == "pdd" && !PddAccountProtection.webAccessAllowed {
+        if (platform == "pdd" && !PddAccountProtection.webAccessAllowed) ||
+            (platform == "taobao" && (UserDefaults.standard.object(forKey: "native.platform.enabled.taobao") as? Bool) == false) {
             startNext()
             return
         }
@@ -238,7 +254,7 @@ private struct WebShipment: Decodable {
         timeoutTask?.cancel()
         timeoutTask = nil
         let retained = activeAccountID.map { accountID in
-            ParcelAccounts.accounts(for: "pdd").contains(where: { $0.id == accountID })
+            ParcelAccounts.canSync("pdd", accountID: accountID) && PddAccountProtection.webAccessAllowed
         } ?? false
         if retained {
             recordOutcome(platform: "pdd", accountID: activeAccountID, success: succeeded)
@@ -273,7 +289,7 @@ private struct WebShipment: Decodable {
         timeoutTask?.cancel()
         timeoutTask = nil
         let retained = activeAccountID.map { accountID in
-            ParcelAccounts.accounts(for: platform).contains(where: { $0.id == accountID })
+            ParcelAccounts.canSync(platform, accountID: accountID)
         } ?? false
         // A partial capture is useful work, not a completely failed account.
         // Keep normal foreground retries available on the next refresh cycle.
@@ -351,8 +367,7 @@ struct NativeWebAutoSyncHost: View {
                                 sync.activePlatform == "pdd" &&
                                 sync.activeAccountID == accountID &&
                                 sync.sequence == generation &&
-                                ParcelAccounts.accounts(for: "pdd")
-                                    .contains(where: { $0.id == accountID })
+                                ParcelAccounts.canSync("pdd", accountID: accountID) && PddAccountProtection.webAccessAllowed
                             }
                         ) { message, succeeded in
                             Task { @MainActor in

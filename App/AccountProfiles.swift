@@ -15,6 +15,16 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
 @MainActor enum ParcelAccounts {
     private static let storageKey = "native.account.profiles.v1"
     private static let platforms = ["taobao", "jd", "pdd", "fengchao"]
+    private static var generations: [String: Int] = [:]
+    private static var unlinking = Set<String>()
+    static func syncGeneration(_ accountID: String) -> Int { generations[accountID, default: 0] }
+    static func canSync(_ platform: String, accountID: String) -> Bool {
+        !unlinking.contains(accountID) && accounts(for: platform).contains { $0.id == accountID }
+    }
+    static func invalidateSync(_ accountID: String) {
+        generations[accountID, default: 0] += 1
+        NativeWebAutoSync.shared.cancelAccount(accountID)
+    }
 
     static func canonical(_ platform: String) -> String {
         platform == "cainiao" ? "taobao" : platform
@@ -148,11 +158,16 @@ struct ParcelAccountProfile: Codable, Identifiable, Hashable {
     static func authorizedAccounts(for platform: String) async -> [ParcelAccountProfile] {
         var result: [ParcelAccountProfile] = []
         for account in accounts(for: platform) {
-            if await hasSession(platform, accountID: account.id) { result.append(account) }
+            if canSync(platform, accountID: account.id),
+               await hasSession(platform, accountID: account.id),
+               canSync(platform, accountID: account.id) { result.append(account) }
         }
         return result
     }
     static func unlink(_ account: ParcelAccountProfile) async throws {
+        guard unlinking.insert(account.id).inserted else { return }
+        defer { unlinking.remove(account.id) }
+        invalidateSync(account.id)
         // Capture selection BEFORE removing a UUID profile: after removal,
         // activeID() already falls back to legacy and loses this information.
         let wasDefault = activeID(for: account.platform) == account.id

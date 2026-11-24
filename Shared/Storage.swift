@@ -58,9 +58,9 @@ import WidgetKit
 
     private func recordDeletion(_ parcel: Parcel) {
         let source = parcel.source ?? parcel.srcApp?.id ?? ""
-        let candidates = Self.keys(mail: parcel.mailNo ?? "", order: parcel.orderId ?? "",
+        let candidates = Array(Set(Self.keys(mail: parcel.mailNo ?? "", order: parcel.orderId ?? "",
                                    source: source, code: parcel.displayCode,
-                                   station: parcel.stationText)
+                                   station: parcel.stationText) + parcel.allOrderIDs.map { "order:" + Self.normalized($0) }))
         guard !candidates.isEmpty else { return }
         var ignored = UserDefaults.standard.stringArray(forKey: Self.ignoredKey) ?? []
         let removed = Set(candidates)
@@ -91,6 +91,9 @@ import WidgetKit
                 if existing.mailNo == nil { existing.mailNo = parcel.mailNo }
                 if existing.shipperCode == nil { existing.shipperCode = parcel.shipperCode }
                 if existing.orderId == nil { existing.orderId = parcel.orderId }
+                let orders = Array(Set(existing.allOrderIDs + parcel.allOrderIDs)).sorted()
+                existing.linkedOrderIDs = orders.isEmpty ? nil : orders
+                if parcel.retainedLocally == true { existing.retainedLocally = true }
                 if existing.code.isEmpty { existing.code = parcel.code }
                 if existing.courierStationName.isEmpty { existing.courierStationName = parcel.courierStationName }
                 if existing.courierStationUuid.isEmpty { existing.courierStationUuid = parcel.courierStationUuid }
@@ -107,6 +110,7 @@ import WidgetKit
                     existing.pickedAt = parcel.pickedAt ?? existing.pickedAt
                 }
                 if existing.arrivedAt == nil { existing.arrivedAt = parcel.arrivedAt }
+                if existing.closed == nil { existing.closed = parcel.closed }
                 if existing.srcApp == nil { existing.srcApp = parcel.srcApp }
                 if existing.source == nil { existing.source = parcel.source }
                 let allAccounts = Set((existing.linkedAccounts ?? []) + (parcel.linkedAccounts ?? []))
@@ -340,10 +344,21 @@ import WidgetKit
             }
             changed = true
             let others = linked.filter { $0 != accountID }
-            if others.isEmpty {
+            if others.isEmpty && parcel.retainedLocally != true && parcel.smsContent.isEmpty {
                 removed += 1
             } else {
                 parcel.linkedAccounts = others
+                let remainingOrders = parcel.allOrderIDs.filter { order in
+                    !sources.contains { source in
+                        let prefix = legacy ? source + ":" : source + ":" + accountID + ":"
+                        if !order.hasPrefix(prefix) { return false }
+                        return !legacy || !order.dropFirst(prefix.count).contains(":")
+                    }
+                }
+                parcel.linkedOrderIDs = remainingOrders.isEmpty ? nil : remainingOrders
+                if let order = parcel.orderId, !remainingOrders.contains(order) {
+                    parcel.orderId = remainingOrders.first
+                }
                 survivors.append(parcel)
             }
         }

@@ -90,6 +90,26 @@ struct ParcelModelTests {
         precondition(incoming.isPending && !incoming.isSigned)
         incoming.trackLatest = "包裹退回中"
         precondition(incoming.isOtherStatus && !incoming.isTransit)
+        incoming = initial
+        incoming.trackLatest = "派送异常"
+        precondition(incoming.isOtherStatus && !incoming.isTransit && !incoming.isPending)
+        incoming.trackLatest = "本人签收"
+        precondition(incoming.isSigned && !incoming.isDone)
+        incoming.closed = "已取消"
+        precondition(incoming.isOtherStatus && !incoming.isSigned)
+        incoming = initial
+        incoming.mailNo = "SF123456789012"
+        incoming.codes = ["sf123456789012"]
+        precondition(incoming.isTransit)
+        TrackMerge.apply(to: &incoming, nodes: [newest], summary: newest.text)
+        let oldArrival = TrackNode(time: "2026-11-23 10:00:00", text: "已到站")
+        TrackMerge.apply(to: &incoming, nodes: [oldArrival], summary: oldArrival.text)
+        precondition(incoming.isTransit && !incoming.isPending)
+        incoming.orderId = "jd:12345678"
+        incoming.linkedOrderIDs = ["jd:12345678", "taobao:87654321"]
+        precondition(incoming.allOrderIDs.count == 2)
+        let roundTrip = try! JSONDecoder().decode(Parcel.self, from: JSONEncoder().encode(incoming))
+        precondition(roundTrip == incoming)
         print("PASS: parcel content, pickup classification, exceptions, durations and stale tracking merge")
     }
 }

@@ -17,6 +17,7 @@ struct NativeTrackLookup {
     var provider: String = ""
 }
 @MainActor enum NativeTracking {
+    private static var activeWaybills = Set<String>()
     private static let service = "com.muxui.ParcelHelper.kdniao"
     static let shippers: [(String, String)] = [
         ("", "自动识别"), ("ZTO", "中通快递"), ("SF", "顺丰速运"),
@@ -240,6 +241,12 @@ struct NativeTrackLookup {
         guard mail.range(of:#"^[A-Za-z0-9-]{8,40}$"#,options:.regularExpression) != nil else {
             throw NativeSyncError.badResponse("请填写有效的运单号（8 至 40 位字母、数字或短横线）")
         }
+        let key = mail.uppercased()
+        guard activeWaybills.insert(key).inserted else {
+            throw NativeSyncError.unavailable("该运单正在查询，请稍后刷新")
+        }
+        defer { activeWaybills.remove(key) }
+        try Task.checkCancellation()
         var failures: [String] = []
         var statusOnly: NativeTrackLookup?
         ParcelRunLog.record("物流查询", "开始查询：优先来源平台，之后按已配置服务兜底")
@@ -258,6 +265,7 @@ struct NativeTrackLookup {
 
 
         // Only explicitly configured API services run after platform lookup.
+        try Task.checkCancellation()
         if isConfigured {
             do {
                 let found = try await kdniaoLookup(mail, shipperCode: shipperCode, phone: phone)
@@ -270,6 +278,7 @@ struct NativeTrackLookup {
             }
         }
 
+        try Task.checkCancellation()
         if isKuaidi100Configured {
             do {
                 let found = try await kuaidi100Lookup(
@@ -283,6 +292,7 @@ struct NativeTrackLookup {
             }
         }
 
+        try Task.checkCancellation()
         if publicFallbackEnabled {
             do {
                 let found = try await publicLookup(mail)
