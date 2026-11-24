@@ -7,6 +7,7 @@ import CryptoKit
 // Native iOS client uses the API credentials the user entered, never hardcodes
 // a third-party API secret or pretends to have tracked a parcel.
 struct NativeTrackLookup {
+    var isCached: Bool { provider.contains("缓存") }
     var mailNo: String
     var company: String
     var shipperCode: String
@@ -235,7 +236,8 @@ struct NativeTrackLookup {
         return ""
     }
     static func lookup(_ mailRaw:String, source:String?=nil, shipperCode:String="",
-                       phone:String="", accountIDs: [String] = [], backgroundOnly: Bool = false) async throws -> NativeTrackLookup {
+                       phone:String="", accountIDs: [String] = [], backgroundOnly: Bool = false,
+                       newerThan: Date? = nil) async throws -> NativeTrackLookup {
         let mail=mailRaw.trimmingCharacters(in:.whitespacesAndNewlines)
             .replacingOccurrences(of:" ",with:"")
         guard mail.range(of:#"^[A-Za-z0-9-]{8,40}$"#,options:.regularExpression) != nil else {
@@ -249,18 +251,34 @@ struct NativeTrackLookup {
         try Task.checkCancellation()
         var failures: [String] = []
         var statusOnly: NativeTrackLookup?
+        var olderRoute: NativeTrackLookup?
+        func usable(_ value: NativeTrackLookup) -> Bool {
+            guard !value.nodes.isEmpty else { return false }
+            guard let newerThan else { return true }
+            return TrackMerge.latest(value.nodes).flatMap { TrackMerge.date($0.time) }.map { $0 >= newerThan } ?? false
+        }
+        func retain(_ value: NativeTrackLookup) {
+            if value.nodes.isEmpty {
+                if statusOnly == nil && !value.latest.isEmpty { statusOnly = value }
+                return
+            }
+            let candidate = TrackMerge.latest(value.nodes).flatMap { TrackMerge.date($0.time) } ?? .distantPast
+            let previous = olderRoute.flatMap { TrackMerge.latest($0.nodes) }.flatMap { TrackMerge.date($0.time) } ?? .distantPast
+            if olderRoute == nil || candidate > previous { olderRoute = value }
+        }
         ParcelRunLog.record("物流查询", "开始查询：优先来源平台，之后按已配置服务兜底")
 
         // Query the parcel's own authorized platform before external APIs.
         // This retains the original account context for friends' parcels.
         if !backgroundOnly, let native = await NativeParcelSync.lookupShipment(
             mail, source: source, accountIDs: accountIDs) {
-            if !native.nodes.isEmpty {
+            try Task.checkCancellation()
+            if usable(native) {
                 ParcelRunLog.record("物流查询", "来源平台返回 \(native.nodes.count) 条真实物流节点")
-                remember(mail)
+                if !backgroundOnly { remember(mail) }
                 return native
             }
-            if !native.latest.isEmpty { statusOnly = native }
+            retain(native)
         }
 
 
@@ -269,9 +287,14 @@ struct NativeTrackLookup {
         if isConfigured {
             do {
                 let found = try await kdniaoLookup(mail, shipperCode: shipperCode, phone: phone)
-                ParcelRunLog.record("快递鸟", "备用查询成功：节点 \(found.nodes.count) 条")
-                remember(mail)
-                return found
+                try Task.checkCancellation()
+                if usable(found) {
+                    ParcelRunLog.record("快递鸟", "备用查询成功：节点 \(found.nodes.count) 条")
+                    if !backgroundOnly { remember(mail) }
+                    return found
+                }
+                retain(found)
+                ParcelRunLog.record("快递鸟", "轨迹较旧或为空，继续尝试其他已启用来源")
             } catch {
                 ParcelRunLog.record("快递鸟", "备用查询失败（查看物流查询页面提示）")
                 failures.append("快递鸟：" + error.localizedDescription)
@@ -283,9 +306,14 @@ struct NativeTrackLookup {
             do {
                 let found = try await kuaidi100Lookup(
                     mail, shipperCode: shipperCode, phone: phone)
-                ParcelRunLog.record("快递100", "备用查询成功：节点 \(found.nodes.count) 条")
-                remember(mail)
-                return found
+                try Task.checkCancellation()
+                if usable(found) {
+                    ParcelRunLog.record("快递100", "备用查询成功：节点 \(found.nodes.count) 条")
+                    if !backgroundOnly { remember(mail) }
+                    return found
+                }
+                retain(found)
+                ParcelRunLog.record("快递100", "轨迹较旧或为空，继续尝试其他已启用来源")
             } catch {
                 ParcelRunLog.record("快递100", "备用查询失败（可能受 30 分钟间隔或额度限制）")
                 failures.append("快递100：" + error.localizedDescription)
@@ -296,9 +324,14 @@ struct NativeTrackLookup {
         if publicFallbackEnabled {
             do {
                 let found = try await publicLookup(mail)
-                ParcelRunLog.record("公开查询", "备用查询成功：节点 \(found.nodes.count) 条")
-                remember(mail)
-                return found
+                try Task.checkCancellation()
+                if usable(found) {
+                    ParcelRunLog.record("公开查询", "备用查询成功：节点 \(found.nodes.count) 条")
+                    if !backgroundOnly { remember(mail) }
+                    return found
+                }
+                retain(found)
+                ParcelRunLog.record("公开查询", "轨迹较旧或为空，继续尝试其他已启用来源")
             } catch {
                 ParcelRunLog.record("公开查询", "备用查询失败")
                 failures.append("公开接口：" + error.localizedDescription)
@@ -307,8 +340,13 @@ struct NativeTrackLookup {
 
         // A verified first-party status is more useful than an error when
         // none of the backup providers supplies a full event timeline.
+        try Task.checkCancellation()
+        if let olderRoute {
+            if !backgroundOnly { remember(mail) }
+            return olderRoute
+        }
         if let statusOnly {
-            remember(mail)
+            if !backgroundOnly { remember(mail) }
             return statusOnly
         }
         let detail = failures.isEmpty ? "" :

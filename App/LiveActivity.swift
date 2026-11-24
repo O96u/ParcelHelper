@@ -22,6 +22,9 @@ struct PickupActivityAttributes: ActivityAttributes {
     private static let sessionStartKey = "native.live.session.startedAt"
     private static let seenIDsKey = "native.live.session.seenIDs"
     private static var expiryTask: Task<Void, Never>?
+    private static var updating = false
+    private static var updateRequested = false
+    private static var scheduledDeadline: Date?
 
     private static var style: String {
         UserDefaults.standard.string(forKey: "native.live.style") ?? "glass"
@@ -41,6 +44,7 @@ struct PickupActivityAttributes: ActivityAttributes {
     static func resetSession() {
         expiryTask?.cancel()
         expiryTask = nil
+        scheduledDeadline = nil
         UserDefaults.standard.removeObject(forKey: sessionStartKey)
         UserDefaults.standard.removeObject(forKey: seenIDsKey)
     }
@@ -56,12 +60,14 @@ struct PickupActivityAttributes: ActivityAttributes {
             started = Date().timeIntervalSince1970
             UserDefaults.standard.set(started, forKey: sessionStartKey)
         }
-        UserDefaults.standard.set(Array(knownIDs.union(currentIDs)), forKey: seenIDsKey)
+        UserDefaults.standard.set(Array(currentIDs).sorted(), forKey: seenIDsKey)
         return Date(timeIntervalSince1970: started + duration)
     }
 
     private static func scheduleEnd(at deadline: Date) {
+        guard scheduledDeadline != deadline || expiryTask == nil else { return }
         expiryTask?.cancel()
+        scheduledDeadline = deadline
         let remaining = max(0, deadline.timeIntervalSinceNow)
         expiryTask = Task {
             do {
@@ -70,6 +76,8 @@ struct PickupActivityAttributes: ActivityAttributes {
                 return
             }
             guard !Task.isCancelled else { return }
+            expiryTask = nil
+            scheduledDeadline = nil
             // Best effort while the app is awake. iOS may suspend it;
             // the persisted deadline is checked again on foreground refresh.
             await update(with: ParcelStore.shared.snapshot.parcels)
@@ -83,6 +91,7 @@ struct PickupActivityAttributes: ActivityAttributes {
     static func stopAll() async {
         expiryTask?.cancel()
         expiryTask = nil
+        scheduledDeadline = nil
         for activity in Activity<PickupActivityAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
@@ -95,7 +104,7 @@ struct PickupActivityAttributes: ActivityAttributes {
     }
 
     private static func courierName(_ parcel: Parcel) -> String {
-        if let company = parcel.trackCompany, !company.isEmpty { return company }
+        if parcel.carrierDisplayName != "快递包裹" { return parcel.carrierDisplayName }
         switch parcel.companyName {
         case 1: return "中通快递"
         case 2: return "顺丰速运"
@@ -150,6 +159,17 @@ struct PickupActivityAttributes: ActivityAttributes {
     }
 
     static func update(with parcels: [Parcel]) async {
+        updateRequested = true
+        guard !updating else { return }
+        updating = true
+        defer { updating = false }
+        while updateRequested {
+            updateRequested = false
+            await reconcile(with: ParcelStore.shared.snapshot.parcels)
+        }
+    }
+
+    private static func reconcile(with parcels: [Parcel]) async {
         guard ParcelStore.shared.snapshot.preferences.liveActivityEnabled,
               ActivityAuthorizationInfo().areActivitiesEnabled else {
             await stopAll()

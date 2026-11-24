@@ -154,9 +154,9 @@ import WidgetKit
         func row(_ parcel: Parcel) -> HomeWidgetParcel {
             HomeWidgetParcel(
                 id: parcel.uuid, code: parcel.displayCode,
-                company: parcel.trackCompany ?? "快递包裹",
+                company: parcel.carrierDisplayName,
                 title: parcel.itemTitle ?? parcel.userTitle ?? "",
-                station: parcel.stationText, latest: parcel.trackLatest ?? "",
+                station: parcel.stationText, latest: parcel.currentTrackingText,
                 source: parcel.source ?? parcel.srcApp?.id ?? "")
         }
         let lastSync = UserDefaults.standard.double(forKey: "native.home.lastRefresh")
@@ -175,7 +175,7 @@ import WidgetKit
         let widgetOps = HomeWidgetSharedStore.pendingPickedIDs()
         if !widgetOps.isEmpty {
             let selected = Set(widgetOps)
-            for i in snapshot.parcels.indices where selected.contains(snapshot.parcels[i].uuid) {
+            for i in snapshot.parcels.indices where selected.contains(snapshot.parcels[i].uuid) && snapshot.parcels[i].isPending {
                 snapshot.parcels[i].status = 2
                 snapshot.parcels[i].pickedByUser = true
                 snapshot.parcels[i].pickedAt = snapshot.parcels[i].pickedAt ??

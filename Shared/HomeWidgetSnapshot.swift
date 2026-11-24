@@ -140,6 +140,8 @@ enum HomeWidgetSharedStore {
     // writer of its authoritative ParcelStore database.
     static func requestPickup(_ id: String) -> Bool {
         guard let dir = operationsURL, UUID(uuidString: id) != nil else { return false }
+        if pendingPickedIDs().contains(id) { return true }
+        guard read().pending.contains(where: { $0.id == id }) else { return false }
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try Data(id.utf8).write(to: dir.appendingPathComponent(id + ".txt"), options: .atomic)

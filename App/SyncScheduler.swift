@@ -56,15 +56,20 @@ import SwiftUI
             do {
                 let found = try await NativeTracking.lookup(mail, source: parcel.source,
                     shipperCode: parcel.shipperCode ?? "", phone: NativeTracking.phone(for: mail),
-                    accountIDs: parcel.linkedAccounts ?? [])
-                guard !Task.isCancelled, var current = store.snapshot.parcels.first(where: { $0.uuid == parcel.uuid && $0.mailNo == mail }) else { continue }
+                    accountIDs: parcel.linkedAccounts ?? [],
+                    newerThan: TrackMerge.latest(parcel.trackNodes).flatMap { TrackMerge.date($0.time) })
+                guard !Task.isCancelled, var current = store.snapshot.parcels.first(where: {
+                    $0.uuid == parcel.uuid && $0.mailNo == mail && ($0.linkedAccounts ?? []) == (parcel.linkedAccounts ?? [])
+                }) else { continue }
                 let previous = current
                 TrackMerge.apply(to: &current, nodes: found.nodes, summary: found.latest)
                 if !found.company.isEmpty { current.trackCompany = found.company }
                 if !found.shipperCode.isEmpty { current.shipperCode = found.shipperCode }
-                current.trackUpdatedAt = Date().timeIntervalSince1970 * 1000
-                store.upsert(current, persistNow: false)
-                queried = true
+                if !found.isCached { current.trackUpdatedAt = Date().timeIntervalSince1970 * 1000 }
+                if current != previous {
+                    store.upsert(current, persistNow: false)
+                    queried = true
+                }
                 if current.hasSyncedContentChange(comparedTo: previous) {
                     updated += 1
                     await ParcelNotifications.notifyUpdate(previous: previous, current: current)

@@ -274,9 +274,16 @@ struct Parcel: Codable, Identifiable, Hashable {
         if mail.range(of: #"^[A-Z]{2}\d{9}CN$"#, options: .regularExpression) != nil { return "EMS" }
         return "快递包裹"
     }
+    var firstStationArrival: Date? {
+        trackNodes.compactMap { node -> Date? in
+            guard Self.isStationArrival(node.text) else { return nil }
+            return TrackMerge.date(node.time)
+        }.min()
+    }
     var pickupDuration: TimeInterval? {
-        guard let pickedAt, let arrivedAt, pickedAt >= arrivedAt else { return nil }
-        return (pickedAt - arrivedAt) / 1000
+        guard isDone, let pickedAt, let arrival = firstStationArrival,
+              pickedAt / 1000 >= arrival.timeIntervalSince1970 else { return nil }
+        return pickedAt / 1000 - arrival.timeIntervalSince1970
     }
     var shippingDuration: TimeInterval? {
         let dated = trackNodes.compactMap { node -> (Date, String)? in
@@ -284,12 +291,29 @@ struct Parcel: Codable, Identifiable, Hashable {
             return (date, node.text)
         }
         let starts = dated.filter { ["已揽收", "揽收成功", "已收寄"].contains(where: $0.1.contains) }.map { $0.0 }
-        let ends = dated.filter { Parcel.confirmsFinalDelivery($0.1) || Parcel.confirmsRecipientPickup($0.1) || ["已入库", "已入柜", "已到站", "已签收"].contains(where: $0.1.contains) }.map { $0.0 }
+        guard !isOtherStatus else { return nil }
+        let ends = dated.filter {
+            !Parcel.isReturn($0.1) && (Parcel.confirmsFinalDelivery($0.1) ||
+            Parcel.confirmsRecipientPickup($0.1) || Parcel.isStationArrival($0.1) ||
+            Parcel.signedText($0.1))
+        }.map { $0.0 }
         guard let start = starts.min(), let end = ends.filter({ $0 >= start }).min() else { return nil }
         return end.timeIntervalSince(start)
     }
     var stationText: String { !courierStationName.isEmpty ? courierStationName : (!address.isEmpty ? address : "其他驿站") }
     var displayCode: String { code == mailNo ? "" : code }
+}
+enum ParcelStatistics {
+    static func circularMeanMinute(_ values: [Int]) -> Int? {
+        let valid = values.filter { (0..<1440).contains($0) }
+        guard !valid.isEmpty else { return nil }
+        let angles = valid.map { Double($0) * 2 * Double.pi / 1440 }
+        let x = angles.reduce(0.0) { $0 + cos($1) } / Double(valid.count)
+        let y = angles.reduce(0.0) { $0 + sin($1) } / Double(valid.count)
+        guard hypot(x, y) > 0.01 else { return nil }
+        let angle = atan2(y, x)
+        return (Int((angle * 1440 / (2 * Double.pi)).rounded()) + 1440) % 1440
+    }
 }
 struct SourceApp: Codable, Hashable { var id: String?; var name: String? }
 struct Station: Codable, Identifiable, Hashable {

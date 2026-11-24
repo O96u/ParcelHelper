@@ -32,6 +32,27 @@ enum ParcelNotifications {
         let detail: String
         var key: String { "native.reminder.lastEvent." + parcel.uuid }
         var value: String { category + ":" + detail }
+        var historyKey: String { "native.reminder.events." + parcel.uuid }
+        var fingerprint: String {
+            if ["arrived", "signed", "collected"].contains(category) { return category }
+            let normalized = detail.split(whereSeparator: { $0.isWhitespace }).joined()
+            return category + ":" + String(normalized.prefix(500))
+        }
+        func wasSent() -> Bool {
+            let defaults = UserDefaults.standard
+            if (defaults.stringArray(forKey: historyKey) ?? []).contains(fingerprint) { return true }
+            guard let previous = defaults.string(forKey: key) else { return false }
+            return previous == value ||
+                (["arrived", "signed", "collected"].contains(category) && previous.hasPrefix(category + ":"))
+        }
+        func remember() {
+            let defaults = UserDefaults.standard
+            var values = defaults.stringArray(forKey: historyKey) ?? []
+            values.removeAll { $0 == fingerprint }
+            values.append(fingerprint)
+            defaults.set(Array(values.suffix(48)), forKey: historyKey)
+            defaults.set(value, forKey: key)
+        }
     }
 
     @MainActor private static func event(previous: Parcel?, current: Parcel) -> UpdateEvent? {
@@ -96,12 +117,15 @@ enum ParcelNotifications {
         guard authorization == .authorized || authorization == .provisional || authorization == .ephemeral else { return }
         var selected: [String: UpdateEvent] = [:]
         for (previous, current) in changes {
-            guard let item = event(previous: previous, current: current),
-                  UserDefaults.standard.string(forKey: item.key) != item.value else { continue }
+            guard let live = ParcelStore.shared.snapshot.parcels.first(where: { $0.uuid == current.uuid }),
+                  live.displayStatus == current.displayStatus,
+                  live.currentTrackingText == current.currentTrackingText,
+                  let item = event(previous: previous, current: live),
+                  !item.wasSent() else { continue }
             selected[current.uuid] = item
         }
-        let events = selected.values.filter { pendingEvents.insert($0.key + ":" + $0.value).inserted }
-        defer { for item in events { pendingEvents.remove(item.key + ":" + item.value) } }
+        let events = selected.values.filter { pendingEvents.insert($0.key + ":" + $0.fingerprint).inserted }
+        defer { for item in events { pendingEvents.remove(item.key + ":" + item.fingerprint) } }
         for (_, group) in Dictionary(grouping: events, by: \.category) {
             guard let first = group.first else { continue }
             let content = UNMutableNotificationContent()
@@ -113,7 +137,7 @@ enum ParcelNotifications {
             let request = UNNotificationRequest(identifier: "parcel-event-" + UUID().uuidString, content: content, trigger: nil)
             do {
                 try await center.add(request)
-                for item in group { UserDefaults.standard.set(item.value, forKey: item.key) }
+                for item in group { item.remember() }
             } catch { NSLog("ParcelHelper notification failed") }
         }
     }
@@ -128,7 +152,9 @@ enum ParcelNotifications {
         else { return }
         let key = "native.reminder.failure.at." + platform + "." + accountID
         let now = Date().timeIntervalSince1970
-        guard now - UserDefaults.standard.double(forKey: key) >= 6 * 3600 else { return }
+        guard now - UserDefaults.standard.double(forKey: key) >= 6 * 3600,
+              pendingEvents.insert(key).inserted else { return }
+        defer { pendingEvents.remove(key) }
         let center = UNUserNotificationCenter.current()
         let status = (await center.notificationSettings()).authorizationStatus
         guard status == .authorized || status == .provisional ||

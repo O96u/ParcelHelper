@@ -1017,13 +1017,20 @@ struct ParcelDetail: View {
             do {
                 let latest=try await NativeTracking.lookup(mail,source:p.source ?? p.srcApp?.id,
                     shipperCode:p.shipperCode ?? "",phone:NativeTracking.phone(for: mail),
-                    accountIDs:p.linkedAccounts ?? [])
-                guard var current=store.snapshot.parcels.first(where:{$0.uuid == parcelID}) else {return}
+                    accountIDs:p.linkedAccounts ?? [],
+                    newerThan:TrackMerge.latest(p.trackNodes).flatMap { TrackMerge.date($0.time) })
+                guard !Task.isCancelled, var current=store.snapshot.parcels.first(where:{
+                    $0.uuid == parcelID && $0.mailNo == mail && ($0.linkedAccounts ?? []) == (p.linkedAccounts ?? [])
+                }) else {return}
+                let previous = current
                 TrackMerge.apply(to: &current, nodes: latest.nodes, summary: latest.latest)
                 if !latest.company.isEmpty {current.trackCompany=latest.company}
                 if !latest.shipperCode.isEmpty {current.shipperCode=latest.shipperCode}
-                current.trackUpdatedAt=Date().timeIntervalSince1970*1000
-                store.upsert(current)
+                if !latest.isCached { current.trackUpdatedAt=Date().timeIntervalSince1970*1000 }
+                if current != previous { store.upsert(current) }
+                if current.hasSyncedContentChange(comparedTo: previous) {
+                    await ParcelNotifications.notifyUpdate(previous: previous, current: current)
+                }
                 detailProvider = latest.provider
             } catch {
                 detailError=error.localizedDescription
@@ -1189,8 +1196,15 @@ struct StatsHome: View {
     private var signed: [Parcel] { parcels.filter(\.isSigned) }
     private var pending: Int { parcels.filter(\.isPending).count }
     private var inTransit: Int { parcels.filter(\.isTransit).count }
+    private var pickedEvents: [Parcel] {
+        store.snapshot.parcels.filter { parcel in
+            guard parcel.type == "delivery", parcel.isDone, let timestamp = parcel.pickedAt else { return false }
+            let date = Date(timeIntervalSince1970: timestamp / 1000)
+            return date <= Date() && (rangeStart.map { date >= $0 } ?? true)
+        }
+    }
     private var monthCount: Int {
-        picked.filter {
+        pickedEvents.filter {
             guard let timestamp = $0.pickedAt else { return false }
             return Calendar.current.isDate(
                 Date(timeIntervalSince1970: timestamp / 1000),
@@ -1198,7 +1212,7 @@ struct StatsHome: View {
         }.count
     }
     private var ranking: [(String, Int)] {
-        Dictionary(grouping: picked) { p in
+        Dictionary(grouping: pickedEvents.filter { $0.stationText != "其他驿站" || !$0.courierStationUuid.isEmpty }) { p in
             store.snapshot.stations.first(where: { $0.id == p.courierStationUuid })?
                 .courierStationName ?? p.stationText
         }
@@ -1210,7 +1224,7 @@ struct StatsHome: View {
         let cal = Calendar.current
         return (0..<5).reversed().compactMap { offset -> (String, Int)? in
             guard let d = cal.date(byAdding: .month, value: -offset, to: Date()) else { return nil }
-            let count = picked.filter {
+            let count = pickedEvents.filter {
                 guard let timestamp = $0.pickedAt else { return false }
                 return cal.isDate(Date(timeIntervalSince1970: timestamp / 1000), equalTo: d, toGranularity: .month)
             }.count
@@ -1221,53 +1235,19 @@ struct StatsHome: View {
     // Only timestamped last-mile arrival events count. "codeTime" is pickup
     // code metadata and is not a trustworthy logistics arrival timestamp.
     private var arrivalSamples: [Int] {
-        parcels.compactMap { parcel -> Int? in
-            let matching = parcel.trackNodes.filter { node in
-                let text = node.text
-                let arrivals = ["已到达", "已到站", "已入库", "入库成功", "已入柜",
-                                "已放入", "已存放", "已暂存", "代收点", "驿站签收",
-                                "派送至", "已投递", "送达驿站", "已代收", "已送达"]
-                let exclusions = ["预计", "即将", "将于", "转运中心", "分拨中心",
-                                  "集散中心", "运转中心", "揽收", "已取走", "已领取",
-                                  "本人签收", "运输中", "派送中", "正在派送"]
-                return arrivals.contains(where: { text.contains($0) }) &&
-                       !exclusions.contains(where: { text.contains($0) })
-            }
-            // Most carriers return newest -> oldest; retain the earliest
-            // matching arrival for each parcel, never double-count its updates.
-            return TrackMerge.ordered(matching).reversed().compactMap { clockMinute(from: $0.time) }.first
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        return store.snapshot.parcels.compactMap { parcel in
+            guard parcel.type == "delivery", !parcel.isOtherStatus,
+                  let date = parcel.firstStationArrival,
+                  date <= Date(), rangeStart.map({ date >= $0 }) ?? true else { return nil }
+            let parts = calendar.dateComponents([.hour, .minute], from: date)
+            guard let hour = parts.hour, let minute = parts.minute else { return nil }
+            return hour * 60 + minute
         }
-    }
-    private func clockMinute(from raw: String) -> Int? {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        // Some logistics backends return Unix timestamps rather than text.
-        if let epoch = Double(text), epoch > 1_000_000_000 {
-            let seconds = epoch > 1_000_000_000_000 ? epoch / 1000 : epoch
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
-            let parts = calendar.dateComponents([.hour, .minute],
-                from: Date(timeIntervalSince1970: seconds))
-            if let hour = parts.hour, let minute = parts.minute {
-                return hour * 60 + minute
-            }
-        }
-        // Accept 2026-11-16 17:41:53, 2026/11/16 17:41 or ISO 8601
-        // but never dates without a time of day.
-        guard let expression = try? NSRegularExpression(
-            pattern: #"(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?!\d)"#),
-              let match = expression.firstMatch(in: text, range:
-                NSRange(text.startIndex..., in: text)),
-              let hoursRange = Range(match.range(at: 1), in: text),
-              let minutesRange = Range(match.range(at: 2), in: text),
-              let hour = Int(text[hoursRange]), let minute = Int(text[minutesRange])
-        else { return nil }
-        return hour * 60 + minute
     }
     private var averageArrivalMinute: Int? {
-        let values = arrivalSamples
-        guard !values.isEmpty else { return nil }
-        return Int((Double(values.reduce(0, +)) / Double(values.count)).rounded())
+        ParcelStatistics.circularMeanMinute(arrivalSamples)
     }
 
     var body: some View {
@@ -1288,7 +1268,7 @@ struct StatsHome: View {
                     Text("本年").tag("year")
                     Text("全部").tag("all")
                 }.pickerStyle(.segmented)
-                Text("按包裹录入时间筛选，取件趋势按实际取件时间统计。")
+                Text("包裹数量按录入时间；取件趋势、驿站排行和到站时间按实际事件日期。")
                     .font(.caption).foregroundStyle(.secondary)
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 9),
@@ -1445,7 +1425,7 @@ struct StatsHome: View {
     private var arrivalPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             let shipping = parcels.compactMap(\.shippingDuration)
-            let pickup = parcels.compactMap(\.pickupDuration)
+            let pickup = pickedEvents.compactMap(\.pickupDuration)
             LabeledContent("平均运输耗时", value: durationLabel(shipping))
             LabeledContent("平均取件耗时", value: durationLabel(pickup))
             if let minutes = averageArrivalMinute {
@@ -1465,17 +1445,17 @@ struct StatsHome: View {
                             Capsule()
                                 .fill(accent)
                                 .frame(width: geo.size.width * CGFloat(
-                                    max(0, min(14 * 60, minutes - 8 * 60))) /
-                                       CGFloat(14 * 60))
+                                    max(0, min(1439, minutes))) /
+                                       CGFloat(1440))
                         }
                 }
                 .frame(height: 8)
                 HStack {
-                    Text("08:00")
+                    Text("00:00")
                     Spacer()
-                    Text("15:00")
+                    Text("12:00")
                     Spacer()
-                    Text("22:00")
+                    Text("24:00")
                 }
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)

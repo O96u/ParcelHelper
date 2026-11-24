@@ -66,7 +66,13 @@ struct ParcelModelTests {
         incoming = initial
         incoming.arrivedAt = 1000
         incoming.pickedAt = 3601000
+        precondition(incoming.pickupDuration == nil, "Import time is not a real station arrival")
+        let arrival = TrackNode(time: "2026-11-24 10:00:00", text: "已到站")
+        incoming.trackNodes = [arrival]
+        incoming.pickedAt = (TrackMerge.date(arrival.time)!.timeIntervalSince1970 + 3600) * 1000
+        incoming.status = 2
         precondition(incoming.pickupDuration == 3600)
+        incoming.status = 1
         incoming.closed = "已取消"
         precondition(!incoming.isPending && !incoming.isTransit && incoming.displayStatus == "已取消")
         incoming = initial
@@ -110,6 +116,9 @@ struct ParcelModelTests {
         precondition(incoming.allOrderIDs.count == 2)
         let roundTrip = try! JSONDecoder().decode(Parcel.self, from: JSONEncoder().encode(incoming))
         precondition(roundTrip == incoming)
-        print("PASS: parcel content, pickup classification, exceptions, durations and stale tracking merge")
+        precondition(ParcelStatistics.circularMeanMinute([1430, 10]) == 0)
+        precondition(ParcelStatistics.circularMeanMinute([0, 720]) == nil)
+        precondition(ParcelStatistics.circularMeanMinute([600, 660]) == 630)
+        print("PASS: parcel content, pickup classification, exceptions, durations, statistics and stale tracking merge")
     }
 }
