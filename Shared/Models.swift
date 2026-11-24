@@ -6,6 +6,54 @@ struct TrackNode: Codable, Hashable, Identifiable {
     var id: String { "\(time)-\(text)" }
 }
 
+// One conservative merge policy for platform sync, details and storage.
+enum TrackMerge {
+    static func date(_ value: String) -> Date? {
+        let iso = ISO8601DateFormatter()
+        if let date = iso.date(from: value) { return date }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        for format in ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy/MM/dd HH:mm:ss", "yyyy/MM/dd HH:mm"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: value) { return date }
+        }
+        return nil
+    }
+    static func ordered(_ nodes: [TrackNode]) -> [TrackNode] {
+        var seen = Set<TrackNode>()
+        let unique = nodes.filter { seen.insert($0).inserted }
+        return unique.enumerated().sorted { lhs, rhs in
+            switch (date(lhs.element.time), date(rhs.element.time)) {
+            case let (a?, b?): return a == b ? lhs.offset < rhs.offset : a > b
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return lhs.offset < rhs.offset
+            }
+        }.map(\.element)
+    }
+    static func apply(to parcel: inout Parcel, nodes: [TrackNode], summary: String) {
+        let old = ordered(parcel.trackNodes)
+        let incoming = ordered(nodes)
+        let oldDate = old.first.flatMap { date($0.time) }
+        let newDate = incoming.first.flatMap { date($0.time) }
+        let accept: Bool
+        if let oldDate {
+            accept = newDate.map { $0 > oldDate } ?? false
+        } else {
+            accept = old.isEmpty || newDate != nil
+        }
+        // Preserve the existing event when sources disagree at equal time.
+        parcel.trackNodes = Array(ordered(accept ? incoming + old : old + incoming).prefix(60))
+        if accept {
+            let latest = incoming.first?.text ?? summary
+            if !latest.isEmpty { parcel.trackLatest = latest }
+        } else if parcel.trackLatest?.isEmpty != false {
+            parcel.trackLatest = old.first?.text ?? incoming.first?.text
+        }
+    }
+}
+
 struct Parcel: Codable, Identifiable, Hashable {
     var uuid: String = UUID().uuidString
     var code: String = ""
@@ -81,8 +129,10 @@ struct Parcel: Codable, Identifiable, Hashable {
     var latestPickupConfirmed: Bool {
         // Providers use both newest-first and oldest-first timelines. A
         // confirmed recipient collection may therefore be the last node.
-        Self.confirmsRecipientPickup(trackLatest ?? "") ||
-            trackNodes.contains { Self.confirmsRecipientPickup($0.text) }
+        Self.confirmsRecipientPickup(currentTrackingText)
+    }
+    var currentTrackingText: String {
+        TrackMerge.ordered(trackNodes).first?.text ?? trackLatest ?? ""
     }
     var isDone: Bool { status == 2 || pickedByUser || latestPickupConfirmed }
     /// Some JD doorstep deliveries say "您的订单已送达" without "已签收".
@@ -105,17 +155,16 @@ struct Parcel: Codable, Identifiable, Hashable {
         let signed = ["已签收", "签收成功", "已妥投", "本人签收",
                       "收件人签收", "已完成签收", "已送达收件人"]
         // Also inspect route history when the summary has not caught up.
-        return ([trackLatest ?? ""] + trackNodes.map(\.text)).contains { text in
-            !excluded.contains(where: text.contains) &&
-                (text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "SIGN" ||
-                 signed.contains(where: text.contains) ||
-                 Self.confirmsFinalDelivery(text))
-        }
+        let text = currentTrackingText
+        return !excluded.contains(where: text.contains) &&
+            (text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "SIGN" ||
+             signed.contains(where: text.contains) ||
+             Self.confirmsFinalDelivery(text))
     }
     var displayStatus: String {
         if isDone { return "已取件" }
         if isSigned {
-            return Self.confirmsFinalDelivery(trackLatest ?? "") ? "已送达" : "已签收"
+            return Self.confirmsFinalDelivery(currentTrackingText) ? "已送达" : "已签收"
         }
         if isPending { return "待取件" }
         return "运输中"

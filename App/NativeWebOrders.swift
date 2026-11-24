@@ -766,10 +766,12 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             }
         }
         private func readOrders(_ webView: WKWebView) {
-            guard !finished else { return }
+            guard !finished, stage == .orderList else { return }
+            let version = orderPageVersion
             let script = platform == "jd" ? Self.jdOrdersJS : Self.taobaoOrdersJS
             webView.evaluateJavaScript(script) { [weak self, weak webView] value, error in
-                guard let self, let webView, !self.finished else { return }
+                guard let self, let webView, !self.finished,
+                      self.stage == .orderList, self.orderPageVersion == version else { return }
                 guard error == nil, let text = value as? String, let data = text.data(using: .utf8),
                       let result = try? JSONDecoder().decode(OrdersResponse.self, from: data) else {
                     self.record("订单页脚本无法解析：官方页面结构可能已变化")
@@ -786,11 +788,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 if self.platform == "jd" && result.structured != true &&
                    self.structuredReadWaits < 3 && !result.login && !result.verify {
                     self.structuredReadWaits += 1
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
-                        guard let self, let view = webView, !self.finished,
-                              self.stage == .orderList else { return }
-                        self.readOrders(view)
-                    }
+                    self.scheduleOrderRead(webView, after: 1.5)
                     return
                 }
                 if self.platform == "jd" && result.page == "登录页" {
@@ -827,10 +825,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 if self.orders.isEmpty {
                     if self.emptyReadAttempts < 2 {
                         self.emptyReadAttempts += 1
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self, weak webView] in
-                            guard let self, let view = webView, !self.finished else { return }
-                            self.readOrders(view)
-                        }
+                        self.scheduleOrderRead(webView, after: 2.0)
                         return
                     }
                     if self.platform == "jd" && result.page == "个人首页" && self.usedJDFallback {

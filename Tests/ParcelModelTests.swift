@@ -50,6 +50,15 @@ struct ParcelModelTests {
         precondition(incoming.isSigned, "Recipient delivery should be completed")
         incoming.trackLatest = "快递员正在派送中，预计今日送达"
         precondition(!incoming.isSigned, "Out for delivery is not delivered")
-        print("PASS: parcel content diff + pickup/signed classification (13 checks)")
+        incoming = initial
+        let newest = TrackNode(time: "2026-11-24 13:50:00", text: "运输中，最新位置")
+        let older = TrackNode(time: "2026-11-24 07:50:00", text: "运输中，旧位置")
+        TrackMerge.apply(to: &incoming, nodes: [newest], summary: newest.text)
+        TrackMerge.apply(to: &incoming, nodes: [older, older], summary: older.text)
+        precondition(incoming.trackLatest == newest.text && incoming.trackNodes == [newest, older])
+        let signed = TrackNode(time: "2026-11-23 09:00:00", text: "已签收")
+        TrackMerge.apply(to: &incoming, nodes: [signed], summary: signed.text)
+        precondition(!incoming.isSigned, "Historical signature must not override current transit")
+        print("PASS: parcel content, pickup classification and stale tracking merge")
     }
 }

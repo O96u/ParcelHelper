@@ -98,11 +98,9 @@ import WidgetKit
                 for code in ([parcel.code] + parcel.codes).filter({ !$0.isEmpty }) {
                     if !existing.codes.contains(code) { existing.codes.append(code) }
                 }
-                if parcel.trackNodes.count > existing.trackNodes.count {
-                    existing.trackNodes = parcel.trackNodes
-                    existing.trackLatest = parcel.trackLatest
-                    existing.trackUpdatedAt = parcel.trackUpdatedAt
-                } else if existing.trackLatest == nil { existing.trackLatest = parcel.trackLatest }
+                TrackMerge.apply(to: &existing, nodes: parcel.trackNodes,
+                                 summary: parcel.trackLatest ?? "")
+                existing.trackUpdatedAt = max(existing.trackUpdatedAt ?? 0, parcel.trackUpdatedAt ?? 0)
                 if parcel.pickedByUser || parcel.isDone && !existing.isDone {
                     existing.status = 2
                     existing.pickedByUser = parcel.pickedByUser
@@ -130,7 +128,16 @@ import WidgetKit
             .appendingPathComponent("parcelhelper-snapshot.json")
         url = localFile
         let data = try? Data(contentsOf: localFile)
-        snapshot = data.flatMap { try? JSONDecoder().decode(Snapshot.self, from: $0) } ?? Snapshot()
+        let backup = localFile.appendingPathExtension("backup")
+        let recovered = (try? Data(contentsOf: backup)).flatMap {
+            try? JSONDecoder().decode(Snapshot.self, from: $0)
+        }
+        let primary = data.flatMap { try? JSONDecoder().decode(Snapshot.self, from: $0) }
+        snapshot = primary ?? recovered ?? Snapshot()
+        if primary == nil, let data {
+            // Preserve corrupt bytes for recovery, never replace a good backup.
+            try? data.write(to: localFile.appendingPathExtension("damaged"), options: .atomic)
+        }
         snapshot.parcels = Self.collapseExactDuplicates(snapshot.parcels)
         // Migrate station names already present in the existing parcel database.
         if discoverStations() { persist() }
@@ -180,6 +187,10 @@ import WidgetKit
         persistenceQueue.async {
             do {
                 let data = try JSONEncoder().encode(current)
+                if let old = try? Data(contentsOf: destination),
+                   (try? JSONDecoder().decode(Snapshot.self, from: old)) != nil {
+                    try old.write(to: destination.appendingPathExtension("backup"), options: .atomic)
+                }
                 try data.write(to: destination, options: .atomic)
                 let published = HomeWidgetSharedStore.writeWithChange(widgetSnapshot)
                 if published.saved {

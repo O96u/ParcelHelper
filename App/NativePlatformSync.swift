@@ -537,16 +537,10 @@ private enum SyncJSON {
                 p.codes = Array(p.codes.prefix(3))
             }
             if shouldStoreCode && p.code.isEmpty { p.code = code }
+            TrackMerge.apply(to: &p, nodes: row.tracks, summary: row.latest)
             if !row.tracks.isEmpty {
-                let unique = Array(row.tracks.prefix(60))
-                p.trackNodes = unique
                 p.trackUpdatedAt = Date().timeIntervalSince1970 * 1000
             }
-            // A summary status is not a timestamped courier event.
-            // Keep the last real track nodes until the provider returns actual
-            // dated events; never inject the current device time as route history.
-            let coarse = row.source == "cainiao" && row.tracks.isEmpty && kind == "transit"
-            if !row.latest.isEmpty && !coarse { p.trackLatest = row.latest }
             if !row.eta.isEmpty && !wasArrived { p.eta = row.eta }
 
             if !p.isDone && !p.pickedByUser {

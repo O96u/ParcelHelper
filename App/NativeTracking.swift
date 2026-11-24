@@ -234,7 +234,7 @@ struct NativeTrackLookup {
         return ""
     }
     static func lookup(_ mailRaw:String, source:String?=nil, shipperCode:String="",
-                       phone:String="", accountIDs: [String] = []) async throws -> NativeTrackLookup {
+                       phone:String="", accountIDs: [String] = [], backgroundOnly: Bool = false) async throws -> NativeTrackLookup {
         let mail=mailRaw.trimmingCharacters(in:.whitespacesAndNewlines)
             .replacingOccurrences(of:" ",with:"")
         guard mail.range(of:#"^[A-Za-z0-9-]{8,40}$"#,options:.regularExpression) != nil else {
@@ -246,7 +246,7 @@ struct NativeTrackLookup {
 
         // Query the parcel's own authorized platform before external APIs.
         // This retains the original account context for friends' parcels.
-        if let native = await NativeParcelSync.lookupShipment(
+        if !backgroundOnly, let native = await NativeParcelSync.lookupShipment(
             mail, source: source, accountIDs: accountIDs) {
             if !native.nodes.isEmpty {
                 ParcelRunLog.record("物流查询", "来源平台返回 \(native.nodes.count) 条真实物流节点")

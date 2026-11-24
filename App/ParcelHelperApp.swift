@@ -309,14 +309,24 @@ private final class ParcelBGTaskCompletion {
         do {
             let found = try await NativeTracking.lookup(
                 mail, source: candidate.source, shipperCode: candidate.shipperCode ?? "",
-                accountIDs: candidate.linkedAccounts ?? [])
+                accountIDs: candidate.linkedAccounts ?? [], backgroundOnly: true)
             guard !Task.isCancelled, !found.nodes.isEmpty else { return }
             var update = NativeSyncParcel(source: candidate.source ?? "clipboard")
             update.mailNo = mail
             update.company = found.company
             update.latest = found.latest.isEmpty ? (found.nodes.first?.text ?? "") : found.latest
             update.tracks = found.nodes
-            let updated = NativeParcelSync.merge([update])
+            guard var current = ParcelStore.shared.snapshot.parcels.first(where: {
+                $0.uuid == candidate.uuid && $0.mailNo == mail
+            }) else { return }
+            let previous = current
+            TrackMerge.apply(to: &current, nodes: update.tracks, summary: update.latest)
+            let updated = current.hasSyncedContentChange(comparedTo: previous) ? 1 : 0
+            if updated > 0 {
+                current.trackUpdatedAt = Date().timeIntervalSince1970 * 1000
+                ParcelStore.shared.upsert(current)
+                await ParcelNotifications.notifyUpdate(previous: previous, current: current)
+            }
             ParcelRunLog.record("后台刷新", "已查询 1 件物流，更新 \(updated) 件")
         } catch {
             ParcelRunLog.record("后台刷新", "物流补查未获得有效结果")
