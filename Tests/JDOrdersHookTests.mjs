@@ -73,6 +73,11 @@ assert.equal(result.structured, true);
 assert.equal(result.orders.length, 1);
 assert.ok(result.diagnostic.includes("捕获器已安装"));
 assert.ok(result.diagnostic.includes("订单响应1"));
+const external = {location:{protocol:"https:",hostname:"example.com"}};
+const blocked = JSON.parse(vm.runInNewContext(orders, external));
+assert.equal(blocked.foreign,true);
+assert.equal(blocked.orders.length,0);
+assert.equal(JSON.parse(vm.runInNewContext(tracking, external)).tracks.length,0);
 
 const logisticsXHR = new FakeXHR();
 logisticsXHR.responseURL = "https://api.m.jd.com/client.action?functionId=get_logistics_list_by_order_m";

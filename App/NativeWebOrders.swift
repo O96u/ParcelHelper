@@ -702,8 +702,13 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             if platform == "jd", action.targetFrame?.isMainFrame != false {
                 guard JDOrderNavigation.allows(action.request.url) else {
                     decisionHandler(.cancel)
-                    if scheme == "https" || scheme == "http" {
-                        rejectJDNavigation(webView, url: action.request.url)
+                    // A banner/popup may request a foreign URL while the
+                    // real order document remains visible. Cancelling the
+                    // request is sufficient; do not terminate its reader.
+                    if action.targetFrame == nil {
+                        record("已忽略京东网页的外部弹窗")
+                    } else if scheme == "https" || scheme == "http" {
+                        handleBlockedJDRequest(webView, url: action.request.url)
                     } else {
                         record("已阻止京东跳转外部应用或非网页协议")
                     }
@@ -722,13 +727,33 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             }
             guard JDOrderNavigation.allows(response.response.url) else {
                 decisionHandler(.cancel)
-                rejectJDNavigation(webView, url: response.response.url)
+                handleBlockedJDRequest(webView, url: response.response.url)
                 return
             }
             if let http = response.response as? HTTPURLResponse {
                 record("官方主页面 HTTP 状态：\(http.statusCode)")
             }
             decisionHandler(.allow)
+        }
+
+        private func handleBlockedJDRequest(_ webView: WKWebView, url: URL?) {
+            guard !finished else { return }
+            if JDOrderNavigation.allows(jdCommittedURL) {
+                if !jdLoggedIgnoredRedirect {
+                    jdLoggedIgnoredRedirect = true
+                    record("已拦截附加跳转：\(JDOrderNavigation.destination(url))，保留当前京东页面继续读取")
+                }
+                // A cancelled provisional navigation can invalidate an
+                // earlier scheduled read even though the document survives.
+                if stage == .orderList && !scanning {
+                    scanning = true
+                    scheduleOrderRead(webView, after: 1.0)
+                }
+                // Tracking's existing timeout will skip only this order if
+                // its requested detail document never commits.
+                return
+            }
+            rejectJDNavigation(webView, url: url)
         }
 
         private func rejectJDNavigation(_ webView: WKWebView, url: URL?) {
@@ -797,6 +822,10 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private var jdPageDiagnosticsLogged = false
         private var jdRedirectRecoveryScheduled = false
         private var jdHomeClickAttempted = false
+        private var jdCommittedURL: URL?
+        private var jdLoggedIgnoredRedirect = false
+        private var jdCommittedTrackingSerial: Int?
+        private var orderReadTicket = 0
         private var jdAccumulated: [String: WebOrder] = [:]
         var trackingReadAttempts = 0
         var missingTracking = 0
@@ -844,11 +873,23 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 jdPageDiagnosticsLogged = false
             }
         }
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            guard platform == "jd", !finished else { return }
+            jdCommittedURL = webView.url
+            jdLoggedIgnoredRedirect = false
+            if stage == .tracking && JDOrderNavigation.allows(webView.url) {
+                jdCommittedTrackingSerial = trackingPageSerial
+            }
+        }
+
         private func scheduleOrderRead(_ webView: WKWebView, after delay: TimeInterval) {
             let version = orderPageVersion
+            orderReadTicket += 1
+            let ticket = orderReadTicket
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
                 guard let self, let view = webView, !self.finished,
-                      self.stage == .orderList, self.orderPageVersion == version else { return }
+                      self.stage == .orderList, self.orderPageVersion == version,
+                      self.orderReadTicket == ticket else { return }
                 self.readOrders(view)
             }
         }
@@ -892,7 +933,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         }
         private func readOrders(_ webView: WKWebView) {
             guard !finished, stage == .orderList else { return }
-            if platform == "jd", !JDOrderNavigation.allows(webView.url) {
+            if platform == "jd", !JDOrderNavigation.allows(jdCommittedURL ?? webView.url) {
                 rejectJDNavigation(webView, url: webView.url)
                 return
             }
@@ -905,6 +946,10 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                       let result = try? JSONDecoder().decode(OrdersResponse.self, from: data) else {
                     self.record("订单页脚本无法解析：官方页面结构可能已变化")
                     self.complete("订单列表解析失败，页面可能已变更")
+                    return
+                }
+                if self.platform == "jd" && result.foreign == true {
+                    self.rejectJDNavigation(webView, url: webView.url)
                     return
                 }
                 if self.platform == "jd" && !self.jdPageDiagnosticsLogged {
@@ -1178,6 +1223,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private func readTracking(_ webView: WKWebView, pageVersion: Int) {
             guard !finished, position < orders.count,
                   trackingPageSerial == pageVersion else { return }
+            if platform == "jd" && jdCommittedTrackingSerial != pageVersion { return }
             let expectedIndex = position
             let script = platform == "jd" ? Self.jdTrackingJS : Self.taobaoTrackingJS
             webView.evaluateJavaScript(script) { [weak self, weak webView] value, scriptError in
@@ -1279,6 +1325,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             let page: String?
             let diagnostic: String?
             let problem: String?
+            let foreign: Bool?
         }
         private static let openJDOrders = #"""
         (function(){
@@ -1320,6 +1367,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         """#
         private static let jdOrdersJS = #"""
         (function(){
+          if(location.protocol!=='https:'||!/(^|\.)jd\.com$/i.test(location.hostname))
+            return JSON.stringify({login:false,verify:false,orders:[],foreign:true});
           var body=(document.body&&document.body.innerText||'').slice(0,4500);
           var path=(location.pathname||'').toLowerCase();
           var page=/login|passport|plogin/.test(location.hostname+path)?'登录页':
@@ -1465,6 +1514,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         """#
         private static let jdTrackingJS = #"""
         (function(){
+          if(location.protocol!=='https:'||!/(^|\.)jd\.com$/i.test(location.hostname))
+            return JSON.stringify({mail:'',company:'',latest:'',pickup:'',station:'',tracks:[]});
           try{
             var hooked=window.ParcelHelperJD&&window.ParcelHelperJD.logistics();
             if(hooked&&hooked.tracks&&hooked.tracks.length){
