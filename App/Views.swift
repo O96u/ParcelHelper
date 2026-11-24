@@ -229,7 +229,7 @@ struct ParcelCell: View {
             .courierStationName ?? parcel.stationText
     }
     private var statusColor: Color {
-        parcel.isDone || parcel.isSigned ? PH.green : parcel.isPending ? PH.orange : accent
+        parcel.isDone || parcel.isSigned ? PH.green : (parcel.isPending || parcel.hasDeliveryException || parcel.isOtherStatus) ? PH.orange : accent
     }
     private var mainTitle: String {
         if parcel.isPending, !parcel.displayCode.isEmpty { return parcel.displayCode }
@@ -261,22 +261,20 @@ struct ParcelCell: View {
                         .padding(.vertical, 5)
                         .background(statusColor.opacity(0.12), in: Capsule())
                 }
-                if let company = parcel.trackCompany, !company.isEmpty {
-                    Text(company)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else if let latest = parcel.trackLatest, !latest.isEmpty {
-                    Text(latest).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                if !parcel.currentTrackingText.isEmpty {
+                    Text(parcel.currentTrackingText).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                } else if parcel.carrierDisplayName != mainTitle {
+                    Text(parcel.carrierDisplayName).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                 }
-                HStack(spacing: 4) {
-                    Image(systemName: "mappin.circle.fill")
-                        .foregroundStyle(accent.opacity(0.78))
-                    Text(resolvedStation)
-                        .lineLimit(1)
+                if parcel.isPending && resolvedStation != "其他驿站" && !resolvedStation.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "mappin.circle.fill")
+                            .foregroundStyle(accent.opacity(0.78))
+                        Text(resolvedStation).lineLimit(1)
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
                 }
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
             }
         }
         .padding(13)
@@ -562,7 +560,7 @@ struct ParcelsHome: View {
                             Text("\(counts[1]) 件运输中")
                                 .font(.system(size: 25, weight: .bold, design: .rounded))
                                 .foregroundStyle(.white)
-                            Text("\(counts[2]) 件待取 · \(counts[3]) 件已完成")
+                            Text("\(counts[2]) 件待取 · \(counts[3]) 件已完成" + (counts[4] > 0 ? " · \(counts[4]) 件其他" : ""))
                                 .font(.system(size: 12))
                                 .foregroundStyle(.white.opacity(0.77))
                         }
@@ -610,6 +608,7 @@ struct ParcelsHome: View {
                         Text("在途 \(counts[1])").tag(1)
                         Text("待取 \(counts[2])").tag(2)
                         Text("完成 \(counts[3])").tag(3)
+                        Text("其他 \(counts[4])").tag(4)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
@@ -864,12 +863,11 @@ struct ParcelDetail: View {
                         if let detailError { Text(detailError).font(.caption).foregroundStyle(.orange) }
                         HStack(spacing: 7) {
                             Image(systemName: p.isDone || p.isSigned ? "checkmark.seal.fill" :
+                                      p.hasDeliveryException || p.isOtherStatus ? "exclamationmark.circle.fill" :
                                       p.isPending ? "checkmark.circle.fill" : "shippingbox.fill")
                                 .foregroundStyle(p.isDone || p.isSigned ? PH.green :
-                                                    p.isPending ? PH.orange : accent)
-                            Text(p.isDone ? "已完成取件" :
-                                 p.isSigned ? "物流显示已签收" :
-                                 p.isPending ? "包裹已到站" : "运输中")
+                                                    p.isPending || p.hasDeliveryException || p.isOtherStatus ? PH.orange : accent)
+                            Text(p.displayStatus)
                                 .fontWeight(.semibold)
                             Spacer()
                         }
@@ -877,7 +875,7 @@ struct ParcelDetail: View {
                         .padding(14)
                         .frame(maxWidth: .infinity)
                         .background(PH.card, in: RoundedRectangle(cornerRadius: 18))
-                        if p.isPending || !p.displayCode.isEmpty { infoCard(p) }
+                        if p.isPending { infoCard(p) }
                         if let updated = p.trackUpdatedAt {
                             Text("最近查询：" + Date(timeIntervalSince1970: updated / 1000).formatted(date: .numeric, time: .shortened))
                                 .font(.caption).foregroundStyle(.secondary)
@@ -1036,12 +1034,12 @@ struct ParcelDetail: View {
     private func courierHeader(_ p: Parcel) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
-                CourierBrandView(company:p.trackCompany ?? "",
+                CourierBrandView(company:p.carrierDisplayName,
                     shipperCode:p.shipperCode ?? "",
                     source:p.srcApp?.id == "douyin" ? "douyin" :
                          (p.source ?? p.srcApp?.id),size:57)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(p.trackCompany ?? p.title)
+                    Text(p.carrierDisplayName)
                         .font(.system(size: 20, weight: .bold))
                         .lineLimit(2)
                     Text(p.displayStatus)
@@ -1082,12 +1080,13 @@ struct ParcelDetail: View {
                         .font(.system(size: 19, weight: .bold, design: .rounded))
                 }
             }
-            HStack(alignment: .top) {
-                Text("驿站").foregroundStyle(.secondary)
-                Spacer()
-                Text(store.snapshot.stations.first(where: { $0.id == p.courierStationUuid })?
-                     .courierStationName ?? p.stationText)
-                    .multilineTextAlignment(.trailing)
+            let station = store.snapshot.stations.first(where: { $0.id == p.courierStationUuid })?.courierStationName ?? p.stationText
+            if station != "其他驿站" && !station.isEmpty {
+                HStack(alignment: .top) {
+                    Text("驿站").foregroundStyle(.secondary)
+                    Spacer()
+                    Text(station).multilineTextAlignment(.trailing)
+                }
             }
             if let city = p.receiverCity, !city.isEmpty {
                 HStack {

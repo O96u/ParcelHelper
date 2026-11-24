@@ -507,6 +507,7 @@ enum SyncJSON {
                  receiptTerms.contains(where: event.contains))
             }
             if previous == nil && (kind == "picked" || finishedOrder || finishedDelivery ||
+                                  Parcel.confirmsPersonalSignature(currentStatus) ||
                                   Parcel.isReturn(currentStatus) || Parcel.isReturn(newestTrack)) {
                 historicalSkipped += 1
                 continue
@@ -551,7 +552,7 @@ enum SyncJSON {
             }
             if shouldStoreCode && p.code.isEmpty { p.code = code }
             TrackMerge.apply(to: &p, nodes: row.tracks, summary: row.latest)
-            if !row.tracks.isEmpty {
+            if !row.tracks.isEmpty || verifiedOrderProgress {
                 p.trackUpdatedAt = Date().timeIntervalSince1970 * 1000
             }
             if !row.eta.isEmpty && !wasArrived { p.eta = row.eta }

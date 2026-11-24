@@ -80,6 +80,16 @@ struct ParcelModelTests {
         TrackMerge.apply(to: &incoming, nodes: [newest], summary: newest.text)
         TrackMerge.apply(to: &incoming, nodes: [], summary: "已派送成功（14栋代收点）")
         precondition(incoming.isPending && !incoming.isSigned)
+        incoming = initial
+        incoming.mailNo = "JT1234567890123"
+        incoming.arrivedAt = 42
+        incoming.trackLatest = "快件已签收，签收方式【本人】，已由【代收点】送达，如有问题请联系驿站"
+        precondition(incoming.isSigned && !incoming.isPending && incoming.displayStatus == "已送达")
+        precondition(incoming.carrierDisplayName == "极兔速递")
+        incoming.trackLatest = "快件已派送成功（14栋代收点）"
+        precondition(incoming.isPending && !incoming.isSigned)
+        incoming.trackLatest = "包裹退回中"
+        precondition(incoming.isOtherStatus && !incoming.isTransit)
         print("PASS: parcel content, pickup classification, exceptions, durations and stale tracking merge")
     }
 }

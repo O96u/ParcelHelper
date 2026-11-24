@@ -181,6 +181,9 @@ struct Parcel: Codable, Identifiable, Hashable {
     /// Arrival at a pickup location is not confirmation of recipient delivery.
     static func confirmsFinalDelivery(_ text: String) -> Bool {
         guard !text.isEmpty else { return false }
+        // A station can deliver to the recipient; explicit signature method
+        // is stronger than merely mentioning a station in the same sentence.
+        if confirmsPersonalSignature(text) { return true }
         let station = ["驿站", "代收点", "快递柜", "自提柜", "自提点", "分拨中心",
                        "转运中心", "集散中心", "网点", "派送中", "正在派送",
                        "待取件", "请取件", "暂存", "代签收", "未送达", "未签收"]
@@ -199,6 +202,7 @@ struct Parcel: Codable, Identifiable, Hashable {
                       "收件人签收", "已完成签收", "已送达收件人"]
         // Also inspect route history when the summary has not caught up.
         let text = currentTrackingText
+        if Self.confirmsPersonalSignature(text) { return !Self.isReturn(text) }
         return !Self.isStationArrival(text) && !Self.isReturn(text) &&
             !excluded.contains(where: text.contains) &&
             (text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "SIGN" ||
@@ -208,10 +212,15 @@ struct Parcel: Codable, Identifiable, Hashable {
     static func isReturn(_ text: String) -> Bool {
         ["包裹退回中", "快件退回中", "退回中", "退件中", "退回寄件人", "退回发件人", "退回商家", "已退回", "退回成功"].contains(where: text.contains)
     }
+    static func confirmsPersonalSignature(_ text: String) -> Bool {
+        let value = text.replacingOccurrences(of: " ", with: "")
+        guard !["未签收", "待签收", "等待签收", "签收失败", "签收方式非本人"].contains(where: value.contains) else { return false }
+        return ["签收方式【本人】", "签收方式[本人]", "签收方式：本人", "签收方式:本人", "签收方式为本人", "已由本人签收", "已派送至本人", "已派送至收件人"].contains(where: value.contains)
+    }
     static func isStationArrival(_ text: String) -> Bool {
         let station = ["驿站", "代收点", "快递柜", "自提点", "自提柜", "取件点"]
         let handoff = ["已派送至", "派送成功", "已签收", "已送达", "已到达", "已放入", "已存放", "已入库", "已暂存", "已代收", "待取件", "请取件", "送达代收点"]
-        return !isReturn(text) && !confirmsRecipientPickup(text) &&
+        return !isReturn(text) && !confirmsRecipientPickup(text) && !confirmsPersonalSignature(text) &&
             !["正在派送", "派送途中", "即将送达", "将送达", "预计送达"].contains(where: text.contains) &&
             (["待取件", "已到站", "待自提", "待领取", "已入柜"].contains(where: text.contains) ||
              (station.contains(where: text.contains) && handoff.contains(where: text.contains)))
@@ -239,6 +248,16 @@ struct Parcel: Codable, Identifiable, Hashable {
         return !codes.isEmpty
     }
     var isTransit: Bool { !isDone && !isSigned && !isPending && !Self.isReturn(currentTrackingText) && closed == nil }
+    var isOtherStatus: Bool { !isDone && !isSigned && !isPending && !isTransit }
+    var carrierDisplayName: String {
+        if let name = trackCompany?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty && !["其他快递", "快递包裹", "未知", "未知快递"].contains(name) { return name }
+        let mail = (mailNo ?? "").uppercased()
+        if mail.range(of: #"^JT\d{10,}$"#, options: .regularExpression) != nil { return "极兔速递" }
+        if mail.range(of: #"^SF\d{10,}$"#, options: .regularExpression) != nil { return "顺丰速运" }
+        if mail.range(of: #"^[A-Z]{2}\d{9}CN$"#, options: .regularExpression) != nil { return "EMS" }
+        return "快递包裹"
+    }
     var pickupDuration: TimeInterval? {
         guard let pickedAt, let arrivedAt, pickedAt >= arrivedAt else { return nil }
         return (pickedAt - arrivedAt) / 1000

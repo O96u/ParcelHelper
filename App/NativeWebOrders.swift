@@ -878,6 +878,20 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                         return
                     }
                 }
+                if self.platform == "jd" && !available.isEmpty {
+                    let account = self.accountID ?? ParcelAccounts.activeID(for: "jd")
+                    let prefix = (account == ParcelAccounts.legacyID("jd") ? "jd" : "jd:" + account) + ":"
+                    var knownIDs = Set(available.map(\.id))
+                    let existing = ParcelStore.shared.snapshot.parcels.filter {
+                        ($0.isTransit || $0.isPending) && ($0.orderId ?? "").hasPrefix(prefix)
+                    }.sorted { ($0.trackUpdatedAt ?? 0) < ($1.trackUpdatedAt ?? 0) }
+                    for parcel in existing.prefix(5) {
+                        let id = String((parcel.orderId ?? "").dropFirst(prefix.count))
+                        guard id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil,
+                              knownIDs.insert(id).inserted else { continue }
+                        available.insert(WebOrder(id: id, title: parcel.itemTitle ?? "", status: "", sku: "", shop: ""), at: 0)
+                    }
+                }
                 let eligible = available.filter { order in
                     guard order.id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil else { return false }
                     let account = self.accountID ?? ParcelAccounts.activeID(for: self.platform)
@@ -889,7 +903,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     return !["退款", "已关闭", "已完成", "交易成功", "已收货", "已取件", "确认收货"].contains {
                         order.status.contains($0)
                     } && (!order.status.contains("已签收") ||
-                        (self.platform == "jd" && !(order.code ?? "").isEmpty))
+                        (self.platform == "jd" && (!(order.code ?? "").isEmpty || Parcel.isStationArrival(order.summary ?? ""))))
                 }
                 let limit = self.platform == "jd" ? 15 : 10
                 let cursorKey = "native.web.orderCursor." + self.platform + "." + (self.accountID ?? "default")

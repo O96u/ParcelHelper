@@ -33,13 +33,21 @@ import SwiftUI
 
     private static func refreshSubscriptions(force: Bool) async -> Int {
         let store = ParcelStore.shared
-        let candidates = store.snapshot.parcels.filter {
-            $0.isTransit && !$0.hasDeliveryException && $0.mailNo != nil &&
-            ["clipboard", "kdniao", "kuaidi100", "public", ""].contains($0.source ?? "")
-        }.sorted { ($0.trackUpdatedAt ?? 0) < ($1.trackUpdatedAt ?? 0) }
+        let now = Date().timeIntervalSince1970
+        let fallbackAvailable = NativeTracking.isConfigured || NativeTracking.isKuaidi100Configured || NativeTracking.publicFallbackEnabled
+        let candidates = store.snapshot.parcels.filter { parcel in
+            let source = parcel.source ?? ""
+            let key = "native.subscription.at." + parcel.uuid
+            return (parcel.isTransit || parcel.isPending) && !parcel.hasDeliveryException && parcel.mailNo != nil &&
+                (["clipboard", "kdniao", "kuaidi100", "public", "publictracking", "manual", ""].contains(source) ||
+                 (source == "jd" && fallbackAvailable)) &&
+                (force || now - UserDefaults.standard.double(forKey: key) >= Double(RefreshPolicy.minutes) * 60)
+        }.sorted {
+            UserDefaults.standard.double(forKey: "native.subscription.at." + $0.uuid) <
+            UserDefaults.standard.double(forKey: "native.subscription.at." + $1.uuid)
+        }
         var updated = 0
         var queried = false
-        let now = Date().timeIntervalSince1970
         for parcel in candidates.prefix(3) {
             guard !Task.isCancelled, let mail = parcel.mailNo else { break }
             let key = "native.subscription.at." + parcel.uuid
@@ -52,6 +60,8 @@ import SwiftUI
                 guard !Task.isCancelled, var current = store.snapshot.parcels.first(where: { $0.uuid == parcel.uuid && $0.mailNo == mail }) else { continue }
                 let previous = current
                 TrackMerge.apply(to: &current, nodes: found.nodes, summary: found.latest)
+                if !found.company.isEmpty { current.trackCompany = found.company }
+                if !found.shipperCode.isEmpty { current.shipperCode = found.shipperCode }
                 current.trackUpdatedAt = Date().timeIntervalSince1970 * 1000
                 store.upsert(current, persistNow: false)
                 queried = true
