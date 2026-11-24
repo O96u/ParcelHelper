@@ -6,6 +6,38 @@ import WebKit
 // No bypass of platform challenge screens. Reads only in the user's logged-in
 // WKWebView and imports packages with verified tracking numbers.
 
+// Official JD navigation only, matching the reference project's HTTPS policy.
+// Do not relax the response-capture origin check for external redirects.
+private enum JDOrderNavigation {
+    static let orders = URL(string: "https://trade.m.jd.com/order/orderlist_jdm.shtml")!
+    static let home = URL(string: "https://my.m.jd.com/index.html?sceneval=2")!
+
+    static func allows(_ url: URL?) -> Bool {
+        guard let url, url.scheme?.lowercased() == "https",
+              url.user == nil, url.password == nil,
+              url.port == nil || url.port == 443,
+              let host = url.host?.lowercased() else { return false }
+        return host == "jd.com" || host.hasSuffix(".jd.com")
+    }
+
+    // No URL path, query, fragment, cookie or user information in logs.
+    // For a foreign host, retain only its final two DNS labels.
+    static func destination(_ url: URL?) -> String {
+        guard let url else { return "无地址" }
+        let scheme = url.scheme?.lowercased() ?? ""
+        guard scheme == "http" || scheme == "https" else {
+            return "非HTTP网页"
+        }
+        guard let host = url.host?.lowercased(), !host.isEmpty else { return "无域名" }
+        let labels = host.split(separator: ".")
+        let suffix = labels.suffix(2).joined(separator: ".")
+        guard suffix.range(of: #"^[a-z0-9-]+\.[a-z][a-z0-9-]*$"#, options: .regularExpression) != nil else {
+            return "非标准域名"
+        }
+        return allows(url) ? "京东官方域名" : String(suffix.prefix(80))
+    }
+}
+
 private struct WebOrder: Decodable {
     var id: String
     var title: String
@@ -365,12 +397,21 @@ struct NativeWebOrderPage: View {
     let onFinish: (String) -> Void
     @State private var detail = "正在访问订单列表…"
     @State private var received = false
+    @State private var readerRevision = 0
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 if !received { ProgressView().controlSize(.small) }
                 Text(detail).font(.footnote).lineLimit(3)
                 Spacer()
+                if received {
+                    Button("重新读取") {
+                        received = false
+                        detail = "正在访问订单列表…"
+                        readerRevision += 1
+                    }
+                    .font(.footnote)
+                }
             }.padding(12)
             NativeWebOrderReader(platform: platform, accountID: accountID) { progress in
                 detail = progress
@@ -413,6 +454,7 @@ struct NativeWebOrderPage: View {
                 }
             }
         }
+        .id(readerRevision)
         .navigationTitle(platform == "jd" ? "京东订单同步" : "淘宝订单同步")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -657,8 +699,58 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                      decidePolicyFor action: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             let scheme = action.request.url?.scheme?.lowercased()
+            if platform == "jd", action.targetFrame?.isMainFrame != false {
+                guard JDOrderNavigation.allows(action.request.url) else {
+                    decisionHandler(.cancel)
+                    if scheme == "https" || scheme == "http" {
+                        rejectJDNavigation(webView, url: action.request.url)
+                    } else {
+                        record("已阻止京东跳转外部应用或非网页协议")
+                    }
+                    return
+                }
+            }
             decisionHandler(scheme == "https" || scheme == "http" ||
                             scheme == "about" ? .allow : .cancel)
+        }
+
+        func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                     decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+            guard platform == "jd", response.isForMainFrame else {
+                decisionHandler(.allow)
+                return
+            }
+            guard JDOrderNavigation.allows(response.response.url) else {
+                decisionHandler(.cancel)
+                rejectJDNavigation(webView, url: response.response.url)
+                return
+            }
+            if let http = response.response as? HTTPURLResponse {
+                record("官方主页面 HTTP 状态：\(http.statusCode)")
+            }
+            decisionHandler(.allow)
+        }
+
+        private func rejectJDNavigation(_ webView: WKWebView, url: URL?) {
+            guard !finished, !jdRedirectRecoveryScheduled else { return }
+            record("京东主页面离开官方域名，已阻止：\(JDOrderNavigation.destination(url))")
+            // One bounded alternative; never loop or read the foreign page.
+            guard stage == .orderList, !usedJDFallback else {
+                complete("京东订单网页跳转到非官方页面，已停止读取。请打开账号中的官方订单网页排查。")
+                return
+            }
+            usedJDFallback = true
+            jdRedirectRecoveryScheduled = true
+            orderPageVersion += 1
+            scanning = false
+            structuredReadWaits = 0
+            emptyReadAttempts = 0
+            DispatchQueue.main.async { [weak self, weak webView] in
+                guard let self, let webView, !self.finished else { return }
+                self.jdRedirectRecoveryScheduled = false
+                self.record("尝试京东官方个人中心备用入口")
+                webView.load(URLRequest(url: JDOrderNavigation.home))
+            }
         }
 
         // JD's mobile order entry may open in target=_blank/window.open.
@@ -703,6 +795,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private var jdStableReads = 0
         private var jdPendingTabAttempted = false
         private var jdPageDiagnosticsLogged = false
+        private var jdRedirectRecoveryScheduled = false
+        private var jdHomeClickAttempted = false
         private var jdAccumulated: [String: WebOrder] = [:]
         var trackingReadAttempts = 0
         var missingTracking = 0
@@ -728,6 +822,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             if (error as NSError).domain == NSURLErrorDomain &&
                 (error as NSError).code == NSURLErrorCancelled { return }
+            guard !finished, !jdRedirectRecoveryScheduled else { return }
             if stage == .tracking {
                 trackingPageTimeout?.cancel()
                 record("物流详情页无法打开：已跳过第 \(position + 1) 笔")
@@ -759,10 +854,15 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard !finished else { return }
+            if platform == "jd", !JDOrderNavigation.allows(webView.url) {
+                rejectJDNavigation(webView, url: webView.url)
+                return
+            }
             if stage == .orderList && !scanning {
                 scanning = true
-                if platform == "jd" &&
+                if platform == "jd" && !jdHomeClickAttempted &&
                    webView.url?.host?.lowercased() == "my.m.jd.com" {
+                    jdHomeClickAttempted = true
                     let version = orderPageVersion
                     webView.evaluateJavaScript(Self.openJDOrders) { [weak self, weak webView] value, _ in
                         guard let self, let view = webView, !self.finished,
@@ -792,6 +892,10 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         }
         private func readOrders(_ webView: WKWebView) {
             guard !finished, stage == .orderList else { return }
+            if platform == "jd", !JDOrderNavigation.allows(webView.url) {
+                rejectJDNavigation(webView, url: webView.url)
+                return
+            }
             let version = orderPageVersion
             let script = platform == "jd" ? Self.jdOrdersJS : Self.taobaoOrdersJS
             webView.evaluateJavaScript(script) { [weak self, weak webView] value, error in
@@ -805,7 +909,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 }
                 if self.platform == "jd" && !self.jdPageDiagnosticsLogged {
                     self.jdPageDiagnosticsLogged = true
-                    self.record("页面诊断：\(result.diagnostic ?? "无")")
+                    self.record("页面诊断：原生\(JDOrderNavigation.destination(webView.url))；\(result.diagnostic ?? "无")")
                 }
                 if self.platform == "jd" && self.emptyReadAttempts == 0 && self.structuredReadWaits == 0 {
                     self.record("订单页环境：\(result.page ?? "未知")，官方接口：\(result.structured == true ? "已识别" : "未识别")")
