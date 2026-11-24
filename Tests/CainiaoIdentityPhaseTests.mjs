@@ -24,4 +24,11 @@ assert.equal(phase({frames:[{...frame,getBoundingClientRect:()=>({width:320,heig
 assert.equal(phase({controls:[{getClientRects:()=>[1]}]}),"authorizationRequired");
 assert.equal(phase({loc:{origin:"https://login.taobao.com",pathname:"/member/login.jhtml"}}),"authorizationRequired");
 assert.equal(phase({controls:[{...login,getClientRects:()=>[]}]}),"ready");
+// The account authorization flow must preserve its WebView and use an
+// official service entry rather than the unrelated generic login homepage.
+const accounts = fs.readFileSync("App/AccountProfiles.swift","utf8");
+assert.ok(source.includes("lastRevision != navigationRevision"));
+assert.ok(source.includes("pages-fast.m.taobao.com/wow/z/uniapp/1011717/last-mile-fe/end-collect-platform/identity-code"));
+assert.ok(accounts.includes("navigationRevision: cainiaoIdentityRevision"));
+assert.ok(!accounts.includes('.id(account.id + ":" + String(cainiaoIdentityRevision))'));
 console.log("PASS: Cainiao identity display phases and authentication isolation");

@@ -605,8 +605,11 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
     let accountID: String
     let authorizationMode: Bool
     var startWithLogin = false
+    var navigationRevision = 0
     let onPhase: (CainiaoIdentityPhase) -> Void
-    private static let loginEntry = URL(string: "https://login.taobao.com/member/login.jhtml")!
+    // HandyCode's official Taobao pickup identity entry. Unlike the generic
+    // login homepage this supplies a real service context for authentication.
+    private static let loginEntry = URL(string: "https://pages-fast.m.taobao.com/wow/z/uniapp/1011717/last-mile-fe/end-collect-platform/identity-code")!
     private static let entry = URL(string: "https://page.cainiao.com/cn-app-web/identity-code/index.html#/")!
 
     func makeCoordinator() -> Coordinator {
@@ -621,6 +624,7 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         web.uiDelegate = context.coordinator
         web.isUserInteractionEnabled = authorizationMode
         web.allowsBackForwardNavigationGestures = authorizationMode
+        context.coordinator.lastRevision = navigationRevision
         let url = authorizationMode && startWithLogin ? Self.loginEntry : Self.entry
         web.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         ParcelRunLog.record("菜鸟身份码", authorizationMode ? "打开账号内官方授权页面" : "开始官方 H5 只读检查")
@@ -628,7 +632,18 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         return web
     }
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        context.coordinator.onPhase = onPhase
+        let coordinator = context.coordinator
+        coordinator.onPhase = onPhase
+        guard authorizationMode, coordinator.lastRevision != navigationRevision else { return }
+        coordinator.lastRevision = navigationRevision
+        let revision = navigationRevision
+        let url = startWithLogin ? Self.loginEntry : Self.entry
+        // Keep the very same WKWebView and browsing session. Do not destroy
+        // the active authentication context on a SwiftUI state change.
+        Task { @MainActor [weak uiView, weak coordinator] in
+            guard let uiView, let coordinator, coordinator.lastRevision == revision else { return }
+            coordinator.navigate(uiView, to: url)
+        }
     }
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         coordinator.stop()
@@ -692,6 +707,9 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         private var task: Task<Void, Never>?
         private var phase: CainiaoIdentityPhase = .loading
         private var stopped = false
+        var lastRevision = 0
+        private var navigationEpoch = 0
+        private var navigationStarted = Date()
 
         init(authorizationMode: Bool, onPhase: @escaping (CainiaoIdentityPhase) -> Void) {
             self.authorizationMode = authorizationMode
@@ -715,6 +733,16 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
                 if !authorizationMode { stop() }
             }
         }
+        func navigate(_ web: WKWebView, to url: URL) {
+            guard !stopped, authorizationMode else { return }
+            // Manual retry of a stalled official navigation is allowed.
+            navigationEpoch += 1
+            navigationStarted = Date()
+            report(.loading)
+            web.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
+            ParcelRunLog.record("菜鸟身份码", url == CainiaoOfficialIdentityWebView.entry ?
+                "原会话内检查菜鸟身份码" : "原会话内打开淘宝官方身份码授权入口")
+        }
         func start(_ web: WKWebView) {
             task?.cancel()
             var loadingSince = Date()
@@ -723,10 +751,12 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
                 while !Task.isCancelled {
                     guard let self, let web, !self.stopped else { return }
                     if !web.isLoading, let url = web.url, url.absoluteString != "about:blank" {
+                        let epoch = self.navigationEpoch
                         if let raw = try? await web.evaluateJavaScript(CainiaoOfficialIdentityWebView.phaseJS),
                            let value = raw as? String,
                            let next = CainiaoIdentityPhase(rawValue: value) {
                             guard !Task.isCancelled, !self.stopped else { return }
+                            if epoch != self.navigationEpoch { continue }
                             if next == .authorizationRequired && !self.authorizationMode {
                                 // A login iframe may briefly exist during session restoration.
                                 // Never show it. Wait briefly before declaring authorization required.
@@ -743,7 +773,7 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
                         }
                     }
                     if self.phase == .loading &&
-                        Date().timeIntervalSince(loadingSince) > 30 {
+                        Date().timeIntervalSince(max(loadingSince, self.navigationStarted)) > 30 {
                         self.report(.failed)
                         if !self.authorizationMode {
                             self.stop()
@@ -774,7 +804,15 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
             if authorizationMode {
                 let blankFrame = action.targetFrame?.isMainFrame == false &&
                     action.request.url?.absoluteString == "about:blank"
-                decisionHandler(allowsAuthorization(action.request.url) || blankFrame ? .allow : .cancel)
+                let allowed = allowsAuthorization(action.request.url) || blankFrame
+                if !allowed {
+                    let scheme = action.request.url?.scheme?.lowercased()
+                    let kind = scheme == "http" ? "非加密 HTTP" : scheme == "https" ? "非允许域名或端口" : "非网页协议"
+                    if action.targetFrame?.isMainFrame != false {
+                        ParcelRunLog.record("菜鸟身份码", "已拦截授权导航：" + kind, level: "警告")
+                    }
+                }
+                decisionHandler(allowed ? .allow : .cancel)
                 return
             }
             // No popups, deep links, or main-frame login navigation in display mode.
@@ -811,16 +849,24 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
             return nil
         }
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            navigationEpoch += 1
+            navigationStarted = Date()
             report(.loading)
         }
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            guard (error as NSError).code != NSURLErrorCancelled else { return }
-            if let error = error as? URLError {
-                ParcelRunLog.record("菜鸟身份码", "H5 加载失败：网络错误编号 \(error.code.rawValue)", level: "警告")
-            } else {
-                ParcelRunLog.record("菜鸟身份码", "H5 导航失败", level: "警告")
-            }
+        private func navigationFailed(_ error: Error) {
+            let failure = error as NSError
+            if failure.domain == NSURLErrorDomain && failure.code == NSURLErrorCancelled { return }
+            // Fixed domain categories and numeric error only, never URL or message.
+            let category = failure.domain == NSURLErrorDomain ? "网络" :
+                failure.domain == WKError.errorDomain ? "WebKit" : "其他"
+            ParcelRunLog.record("菜鸟身份码", "H5 导航失败：\(category)错误编号 \(failure.code)", level: "警告")
             report(.failed)
+        }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            navigationFailed(error)
+        }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            navigationFailed(error)
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             ParcelRunLog.record("菜鸟身份码", "H5 网页进程已结束", level: "警告")

@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import SwiftUI
 import WebKit
 import CryptoKit
@@ -853,6 +854,20 @@ enum SyncJSON {
             }
             let code = SyncJSON.str(model["identityCode"]).trimmingCharacters(in: .whitespacesAndNewlines)
             let hasOtherKnownField = cainiaoIdentityCode(outer) != nil
+            let knownFields = ["success", "isSuccess", "resultCode", "errorCode", "errorMsg",
+                               "message", "msg", "code", "status", "needLogin", "needAuth",
+                               "needVerify", "needBindPhone", "certified", "isCertified",
+                               "identityCode", "expireTime", "identityCodeInfo", "identityInfo"]
+            let present = knownFields.filter { model[$0] != nil }
+            let booleanFields = ["success", "isSuccess", "needLogin", "needAuth", "needVerify",
+                                 "needBindPhone", "certified", "isCertified"]
+            let flags = booleanFields.compactMap { field -> String? in
+                guard let raw = model[field] as? NSNumber,
+                      CFGetTypeID(raw) == CFBooleanGetTypeID() else { return nil }
+                return field + "=" + (raw.boolValue ? "true" : "false")
+            }
+            ParcelRunLog.record("菜鸟身份码", "业务已知字段：" + (present.isEmpty ? "无" : present.joined(separator: "、")) +
+                "；其他字段 \(max(0, model.count - present.count)) 项；布尔状态：" + (flags.isEmpty ? "无" : flags.joined(separator: "、")))
             ParcelRunLog.record("菜鸟身份码", "解析检查：model 字段 \(model.count) 项，标准码字段\(shape(model["identityCode"]))，长度 \(code.count)，其他可识别码结构\(hasOtherKnownField ? "存在" : "未识别")，有效期字段\(shape(model["expireTime"]))")
             guard (4...1024).contains(code.count),
                   !code.hasPrefix("{"), !code.hasPrefix("["),

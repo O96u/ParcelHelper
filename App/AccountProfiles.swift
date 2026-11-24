@@ -774,30 +774,33 @@ struct MultiAccountPage: View {
             NavigationStack {
                 VStack(spacing: 0) {
                     CainiaoOfficialIdentityWebView(accountID: account.id, authorizationMode: true,
-                                                   startWithLogin: cainiaoIdentityLogin) { phase in
+                                                   startWithLogin: cainiaoIdentityLogin,
+                                                   navigationRevision: cainiaoIdentityRevision) { phase in
                         guard cainiaoIdentityAccount?.id == account.id else { return }
                         cainiaoIdentityPhase = phase
                         CainiaoIdentityPhase.remember(phase, accountID: account.id)
                     }
-                    .id(account.id + ":" + String(cainiaoIdentityRevision))
+                    .id(account.id)
                     Divider()
                     VStack(spacing: 8) {
                         Text(cainiaoIdentityPhase == .ready ? "身份码已验证" :
-                             cainiaoIdentityPhase == .authorizationRequired ? "请完成官方登录或验证" :
+                             cainiaoIdentityPhase == .authorizationRequired ? "先完成官方登录或验证，再检查身份码" :
                              cainiaoIdentityPhase == .failed ? "暂未加载出库码" : "正在检查身份码")
                             .font(.caption).foregroundStyle(.secondary)
                         HStack {
-                            Button("网页登录") {
+                            Button("淘宝授权") {
                                 cainiaoIdentityPhase = .loading
                                 cainiaoIdentityLogin = true
                                 cainiaoIdentityRevision += 1
                             }
+                            .disabled(cainiaoIdentityPhase == .loading)
                             Spacer()
                             Button("检查身份码") {
                                 cainiaoIdentityPhase = .loading
                                 cainiaoIdentityLogin = false
                                 cainiaoIdentityRevision += 1
                             }
+                            .disabled(cainiaoIdentityPhase == .loading)
                         }
                         .font(.subheadline)
                     }
