@@ -631,12 +631,14 @@ struct ParcelsHome: View {
                 .listRowSeparator(.hidden)
             } else {
                 ForEach(visible) { p in
-                    Button {
-                        selectedParcel = p
-                    } label: {
-                        ParcelCell(parcel: p)
-                    }
-                    .buttonStyle(.plain)
+                    ParcelCell(parcel: p)
+                        .contentShape(Rectangle())
+                        // A row-wide Button can consume a horizontal swipe as a
+                        // selection. Keep tap recognition separate from List's
+                        // native trailing swipe actions.
+                        .onTapGesture { selectedParcel = p }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction { selectedParcel = p }
                     .listRowInsets(EdgeInsets(top: 5, leading: 18, bottom: 5, trailing: 18))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
