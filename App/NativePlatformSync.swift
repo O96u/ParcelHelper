@@ -422,9 +422,7 @@ enum SyncJSON {
         // Only unequivocal pickup wording should mark an item as collected.
         if Parcel.confirmsRecipientPickup(text) { return "picked" }
         if noPickup.contains(where: { text.contains($0) }) { return "transit" }
-        if ["待取件", "已到站", "已暂存", "已存放", "已放入", "已代收", "送达代收点",
-            "请及时取", "请及时领取", "凭取件码", "待领取", "快递柜", "驿站", "代收点"]
-            .contains(where: { text.contains($0) }) { return "arrived" }
+        if Parcel.isStationArrival(text) || ["凭取件码", "请及时领取"].contains(where: text.contains) { return "arrived" }
         return "transit"
     }
 
@@ -438,6 +436,8 @@ enum SyncJSON {
         var changed = 0
         var newArrivalNotifications = 0
         var notificationChanges: [(Parcel?, Parcel)] = []
+        var pendingWrites: [Parcel] = []
+        var working = store.snapshot.parcels
         var inserted = 0
         var updated = 0
         var historicalSkipped = 0
@@ -462,15 +462,15 @@ enum SyncJSON {
             else { continue }
             // Latest provider state takes precedence over old route events.
             let currentStatus = row.latest.isEmpty ? (row.tracks.first?.text ?? "") : row.latest
-            let newestTrack = TrackMerge.ordered(row.tracks).first?.text ?? ""
+            let newestTrack = TrackMerge.latest(row.tracks)?.text ?? ""
             let trackKind = arrivalKind(newestTrack)
-            let kind = trackKind == "picked" ? "picked" : arrivalKind(currentStatus)
+            let kind = trackKind == "picked" ? "picked" : (trackKind == "arrived" ? "arrived" : arrivalKind(currentStatus))
             let wasArrived = row.arrived || !code.isEmpty || kind == "arrived"
             let closure = ["已取消", "退款成功", "已关闭", "退货成功"].first {
                 row.latest.contains($0) || row.orderStatus.contains($0)
             }
             let normalizedMail = codeKey(mail)
-            let previous = store.snapshot.parcels.first(where: {
+            let previous = working.first(where: {
                 (!normalizedMail.isEmpty && codeKey($0.mailNo ?? "") == normalizedMail) ||
                 (!orderKey.isEmpty && $0.orderId == orderKey &&
                  (mail.isEmpty || ($0.mailNo ?? "").isEmpty ||
@@ -481,7 +481,8 @@ enum SyncJSON {
             if let closure {
                 if var existing = previous, !existing.isDone, !existing.isSigned, existing.closed != closure {
                     existing.closed = closure
-                    store.upsert(existing, persistNow: false)
+                    pendingWrites.append(existing)
+                    if let index = working.firstIndex(where: { $0.uuid == existing.uuid }) { working[index] = existing }
                     ParcelNotifications.cancel(existing.uuid)
                     changed += 1
                     updated += 1
@@ -499,13 +500,14 @@ enum SyncJSON {
                                 "包裹已到站", "待取件"]
             let receiptTerms = ["已签收", "签收成功", "已妥投",
                                 "收件人签收", "本人签收", "已从代收点取出"]
-            let finishedDelivery = [TrackMerge.ordered(row.tracks).first?.text ?? row.latest].contains { event in
+            let finishedDelivery = [TrackMerge.latest(row.tracks)?.text ?? row.latest].contains { event in
                 Parcel.confirmsRecipientPickup(event) ||
                 Parcel.confirmsFinalDelivery(event) ||
-                (!stationTerms.contains(where: event.contains) &&
+                (!Parcel.isStationArrival(event) && !stationTerms.contains(where: event.contains) &&
                  receiptTerms.contains(where: event.contains))
             }
-            if previous == nil && (kind == "picked" || finishedOrder || finishedDelivery) {
+            if previous == nil && (kind == "picked" || finishedOrder || finishedDelivery ||
+                                  Parcel.isReturn(currentStatus) || Parcel.isReturn(newestTrack)) {
                 historicalSkipped += 1
                 continue
             }
@@ -568,7 +570,9 @@ enum SyncJSON {
             // Missing title, ETA, source app, order ID or receiver changes
             // here previously caused genuine server updates to be discarded.
             if p.hasSyncedContentChange(comparedTo: previous) {
-                store.upsert(p, persistNow: false)
+                pendingWrites.append(p)
+                if let index = working.firstIndex(where: { $0.uuid == p.uuid }) { working[index] = p }
+                else { working.insert(p, at: 0) }
                 if previous != nil {
                     notificationChanges.append((previous, p))
                 } else if notifyNewArrival && p.isPending && newArrivalNotifications < 3 {
@@ -581,7 +585,7 @@ enum SyncJSON {
                 if previous == nil { inserted += 1 } else { updated += 1 }
             }
         }
-        if changed > 0 { store.persist() }
+        if changed > 0 { store.applySyncBatch(pendingWrites) }
         if !notificationChanges.isEmpty {
             let changes = notificationChanges
             Task { await ParcelNotifications.notifyBatch(changes) }

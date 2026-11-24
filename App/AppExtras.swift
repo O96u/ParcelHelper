@@ -461,12 +461,14 @@ struct ParcelUpdatePage: View {
               event: displayEvent(entry.event), level: entry.severity, taskID: entry.taskID, elapsed: entry.elapsed)
     }
 
-    static func entries() -> [Entry] {
+    private static var buffer: [Entry] = {
         guard let data = UserDefaults.standard.data(forKey: key),
               let items = try? JSONDecoder().decode([Entry].self, from: data)
         else { return [] }
         return items.map(localized)
-    }
+    }()
+    private static let writeQueue = DispatchQueue(label: "ParcelHelper.logs.write", qos: .utility)
+    static func entries() -> [Entry] { buffer }
 
     static func record(_ subsystem: String, _ event: String, level: String? = nil, taskID: String? = nil, elapsed: Double? = nil) {
         // Defense in depth: replace long identifiers and suspicious values in
@@ -483,16 +485,19 @@ struct ParcelUpdatePage: View {
                                         options: .regularExpression)
             }
         }
-        var items = entries()
-        items.append(Entry(date: Date(),
+        buffer.append(Entry(date: Date(),
                            subsystem: displaySubsystem(redact(subsystem)),
                            event: displayEvent(redact(event)),
                            level: level ?? classify(event), taskID: taskID, elapsed: elapsed))
-        if items.count > maximumEntries {
-            items.removeFirst(items.count - maximumEntries)
+        if buffer.count > maximumEntries {
+            buffer.removeFirst(buffer.count - maximumEntries)
         }
-        if let data = try? JSONEncoder().encode(items) {
-            UserDefaults.standard.set(data, forKey: key)
+        let items = buffer
+        let storageKey = key
+        writeQueue.async {
+            if let data = try? JSONEncoder().encode(items) {
+                UserDefaults.standard.set(data, forKey: storageKey)
+            }
         }
     }
 
@@ -509,7 +514,9 @@ struct ParcelUpdatePage: View {
     }
 
     static func clear() {
-        UserDefaults.standard.removeObject(forKey: key)
+        buffer.removeAll()
+        let storageKey = key
+        writeQueue.async { UserDefaults.standard.removeObject(forKey: storageKey) }
     }
 }
 

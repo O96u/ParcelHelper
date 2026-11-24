@@ -8,7 +8,22 @@ struct TrackNode: Codable, Hashable, Identifiable {
 
 // One conservative merge policy for platform sync, details and storage.
 enum TrackMerge {
+    private final class CachedDate: NSObject {
+        let value: Date?
+        init(_ value: Date?) { self.value = value }
+    }
+    private static let cache: NSCache<NSString, CachedDate> = {
+        let cache = NSCache<NSString, CachedDate>()
+        cache.countLimit = 8192
+        return cache
+    }()
     static func date(_ value: String) -> Date? {
+        if let cached = cache.object(forKey: value as NSString) { return cached.value }
+        let parsed = parseDate(value)
+        cache.setObject(CachedDate(parsed), forKey: value as NSString)
+        return parsed
+    }
+    private static func parseDate(_ value: String) -> Date? {
         if let epoch = Double(value), epoch > 1_000_000_000 {
             return Date(timeIntervalSince1970: epoch > 1_000_000_000_000 ? epoch / 1000 : epoch)
         }
@@ -22,6 +37,18 @@ enum TrackMerge {
             if let date = formatter.date(from: value) { return date }
         }
         return nil
+    }
+    static func latest(_ nodes: [TrackNode]) -> TrackNode? {
+        guard var best = nodes.first else { return nil }
+        var bestDate = date(best.time)
+        for node in nodes.dropFirst() {
+            guard let candidate = date(node.time) else { continue }
+            if bestDate.map({ candidate > $0 }) ?? true {
+                best = node
+                bestDate = candidate
+            }
+        }
+        return best
     }
     static func ordered(_ nodes: [TrackNode]) -> [TrackNode] {
         var seen = Set<TrackNode>()
@@ -54,6 +81,12 @@ enum TrackMerge {
             if !latest.isEmpty { parcel.trackLatest = latest }
         } else if parcel.trackLatest?.isEmpty != false {
             parcel.trackLatest = old.first?.text ?? incoming.first?.text
+        }
+        if nodes.isEmpty, Parcel.isStationArrival(summary),
+           !Parcel.confirmsFinalDelivery(old.first?.text ?? ""),
+           !Parcel.confirmsRecipientPickup(old.first?.text ?? ""),
+           !Parcel.isReturn(old.first?.text ?? "") {
+            parcel.trackLatest = summary
         }
     }
 }
@@ -137,7 +170,11 @@ struct Parcel: Codable, Identifiable, Hashable {
     }
     var currentTrackingText: String {
         // Saved summaries are authoritative when a provider supplies no timeline.
-        TrackMerge.ordered(trackNodes).first?.text ?? trackLatest ?? ""
+        let latest = TrackMerge.latest(trackNodes)?.text ?? trackLatest ?? ""
+        if let summary = trackLatest, Self.isStationArrival(summary),
+           !Self.confirmsFinalDelivery(latest), !Self.confirmsRecipientPickup(latest),
+           !Self.isReturn(latest) { return summary }
+        return latest
     }
     var isDone: Bool { status == 2 || pickedByUser || latestPickupConfirmed }
     /// Some JD doorstep deliveries say "您的订单已送达" without "已签收".
@@ -149,7 +186,8 @@ struct Parcel: Codable, Identifiable, Hashable {
                        "待取件", "请取件", "暂存", "代签收", "未送达", "未签收"]
         guard !station.contains(where: text.contains) else { return false }
         return ["您的订单已送达", "订单已送达", "已送达收件人",
-                "已送达客户", "已送达本人"].contains(where: text.contains)
+                "已送达客户", "已送达本人", "已派送至本人", "已派送至收件人",
+                 "已投递给本人", "已交付收件人"].contains(where: text.contains)
     }
     // The courier marked this package delivered, not necessarily picked up
     // personally. Do not conflate signature and user's pickup.
@@ -161,17 +199,31 @@ struct Parcel: Codable, Identifiable, Hashable {
                       "收件人签收", "已完成签收", "已送达收件人"]
         // Also inspect route history when the summary has not caught up.
         let text = currentTrackingText
-        return !excluded.contains(where: text.contains) &&
+        return !Self.isStationArrival(text) && !Self.isReturn(text) &&
+            !excluded.contains(where: text.contains) &&
             (text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "SIGN" ||
              signed.contains(where: text.contains) ||
              Self.confirmsFinalDelivery(text))
     }
+    static func isReturn(_ text: String) -> Bool {
+        ["包裹退回中", "快件退回中", "退回中", "退件中", "退回寄件人", "退回发件人", "退回商家", "已退回", "退回成功"].contains(where: text.contains)
+    }
+    static func isStationArrival(_ text: String) -> Bool {
+        let station = ["驿站", "代收点", "快递柜", "自提点", "自提柜", "取件点"]
+        let handoff = ["已派送至", "派送成功", "已签收", "已送达", "已到达", "已放入", "已存放", "已入库", "已暂存", "已代收", "待取件", "请取件", "送达代收点"]
+        return !isReturn(text) && !confirmsRecipientPickup(text) &&
+            !["正在派送", "派送途中", "即将送达", "将送达", "预计送达"].contains(where: text.contains) &&
+            (["待取件", "已到站", "待自提", "待领取", "已入柜"].contains(where: text.contains) ||
+             (station.contains(where: text.contains) && handoff.contains(where: text.contains)))
+    }
     var hasDeliveryException: Bool {
-        ["退回寄件人", "退回发件人", "退件中", "拒收", "配送异常", "派送异常", "物流异常"].contains(where: currentTrackingText.contains)
+        let text = currentTrackingText
+        return Self.isReturn(text) || ["拒收", "配送异常", "派送异常", "物流异常"].contains(where: text.contains)
     }
     var displayStatus: String {
         if isDone { return "已取件" }
         if let closed, !closed.isEmpty { return closed }
+        if Self.isReturn(currentTrackingText) { return "退回中" }
         if hasDeliveryException { return "物流异常" }
         if isSigned {
             return Self.confirmsFinalDelivery(currentTrackingText) ? "已送达" : "已签收"
@@ -181,7 +233,7 @@ struct Parcel: Codable, Identifiable, Hashable {
     }
     var isPending: Bool {
         guard !isDone, !isSigned, !hasDeliveryException, closed == nil else { return false }
-        if arrivedAt != nil { return true }
+        if arrivedAt != nil || Self.isStationArrival(currentTrackingText) { return true }
         if !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && code != mailNo { return true }
         // The original model requires a real pickup code or arrival timestamp.
         return !codes.isEmpty

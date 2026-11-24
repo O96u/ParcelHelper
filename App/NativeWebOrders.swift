@@ -183,7 +183,7 @@ private struct WebShipment: Decodable {
         timeoutTask?.cancel()
         timeoutTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(nanoseconds: platform == "jd" ? 115_000_000_000 : 35_000_000_000)
+                try await Task.sleep(nanoseconds: platform == "pdd" ? 60_000_000_000 : 150_000_000_000)
             } catch { return }
             guard let self,
                   activePlatform == platform && activeAccountID == accountID &&
@@ -490,7 +490,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var detailLink=jdURL(o.orderDetailLink);
         if(!link&&/deal_wuliu|logistics|ordertrack|expressdetail/i.test(detailLink))link=detailLink;
         var courierProgress=/配送中|正在配送|配送途中|派送中|正在派送|运输中|已揽收|已发货|已出库|快递员|配送员|物流运输/.test(desc);
-        var verified=p.progressId==='logistics'||/deal_wuliu|logistics|ordertrack|expressdetail/i.test(link)||courierProgress||/待收货|待取件|待自提|待提货/.test(status);
+        var verified=p.progressId==='logistics'||/deal_wuliu|logistics|ordertrack|expressdetail/i.test(link)||courierProgress||/待收货|等待收货|待取件|待自提|待提货/.test(status);
         var active=/待发货|待收货|待出库|运输|配送|派送|待取|已出库|正在出库|waitreceive|shipping|delivering/i.test(status);
         // Ignore unrelated orders: a structured courier link/track or an
         // active shipping state/pickup code is required.
@@ -961,7 +961,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             item.station = order.station ?? ""
             item.latest = summary
             item.tracks = tracks
-            item.arrived = !code.isEmpty
+            item.arrived = !code.isEmpty || Parcel.isStationArrival(summary)
             loaded.append(item)
             onParcel?(item)
             record("订单物流进度已保留（官方结构化订单，暂无有效运单号）")
@@ -1072,11 +1072,16 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     item.mailNo = shipment.mail
                     item.company = shipment.company
                     item.title = order.title
-                    item.latest = shipment.latest.isEmpty ? order.status : shipment.latest
+                    item.latest = shipment.latest.isEmpty ? (order.summary ?? order.status) : shipment.latest
+                    if Parcel.isStationArrival(order.summary ?? "") &&
+                        !Parcel.confirmsFinalDelivery(item.latest) && !Parcel.confirmsRecipientPickup(item.latest) &&
+                        !Parcel.isReturn(item.latest) {
+                        item.latest = order.summary ?? item.latest
+                    }
                     item.code = shipment.pickup
                     item.station = shipment.station
                     item.tracks = shipment.tracks
-                    item.arrived = !shipment.pickup.isEmpty
+                    item.arrived = !shipment.pickup.isEmpty || Parcel.isStationArrival(item.latest) || Parcel.isStationArrival(order.summary ?? "")
                     if let slot = self.loaded.firstIndex(where: {
                         $0.orderID == item.orderID && $0.mailNo.isEmpty
                     }) {
@@ -1160,7 +1165,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
           var path=(location.pathname||'').toLowerCase();
           var page=/login|passport|plogin/.test(location.hostname+path)?'登录页':
             /orderlist|order\/list/.test(path)?'订单页':
-            /myjd|index\.html|\/home/.test(path)?'个人首页':'其他页面';
+            location.hostname==='my.m.jd.com'||/myjd|index\.html|\/home/.test(path)?'个人首页':'其他页面';
           var hooked=null;
           try{hooked=window.ParcelHelperJD&&window.ParcelHelperJD.snapshot()}catch(e){}
           var orders=[],seen={},stats={attrs:0,links:0,state:0};
@@ -1187,7 +1192,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                        String(extra.orderStatusName||extra.statusName||extra.orderStatus||'').slice(0,80);
             var logisticsNode=el&&card&&card.querySelector&&card.querySelector('[class*="order_wuliubar"]');
             var summary=logisticsNode?String(logisticsNode.innerText||logisticsNode.textContent||'').trim().slice(0,1200):'';
-            var verified=!!el&&/待收货|待取件|待自提|运输|派送|配送|已发货|已出库/.test(status+' '+summary)&&!/秒送|京东到家|即时配送/.test(status+' '+summary);
+            var verified=!!el&&/待收货|等待收货|待取件|待自提|运输|派送|配送|已发货|已出库/.test(status+' '+summary)&&!/秒送|京东到家|即时配送/.test(status+' '+summary);
             var row={id:id,title:title,status:status,
               sku:String(sku.skuid||sku.skuId||extra.skuid||extra.skuId||''),
               shop:String(extra.shopId||extra.shopid||sku.shopid||''),

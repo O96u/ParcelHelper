@@ -207,6 +207,24 @@ import WidgetKit
         let enabled = snapshot.preferences.liveActivityEnabled
         Task { await LiveActivityCoordinator.update(with: enabled ? rows : []) }
     }
+    func applySyncBatch(_ parcels: [Parcel]) {
+        guard !parcels.isEmpty else { return }
+        var next = snapshot
+        var indices = Dictionary(next.parcels.enumerated().map { ($0.element.uuid, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        var inserted: [Parcel] = []
+        for parcel in parcels {
+            if let index = indices[parcel.uuid] {
+                if index < next.parcels.count { next.parcels[index] = parcel }
+                else { inserted[index - next.parcels.count] = parcel }
+            } else {
+                indices[parcel.uuid] = next.parcels.count + inserted.count
+                inserted.append(parcel)
+            }
+        }
+        next.parcels = Array(inserted.reversed()) + next.parcels
+        snapshot = next
+        persist()
+    }
     func upsert(_ parcel: Parcel, persistNow: Bool = true) {
         if let i = snapshot.parcels.firstIndex(where: { $0.uuid == parcel.uuid }) {
             snapshot.parcels[i] = parcel

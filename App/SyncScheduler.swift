@@ -118,7 +118,7 @@ import SwiftUI
 
         let subscriptions = await refreshSubscriptions(force: force)
         if subscriptions > 0 { results.append("已更新订阅物流 \(subscriptions) 件") }
-        ParcelStore.shared.persist()
+        if subscriptions > 0 { ParcelStore.shared.persist() }
         ParcelRunLog.record("前台同步", "原生接口阶段结束；结果 \(results.count) 条，中断 \(interrupted.count) 条")
         // Only record a successful foreground refresh if a provider actually
         // succeeded. A failed or empty pass must not claim fresh logistics.
