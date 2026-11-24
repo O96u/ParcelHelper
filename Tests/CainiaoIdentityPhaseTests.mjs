@@ -25,21 +25,12 @@ assert.equal(phase({controls:[{getClientRects:()=>[1]}]}),"authorizationRequired
 assert.equal(phase({loc:{origin:"https://login.taobao.com",pathname:"/member/login.jhtml"}}),"authorizationRequired");
 assert.equal(phase({controls:[{...login,getClientRects:()=>[]}]}),"ready");
 const taobaoLoc = {origin:"https://pages-fast.m.taobao.com", pathname:"/wow/z/uniapp/1011717/last-mile-fe/end-collect-platform/identity-code"};
-const label = {getClientRects:()=>[1],childNodes:[{}]};
-const root = {getClientRects:()=>[1],querySelector:s=>s.includes("code--")?label:image};
-assert.equal(phase({loc:taobaoLoc,root}),"taobaoReady");
-assert.equal(phase({loc:taobaoLoc,root,controls:[login]}),"authorizationRequired");
-assert.equal(phase({loc:taobaoLoc,root:null}),"loading");
-assert.equal(phase({loc:{...taobaoLoc,origin:"https://example.com"},root}),"authorizationRequired");
-// The account authorization flow must preserve its WebView and use an
-// official service entry rather than the unrelated generic login homepage.
+assert.equal(phase({loc:taobaoLoc}),"authorizationRequired");
+assert.equal(phase({loc:{origin:"https://example.com",pathname:location.pathname}}),"authorizationRequired");
 const accounts = fs.readFileSync("App/AccountProfiles.swift","utf8");
-assert.ok(source.includes("lastRevision != navigationRevision"));
-assert.ok(source.includes("pages-fast.m.taobao.com/wow/z/uniapp/1011717/last-mile-fe/end-collect-platform/identity-code"));
-assert.ok(accounts.includes("navigationRevision: cainiaoIdentityRevision"));
-assert.ok(!accounts.includes('.id(account.id + ":" + String(cainiaoIdentityRevision))'));
-assert.ok(source.includes("return child"));
-assert.ok(source.includes("webViewDidClose"));
-assert.ok(source.includes("webView === mainWeb, popupWeb == nil"));
-assert.ok(accounts.includes("cainiaoTaobaoVerified"));
+assert.ok(!accounts.includes('Label("身份码授权"'));
+assert.ok(!accounts.includes("cainiaoIdentityAccount"));
+assert.ok(source.includes("web.isUserInteractionEnabled = false"));
+assert.ok(!source.includes("case loading, ready, taobaoReady"));
+assert.ok(source.includes("cainiaoCertificationUnavailable"));
 console.log("PASS: Cainiao identity display phases and authentication isolation");

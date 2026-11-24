@@ -911,6 +911,12 @@ enum SyncJSON {
             guard (4...1024).contains(code.count),
                   !code.hasPrefix("{"), !code.hasPrefix("["),
                   !["null", "undefined", "true", "false", "invalid"].contains(code.lowercased()) else {
+                if certificationFields.allSatisfy({ field in
+                    guard let value = model[field] as? NSNumber else { return false }
+                    return value.doubleValue == 0
+                }) {
+                    throw NativeSyncError.badResponse("菜鸟网页接口认证状态均未通过，未返回有效身份码")
+                }
                 if certificationFields.contains(where: { model[$0] != nil }) {
                     throw NativeSyncError.badResponse("菜鸟接口仅返回认证状态，未返回有效身份码")
                 }
