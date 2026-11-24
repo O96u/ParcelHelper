@@ -2,6 +2,7 @@ import Foundation
 import UserNotifications
 
 enum ParcelNotifications {
+    @MainActor private static var pendingEvents = Set<String>()
     static func requestPermission() async -> Bool {
         (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
     }
@@ -27,8 +28,8 @@ enum ParcelNotifications {
         let wasPending = previous?.isPending ?? false
         let isSigned = current.isSigned
         let isPending = current.isPending
-        let before = (previous?.trackLatest ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let latest = (current.trackLatest ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let before = (previous?.currentTrackingText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let latest = current.currentTrackingText.trimmingCharacters(in: .whitespacesAndNewlines)
         let changedText = !latest.isEmpty && latest != before
         let alreadyKnown = previous != nil
         let wasDone = previous?.isDone ?? false
@@ -74,7 +75,10 @@ enum ParcelNotifications {
         let detail = latest.isEmpty ? current.stationText : latest
         let event = category + ":" + detail
         let key = "native.reminder.lastEvent." + current.uuid
-        guard UserDefaults.standard.string(forKey: key) != event else { return }
+        let inFlight = key + ":" + event
+        guard UserDefaults.standard.string(forKey: key) != event,
+              pendingEvents.insert(inFlight).inserted else { return }
+        defer { pendingEvents.remove(inFlight) }
 
         let content = UNMutableNotificationContent()
         content.title = title

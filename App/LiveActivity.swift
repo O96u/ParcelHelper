@@ -171,7 +171,7 @@ struct PickupActivityAttributes: ActivityAttributes {
         if let first = existing.first {
             // Avoid repeatedly updating the same Live Activity during an
             // unchanged foreground refresh or unrelated settings save.
-            if first.content.state != state {
+            if first.content.state != state || first.content.staleDate != deadline {
                 await first.update(ActivityContent(state: state, staleDate: deadline))
             }
             for extra in existing.dropFirst() {

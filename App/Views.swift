@@ -267,6 +267,7 @@ struct PickupHome: View {
     @EnvironmentObject private var store: ParcelStore
     @State private var refreshing = false
     @State private var refreshNotice: String?
+    @State private var batchPickup = false
     @AppStorage("native.id.taobao.enabled") private var showTaobaoIdentity = true
     @AppStorage("native.id.cainiao.enabled") private var showCainiaoIdentity = true
     @AppStorage("native.id.pdd.enabled") private var showPddIdentity = true
@@ -282,8 +283,9 @@ struct PickupHome: View {
     }
     private var monthPicked: Int {
         picked.filter {
-            Calendar.current.isDate(
-                Date(timeIntervalSince1970: ($0.pickedAt ?? $0.createdAt) / 1000),
+            guard let timestamp = $0.pickedAt else { return false }
+            return Calendar.current.isDate(
+                Date(timeIntervalSince1970: timestamp / 1000),
                 equalTo: Date(), toGranularity: .month)
         }.count
     }
@@ -406,6 +408,16 @@ struct PickupHome: View {
             }
         }
         .refreshable { await refreshAllAsync() }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { batchPickup = true } label: {
+                    Label("批量取件", systemImage: "checklist")
+                }.disabled(pending.isEmpty)
+            }
+        }
+        .sheet(isPresented: $batchPickup) {
+            NavigationStack { BatchPickupPage() }
+        }
         .task { _ = await NativeHomeRefresh.refresh() }
         .alert("同步结果", isPresented: Binding(
             get: { refreshNotice != nil },
@@ -483,6 +495,7 @@ struct ParcelsHome: View {
     @FocusState private var searchFocused: Bool
     @State private var finding = false
     @State private var importing = false
+    @State private var batchImport = false
     @State private var deleteTarget: Parcel?
     @State private var selectedParcel: Parcel?
 
@@ -653,7 +666,10 @@ struct ParcelsHome: View {
                     Image(systemName: "square.and.arrow.down")
                 }
                 .accessibilityLabel("导入包裹")
-                Button { finding = true } label: {
+                Menu {
+                    Button("添加运单", systemImage: "plus") { finding = true }
+                    Button("批量导入运单", systemImage: "list.bullet") { batchImport = true }
+                } label: {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("添加包裹")
@@ -665,6 +681,9 @@ struct ParcelsHome: View {
         }
         .sheet(isPresented: $importing) {
             NavigationStack { PlatformsHome() }
+        }
+        .sheet(isPresented: $batchImport) {
+            NavigationStack { BatchWaybillPage() }
         }
         .navigationDestination(item: $selectedParcel) { target in
             ParcelDetail(parcelID: target.uuid)
@@ -834,7 +853,11 @@ struct ParcelDetail: View {
                         .padding(14)
                         .frame(maxWidth: .infinity)
                         .background(PH.card, in: RoundedRectangle(cornerRadius: 18))
-                        infoCard(p)
+                        if p.isPending || !p.displayCode.isEmpty { infoCard(p) }
+                        if let updated = p.trackUpdatedAt {
+                            Text("最近查询：" + Date(timeIntervalSince1970: updated / 1000).formatted(date: .numeric, time: .shortened))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         if let eta = p.eta, !eta.isEmpty {
                             HStack {
                                 Image(systemName: "clock").foregroundStyle(accent)
@@ -971,7 +994,7 @@ struct ParcelDetail: View {
             defer {isRefreshing=false}
             do {
                 let latest=try await NativeTracking.lookup(mail,source:p.source ?? p.srcApp?.id,
-                    shipperCode:p.shipperCode ?? "",phone:"",
+                    shipperCode:p.shipperCode ?? "",phone:NativeTracking.phone(for: mail),
                     accountIDs:p.linkedAccounts ?? [])
                 guard var current=store.snapshot.parcels.first(where:{$0.uuid == parcelID}) else {return}
                 TrackMerge.apply(to: &current, nodes: latest.nodes, summary: latest.latest)
@@ -1130,8 +1153,9 @@ struct StatsHome: View {
     private var inTransit: Int { parcels.filter(\.isTransit).count }
     private var monthCount: Int {
         picked.filter {
-            Calendar.current.isDate(
-                Date(timeIntervalSince1970: ($0.pickedAt ?? $0.createdAt) / 1000),
+            guard let timestamp = $0.pickedAt else { return false }
+            return Calendar.current.isDate(
+                Date(timeIntervalSince1970: timestamp / 1000),
                 equalTo: Date(), toGranularity: .month)
         }.count
     }
@@ -1149,7 +1173,8 @@ struct StatsHome: View {
         return (0..<5).reversed().compactMap { offset -> (String, Int)? in
             guard let d = cal.date(byAdding: .month, value: -offset, to: Date()) else { return nil }
             let count = picked.filter {
-                cal.isDate(Date(timeIntervalSince1970: ($0.pickedAt ?? $0.createdAt) / 1000), equalTo: d, toGranularity: .month)
+                guard let timestamp = $0.pickedAt else { return false }
+                return cal.isDate(Date(timeIntervalSince1970: timestamp / 1000), equalTo: d, toGranularity: .month)
             }.count
             return ("\(cal.component(.month, from: d))月", count)
         }
@@ -1172,7 +1197,7 @@ struct StatsHome: View {
             }
             // Most carriers return newest -> oldest; retain the earliest
             // matching arrival for each parcel, never double-count its updates.
-            return matching.reversed().compactMap { clockMinute(from: $0.time) }.first
+            return TrackMerge.ordered(matching).reversed().compactMap { clockMinute(from: $0.time) }.first
         }
     }
     private func clockMinute(from raw: String) -> Int? {
@@ -1473,6 +1498,8 @@ struct SettingsHome: View {
                     nativeRow("常见问题", "questionmark.circle.fill", .blue) { FAQSettingsPage() }
                     Divider().padding(.leading, 58)
                     nativeRow("运行日志", "list.bullet.rectangle.portrait.fill", .blue) { ParcelRunLogPage() }
+                    Divider().padding(.leading, 58)
+                    nativeRow("数据备份", "externaldrive.fill", .blue) { LocalBackupPage() }
                     Divider().padding(.leading, 58)
                     nativeRow("清除缓存", "trash.fill", .gray) { CacheSettingsPage() }
                 }
@@ -2233,5 +2260,109 @@ private struct KdniaoOfficialLoginWeb: UIViewRepresentable {
             webView.load(action.request)
             return nil
         }
+    }
+}
+
+
+// Independent presentation modules: keep batch changes explicit and reversible
+// through the existing parcel editor.
+private struct BatchPickupPage: View {
+    @EnvironmentObject private var store: ParcelStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected = Set<String>()
+    @State private var confirm = false
+    private var pending: [Parcel] { store.snapshot.parcels.filter { $0.type == "delivery" && $0.isPending } }
+    var body: some View {
+        List {
+            Button("全选 / 取消全选") {
+                let all = Set(pending.map(\.uuid))
+                selected = selected == all ? [] : all
+            }
+            ForEach(pending) { parcel in
+                Button {
+                    if selected.contains(parcel.uuid) { selected.remove(parcel.uuid) }
+                    else { selected.insert(parcel.uuid) }
+                } label: {
+                    HStack {
+                        Image(systemName: selected.contains(parcel.uuid) ? "checkmark.circle.fill" : "circle")
+                        VStack(alignment: .leading) {
+                            Text(parcel.displayCode.isEmpty ? parcel.title : parcel.displayCode)
+                            Text(parcel.stationText).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                }.buttonStyle(.plain)
+            }
+        }
+        .navigationTitle("批量取件")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("已取 \(selected.count) 件") { confirm = true }.disabled(selected.isEmpty)
+            }
+        }
+        .alert("确认标记已取？", isPresented: $confirm) {
+            Button("取消", role: .cancel) {}
+            Button("确认") {
+                store.markPickedBatch(selected)
+                for id in selected { ParcelNotifications.cancel(id) }
+                dismiss()
+            }
+        } message: { Text("仅修改本地取件状态，不会向驿站发送取件指令。") }
+    }
+}
+
+private struct BatchWaybillPage: View {
+    @EnvironmentObject private var store: ParcelStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var input = ""
+    @State private var result: Int?
+    private var candidates: [String] {
+        input.components(separatedBy: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",，;；")))
+            .map { $0.uppercased() }
+            .filter { $0.range(of: #"^[A-Z0-9-]{8,40}$"#, options: .regularExpression) != nil && $0.contains(where: \.isNumber) }
+    }
+    var body: some View {
+        Form {
+            Section("运单号") {
+                TextEditor(text: $input).frame(minHeight: 160).textInputAutocapitalization(.characters)
+                Text("每行一个运单号，也可用空格或逗号分隔。请核对纯数字单号。").font(.footnote)
+            }
+            Section {
+                LabeledContent("有效候选", value: "\(Set(candidates).count) 件")
+                Button("确认导入") { result = store.importWaybills(candidates) }.disabled(candidates.isEmpty)
+            }
+        }
+        .navigationTitle("批量导入")
+        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+        .alert("导入完成", isPresented: Binding(get: { result != nil }, set: { if !$0 { result = nil } })) {
+            Button("确定") { dismiss() }
+        } message: { Text("新增 \(result ?? 0) 件，重复运单已跳过。") }
+    }
+}
+
+private struct LocalBackupPage: View {
+    @EnvironmentObject private var store: ParcelStore
+    @State private var confirm = false
+    @State private var notice: String?
+    var body: some View {
+        Form {
+            Section("本地恢复") {
+                LabeledContent("最近有效备份", value: store.recoveryBackupDate?.formatted(date: .numeric, time: .shortened) ?? "暂无")
+                Button("恢复上一份备份", role: .destructive) { confirm = true }
+                    .disabled(store.recoveryBackupDate == nil)
+            } footer: { Text("恢复会替换当前包裹、驿站和本地偏好，不会恢复平台登录凭据。") }
+        }
+        .navigationTitle("数据备份")
+        .alert("确认恢复？", isPresented: $confirm) {
+            Button("取消", role: .cancel) {}
+            Button("恢复", role: .destructive) {
+                do { try store.restoreRecoveryBackup(); notice = "已恢复本地备份" }
+                catch { notice = "恢复失败，原有数据未被替换" }
+            }
+        }
+        .alert("备份结果", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
+            Button("确定") { notice = nil }
+        } message: { Text(notice ?? "") }
     }
 }

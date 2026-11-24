@@ -488,7 +488,7 @@ private enum SyncJSON {
                                 "包裹已到站", "待取件"]
             let receiptTerms = ["已签收", "签收成功", "已妥投",
                                 "收件人签收", "本人签收", "已从代收点取出"]
-            let finishedDelivery = ([row.latest] + row.tracks.map(\.text)).contains { event in
+            let finishedDelivery = [TrackMerge.ordered(row.tracks).first?.text ?? row.latest].contains { event in
                 Parcel.confirmsRecipientPickup(event) ||
                 Parcel.confirmsFinalDelivery(event) ||
                 (!stationTerms.contains(where: event.contains) &&
@@ -1185,10 +1185,16 @@ private enum SyncJSON {
         let usePdd = (source == "pdd" || source == nil || source == "")
         let useCainiao = (source == "cainiao" || source == "taobao" ||
                           source == nil || source == "")
-        if usePdd, let detail = try? await pddTrack(mail), !detail.1.isEmpty {
-            return NativeTrackLookup(mailNo: mail, company: detail.0,
-                shipperCode: "", latest: detail.1.first?.text ?? "",
-                nodes: detail.1, provider: "拼多多")
+        if usePdd {
+            let known = Set(ParcelAccounts.accounts(for: "pdd").map(\.id))
+            let candidates = accountIDs.isEmpty ? [ParcelAccounts.activeID(for: "pdd")] : accountIDs.filter { known.contains($0) }
+            for id in candidates.prefix(3) {
+                if let detail = try? await pddTrack(mail, accountID: id), !detail.1.isEmpty {
+                    return NativeTrackLookup(mailNo: mail, company: detail.0,
+                        shipperCode: "", latest: detail.1.first?.text ?? "",
+                        nodes: detail.1, provider: "拼多多")
+                }
+            }
         }
         if useCainiao {
             // First query the account which imported the parcel. A friend's
@@ -1197,7 +1203,7 @@ private enum SyncJSON {
             let known = Set(ParcelAccounts.accounts(for: "taobao").map(\.id))
             var candidates = accountIDs.filter { known.contains($0) }
             let active = ParcelAccounts.activeID(for: "taobao")
-            if !candidates.contains(active) { candidates.append(active) }
+            if accountIDs.isEmpty && !candidates.contains(active) { candidates.append(active) }
             for id in candidates.prefix(3) {
                 if let detail = await cainiaoTrack(mail, accountID: id),
                    !detail.nodes.isEmpty || !detail.status.isEmpty {

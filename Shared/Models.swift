@@ -9,6 +9,9 @@ struct TrackNode: Codable, Hashable, Identifiable {
 // One conservative merge policy for platform sync, details and storage.
 enum TrackMerge {
     static func date(_ value: String) -> Date? {
+        if let epoch = Double(value), epoch > 1_000_000_000 {
+            return Date(timeIntervalSince1970: epoch > 1_000_000_000_000 ? epoch / 1000 : epoch)
+        }
         let iso = ISO8601DateFormatter()
         if let date = iso.date(from: value) { return date }
         let formatter = DateFormatter()
@@ -23,8 +26,9 @@ enum TrackMerge {
     static func ordered(_ nodes: [TrackNode]) -> [TrackNode] {
         var seen = Set<TrackNode>()
         let unique = nodes.filter { seen.insert($0).inserted }
-        return unique.enumerated().sorted { lhs, rhs in
-            switch (date(lhs.element.time), date(rhs.element.time)) {
+        let dated = unique.enumerated().map { (offset: $0.offset, element: $0.element, parsed: date($0.element.time)) }
+        return dated.sorted { lhs, rhs in
+            switch (lhs.parsed, rhs.parsed) {
             case let (a?, b?): return a == b ? lhs.offset < rhs.offset : a > b
             case (_?, nil): return true
             case (nil, _?): return false
@@ -132,6 +136,7 @@ struct Parcel: Codable, Identifiable, Hashable {
         Self.confirmsRecipientPickup(currentTrackingText)
     }
     var currentTrackingText: String {
+        // Saved summaries are authoritative when a provider supplies no timeline.
         TrackMerge.ordered(trackNodes).first?.text ?? trackLatest ?? ""
     }
     var isDone: Bool { status == 2 || pickedByUser || latestPickupConfirmed }

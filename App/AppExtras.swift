@@ -408,6 +408,14 @@ struct ParcelUpdatePage: View {
         var date: Date
         var subsystem: String
         var event: String
+        var level: String? = nil
+        var severity: String { level ?? ParcelRunLog.classify(event) }
+    }
+
+    nonisolated static func classify(_ event: String) -> String {
+        if ["失败", "错误", "超时", "失效", "无法", "未完成"].contains(where: event.contains) { return "警告" }
+        if ["成功", "已完成", "读取结束", "已合并"].contains(where: event.contains) { return "成功" }
+        return "信息"
     }
 
     private static let key = "native.runtime.diagnostics.v1"
@@ -447,7 +455,7 @@ struct ParcelUpdatePage: View {
     private static func localized(_ entry: Entry) -> Entry {
         Entry(id: entry.id, date: entry.date,
               subsystem: displaySubsystem(entry.subsystem),
-              event: displayEvent(entry.event))
+              event: displayEvent(entry.event), level: entry.severity)
     }
 
     static func entries() -> [Entry] {
@@ -457,7 +465,7 @@ struct ParcelUpdatePage: View {
         return items.map(localized)
     }
 
-    static func record(_ subsystem: String, _ event: String) {
+    static func record(_ subsystem: String, _ event: String, level: String? = nil) {
         // Defense in depth: replace long identifiers and suspicious values in
         // case a future call accidentally includes a URL or raw platform error.
         func redact(_ raw: String) -> String {
@@ -475,7 +483,8 @@ struct ParcelUpdatePage: View {
         var items = entries()
         items.append(Entry(date: Date(),
                            subsystem: displaySubsystem(redact(subsystem)),
-                           event: displayEvent(redact(event))))
+                           event: displayEvent(redact(event)),
+                           level: level ?? classify(event)))
         if items.count > maximumEntries {
             items.removeFirst(items.count - maximumEntries)
         }
@@ -487,7 +496,7 @@ struct ParcelUpdatePage: View {
     static func export() -> String {
         let lines = entries().map { entry in
             let stamp = entry.date.formatted(date: .numeric, time: .standard)
-            return "[\(stamp)] [\(entry.subsystem)] \(entry.event)"
+            return "[\(stamp)] [\(entry.subsystem)] [\(entry.severity)] \(entry.event)"
         }
         return (["ParcelHelper \(ParcelUpdateVersions.installed) · 本地运行日志",
                  "仅包含流程阶段、状态和数量，不包含登录凭据及订单详情。", ""]
@@ -502,6 +511,7 @@ struct ParcelUpdatePage: View {
 @MainActor struct ParcelRunLogPage: View {
     @State private var records: [ParcelRunLog.Entry] = []
     @State private var selectedSource = "全部来源"
+    @State private var selectedLevel = "全部"
     @State private var copied = false
     @State private var confirmClear = false
 
@@ -511,7 +521,7 @@ struct ParcelUpdatePage: View {
     private var visibleRecords: [ParcelRunLog.Entry] {
         let items = selectedSource == "全部来源" ? records :
             records.filter { $0.subsystem == selectedSource }
-        return Array(items.reversed())
+        return Array(items.filter { selectedLevel == "全部" || $0.severity == selectedLevel }.reversed())
     }
     private func symbol(for event: String) -> String {
         if ["失败", "错误", "超时", "失效", "无法", "未完成"].contains(where: event.contains) {
@@ -557,14 +567,17 @@ struct ParcelUpdatePage: View {
             }
 
             Section {
-                if records.isEmpty {
+                Picker("级别", selection: $selectedLevel) {
+                    ForEach(["全部", "信息", "成功", "警告"], id: \.self) { Text($0).tag($0) }
+                }.pickerStyle(.segmented)
+                if visibleRecords.isEmpty {
                     ContentUnavailableView("暂无运行日志",
                         systemImage: "text.book.closed",
                         description: Text("同步包裹后可在这里查看记录"))
                 } else {
                     ForEach(visibleRecords) { item in
                         HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: symbol(for: item.event))
+                            Image(systemName: item.severity == "成功" ? "checkmark.circle" : item.severity == "警告" ? "exclamationmark.circle" : "circle.dotted")
                                 .font(.system(size: 15))
                                 .foregroundStyle(.secondary)
                                 .padding(.top, 2)

@@ -309,6 +309,7 @@ private final class ParcelBGTaskCompletion {
         do {
             let found = try await NativeTracking.lookup(
                 mail, source: candidate.source, shipperCode: candidate.shipperCode ?? "",
+                phone: NativeTracking.phone(for: mail),
                 accountIDs: candidate.linkedAccounts ?? [], backgroundOnly: true)
             guard !Task.isCancelled, !found.nodes.isEmpty else { return }
             var update = NativeSyncParcel(source: candidate.source ?? "clipboard")

@@ -50,10 +50,10 @@ import WidgetKit
         // Prefer the strongest identity supplied by the new shipment.
         // A pickup code can be reused at a station, so it must not suppress
         // a *different* tracking number merely because its code matches.
-        guard let preferred = Self.key(mail: mail, order: order, source: source,
-                                       code: code, station: station) else { return false }
+        let identities = Self.keys(mail: mail, order: order, source: source, code: code, station: station)
         let ignored = Set(UserDefaults.standard.stringArray(forKey: Self.ignoredKey) ?? [])
-        return ignored.contains(preferred)
+        let strong = identities.filter { !$0.hasPrefix("pickup:") }
+        return (strong.isEmpty ? identities : strong).contains(where: ignored.contains)
     }
 
     private func recordDeletion(_ parcel: Parcel) {
@@ -343,6 +343,51 @@ import WidgetKit
         snapshot.parcels[i].pickedAt = done ? Date().timeIntervalSince1970 * 1000 : nil
         persist()
     }
+    func markPickedBatch(_ ids: Set<String>) {
+        let now = Date().timeIntervalSince1970 * 1000
+        var changed = false
+        for i in snapshot.parcels.indices where ids.contains(snapshot.parcels[i].uuid) && snapshot.parcels[i].isPending {
+            snapshot.parcels[i].status = 2
+            snapshot.parcels[i].pickedByUser = true
+            snapshot.parcels[i].pickedAt = now
+            changed = true
+        }
+        if changed { persist() }
+    }
+
+    func importWaybills(_ values: [String]) -> Int {
+        let existing = Set(snapshot.parcels.compactMap { $0.mailNo }.map(Self.normalized))
+        var seen = existing
+        var count = 0
+        for raw in values {
+            let mail = Self.normalized(raw)
+            guard mail.range(of: #"^[A-Z0-9-]{8,40}$"#, options: .regularExpression) != nil,
+                  mail.contains(where: \.isNumber), seen.insert(mail).inserted else { continue }
+            var parcel = Parcel()
+            parcel.mailNo = mail
+            snapshot.parcels.insert(parcel, at: 0)
+            count += 1
+        }
+        if count > 0 { persist() }
+        return count
+    }
+
+    var recoveryBackupDate: Date? {
+        let file = url.appendingPathExtension("backup")
+        guard let data = try? Data(contentsOf: file),
+              (try? JSONDecoder().decode(Snapshot.self, from: data)) != nil else { return nil }
+        return (try? FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate]) as? Date
+    }
+
+    func restoreRecoveryBackup() throws {
+        // Drain pending writes before reading the previous on-disk version.
+        persistenceQueue.sync {}
+        let data = try Data(contentsOf: url.appendingPathExtension("backup"))
+        let restored = try JSONDecoder().decode(Snapshot.self, from: data)
+        snapshot = restored
+        persist()
+    }
+
     func delete(_ id: String) {
         guard let parcel = snapshot.parcels.first(where: { $0.uuid == id }) else { return }
         recordDeletion(parcel)
