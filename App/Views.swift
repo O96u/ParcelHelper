@@ -2410,60 +2410,118 @@ private struct ParcelBackupDocument: FileDocument {
 
 private struct LocalBackupPage: View {
     @EnvironmentObject private var store: ParcelStore
-    @State private var confirm = false
-    @State private var notice: String?
     @State private var exporting = false
     @State private var importing = false
     @State private var document = ParcelBackupDocument(data: Data())
     @State private var importedData: Data?
+    @State private var confirm = false
+    @State private var notice: String?
+    @State private var showResult = false
+
+    private var backupDateText: String {
+        guard let date = store.recoveryBackupDate else { return "暂无" }
+        return date.formatted(date: .numeric, time: .shortened)
+    }
+
     var body: some View {
+        formContent
+            .navigationTitle("数据备份")
+            .fileExporter(isPresented: $exporting, document: document,
+                          contentType: UTType.json, defaultFilename: "包裹助手备份",
+                          onCompletion: handleExport)
+            .fileImporter(isPresented: $importing, allowedContentTypes: [UTType.json],
+                          onCompletion: handleImport)
+            .confirmationDialog("确认替换本地数据？", isPresented: $confirm, titleVisibility: .visible) {
+                Button("确认恢复", role: .destructive, action: restore)
+                Button("取消", role: .cancel) { importedData = nil }
+            } message: {
+                Text("此操作将替换当前本地包裹、驿站和偏好。")
+            }
+            .alert("备份结果", isPresented: $showResult) {
+                Button("确定", role: .cancel) { notice = nil }
+            } message: {
+                Text(notice ?? "")
+            }
+    }
+
+    private var formContent: some View {
         Form {
-            Section("备份文件") {
-                Button("导出备份") {
-                    do { document = ParcelBackupDocument(data: try store.exportBackup()); exporting = true }
-                    catch { notice = "导出失败" }
-                }
-                Button("导入备份") { importing = true }
-                Text("备份含包裹、驿站及本地偏好，请妥善保管。").font(.footnote)
-            }
-            Section("本地恢复") {
-                LabeledContent("最近有效备份", value: store.recoveryBackupDate?.formatted(date: .numeric, time: .shortened) ?? "暂无")
-                Button("恢复上一份备份", role: .destructive) { confirm = true }
-                    .disabled(store.recoveryBackupDate == nil)
-            } footer: { Text("恢复会替换当前包裹、驿站和本地偏好，不会恢复平台登录凭据。") }
+            fileSection
+            recoverySection
         }
-        .navigationTitle("数据备份")
-        .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "包裹助手备份") { result in
-            if case .failure = result { notice = "导出失败" }
+    }
+
+    private var fileSection: some View {
+        Section {
+            Button("导出备份", action: prepareExport)
+            Button("导入备份") { importing = true }
+        } header: {
+            Text("备份文件")
+        } footer: {
+            Text("备份含包裹、驿站及本地偏好，请妥善保管。")
         }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-            do {
-                let url = try result.get()
-                let access = url.startAccessingSecurityScopedResource()
-                defer { if access { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                _ = try JSONDecoder().decode(Snapshot.self, from: data)
-                importedData = data
-            } catch { notice = "无法读取有效备份" }
-        }
-        .confirmationDialog("导入将替换当前本地数据，是否继续？", isPresented: Binding(get: { importedData != nil }, set: { if !$0 { importedData = nil } })) {
-            Button("确认导入", role: .destructive) {
-                guard let data = importedData else { return }
-                do { try store.importBackup(data); notice = "导入成功" }
-                catch { notice = "导入失败" }
+    }
+
+    private var recoverySection: some View {
+        Section {
+            LabeledContent("最近有效备份", value: backupDateText)
+            Button("恢复上一份备份", role: .destructive) {
                 importedData = nil
+                confirm = true
             }
-            Button("取消", role: .cancel) { importedData = nil }
+            .disabled(store.recoveryBackupDate == nil)
+        } header: {
+            Text("本地恢复")
+        } footer: {
+            Text("恢复会替换当前包裹、驿站和本地偏好，不会恢复平台登录凭据。")
         }
-        .alert("确认恢复？", isPresented: $confirm) {
-            Button("取消", role: .cancel) {}
-            Button("恢复", role: .destructive) {
-                do { try store.restoreRecoveryBackup(); notice = "已恢复本地备份" }
-                catch { notice = "恢复失败，原有数据未被替换" }
+    }
+
+    private func report(_ message: String) {
+        notice = message
+        showResult = true
+    }
+
+    private func prepareExport() {
+        do {
+            document = ParcelBackupDocument(data: try store.exportBackup())
+            exporting = true
+        } catch { report("导出失败") }
+    }
+
+    private func handleExport(_ result: Result<URL, Error>) {
+        if case .failure = result { report("导出失败") }
+    }
+
+    private func handleImport(_ result: Result<URL, Error>) {
+        do {
+            let url = try result.get()
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= 20 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+            let data = try Data(contentsOf: url)
+            guard data.count <= 20 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+            _ = try JSONDecoder().decode(Snapshot.self, from: data)
+            importedData = data
+            confirm = true
+        } catch {
+            importedData = nil
+            report("无法读取有效备份")
+        }
+    }
+
+    private func restore() {
+        let data = importedData
+        importedData = nil
+        do {
+            if let data {
+                try store.importBackup(data)
+                report("导入成功")
+            } else {
+                try store.restoreRecoveryBackup()
+                report("已恢复本地备份")
             }
-        }
-        .alert("备份结果", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
-            Button("确定") { notice = nil }
-        } message: { Text(notice ?? "") }
+        } catch { report("恢复失败，请检查备份文件") }
     }
 }
