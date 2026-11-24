@@ -478,7 +478,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var goods=Array.isArray(o.wareInfoList)?o.wareInfoList[0]||{}:{};
         var sku=clean(goods.skuId||goods.skuid||o.skuId,50);
         var shop=clean((o.shopInfo||{}).shopId||o.shopId,50);
-        var msg=clean(p.content||p.title||p.subContent||o.messageTitle||o.message,350);
+        var msg=clean(p.content||p.subContent||p.tip||p.title||o.messageTitle||o.message,1200);
         var prompt=o.promptInfo||{},promptValue=clean(prompt.content,250);
         if(Array.isArray(prompt.variableList)){
           var k=0;
@@ -487,15 +487,17 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var desc=[msg,promptValue,clean(p.tip,200),status].join(' ');
         var code=pickup(desc);
         var link=jdURL(p.progressLink);
+        var detailLink=jdURL(o.orderDetailLink);
+        if(!link&&/deal_wuliu|logistics|ordertrack|expressdetail/i.test(detailLink))link=detailLink;
         var courierProgress=/配送中|正在配送|配送途中|派送中|正在派送|运输中|已揽收|已发货|已出库|快递员|配送员|物流运输/.test(desc);
-        var verified=p.progressId==='logistics'||/deal_wuliu|logistics|ordertrack|expressdetail/i.test(link)||courierProgress;
+        var verified=p.progressId==='logistics'||/deal_wuliu|logistics|ordertrack|expressdetail/i.test(link)||courierProgress||/待收货|待取件|待自提|待提货/.test(status);
         var active=/待发货|待收货|待出库|运输|配送|派送|待取|已出库|正在出库|waitreceive|shipping|delivering/i.test(status);
         // Ignore unrelated orders: a structured courier link/track or an
         // active shipping state/pickup code is required.
         if(!verified&&!active&&!code)return null;
         return {id:id,title:clean(goods.wareName||o.wareName||'京东订单',170),
           status:status,sku:sku,shop:shop,link:link,
-          summary:msg||clean(p.tip,200)||status,code:code,
+          summary:msg||promptValue||clean(p.tip,200)||status,code:code,
           station:station(desc),verified:verified};
       }
       function consume(root){
@@ -634,7 +636,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
         let url = platform == "jd" ?
-            "https://trade.m.jd.com/order/orderlist_jdm.shtml?sceneval=2" :
+            "https://my.m.jd.com/index.html?sceneval=2" :
             "https://h5.m.taobao.com/mlapp/olist.html"
         view.load(URLRequest(url: URL(string: url)!))
         return view
@@ -693,6 +695,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var structuredReadWaits = 0
         private var jdPageReads = 0
         private var jdPreviousCount = 0
+        private var jdStableReads = 0
         private var jdAccumulated: [String: WebOrder] = [:]
         var trackingReadAttempts = 0
         var missingTracking = 0
@@ -750,18 +753,21 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             guard !finished else { return }
             if stage == .orderList && !scanning {
                 scanning = true
-                if platform == "jd" && usedJDFallback &&
+                if platform == "jd" && !usedJDFallback &&
                    webView.url?.host?.lowercased() == "my.m.jd.com" {
                     let version = orderPageVersion
                     webView.evaluateJavaScript(Self.openJDOrders) { [weak self, weak webView] value, _ in
                         guard let self, let view = webView, !self.finished,
                               self.stage == .orderList, self.orderPageVersion == version else { return }
                         if value as? Bool == true {
-                            self.record("个人首页已触发订单入口，等待页面切换")
+                            self.record("个人首页已触发待收货或全部订单入口，等待页面切换")
                             self.scheduleOrderRead(view, after: 4.0)
                         } else {
-                            self.record("个人首页未找到订单入口")
-                            self.complete("京东个人首页未提供可用订单入口，请检查账号登录状态后重试")
+                            self.record("个人首页未找到订单入口，改用官方订单列表")
+                            self.usedJDFallback = true
+                            if let url = URL(string: "https://trade.m.jd.com/order/orderlist_jdm.shtml?sceneval=2") {
+                                view.load(URLRequest(url: url))
+                            }
                         }
                     }
                 } else {
@@ -818,12 +824,16 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     return
                 }
                 var available = result.orders
-                if self.platform == "jd" && result.structured == true {
-                    for order in result.orders { self.jdAccumulated[order.id] = order }
+                if self.platform == "jd" && (!result.orders.isEmpty || !self.jdAccumulated.isEmpty) {
+                    for order in result.orders {
+                        if self.jdAccumulated[order.id]?.verified == true && order.verified != true { continue }
+                        self.jdAccumulated[order.id] = order
+                    }
                     available = self.jdAccumulated.values.sorted { $0.id > $1.id }
                     let grew = available.count > self.jdPreviousCount
+                    self.jdStableReads = grew ? 0 : self.jdStableReads + 1
                     self.jdPreviousCount = available.count
-                    if self.jdPageReads < 4 && (grew || self.jdPageReads == 0) && available.count < 200 {
+                    if self.jdPageReads < 8 && self.jdStableReads < 2 && available.count < 200 {
                         self.jdPageReads += 1
                         webView.evaluateJavaScript(Self.jdLoadNextPage) { [weak self, weak webView] _, _ in
                             guard let self, let webView, !self.finished,
@@ -860,7 +870,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 self.orders = Array(rotated.prefix(limit))
                 UserDefaults.standard.set(eligible.isEmpty ? 0 : (cursor + self.orders.count) % eligible.count, forKey: cursorKey)
                 self.record("筛选后可查询 \(self.orders.count) 笔订单")
-                if self.orders.isEmpty && result.structured == true {
+                if self.orders.isEmpty && result.structured == true && self.usedJDFallback {
                     self.record("官方结构化订单列表已返回，但没有传统快递或待取订单；不把秒送等 DOM 内容误当快递")
                     self.complete("京东官方订单列表没有可导入的传统物流订单。请在京东核对是否为秒送、虚拟商品或已完成订单。")
                     return
@@ -877,11 +887,11 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                         return
                     }
                     if self.platform == "jd" && !self.usedJDFallback {
-                        self.record("列表无匹配订单，尝试从京东个人首页进入订单")
+                        self.record("列表无匹配订单，尝试官方全部订单列表")
                         self.usedJDFallback = true
                         self.emptyReadAttempts = 0
                         self.scanning = false
-                        if let url = URL(string: "https://my.m.jd.com/index.html?sceneval=2") {
+                        if let url = URL(string: "https://trade.m.jd.com/order/orderlist_jdm.shtml?sceneval=2") {
                             webView.load(URLRequest(url: url))
                             return
                         }
@@ -966,7 +976,15 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 } else {
                     var components = URLComponents(string:
                         "https://trade.m.jd.com/order/deal_wuliu_jdm.shtml")!
-                    components.queryItems = [URLQueryItem(name: "dealId", value: order.id)]
+                    components.queryItems = [
+                        URLQueryItem(name: "from", value: "orderdetail"),
+                        URLQueryItem(name: "dealState", value: "7"),
+                        URLQueryItem(name: "dealId", value: order.id),
+                        URLQueryItem(name: "orderType", value: "22"),
+                        URLQueryItem(name: "skuid", value: order.sku),
+                        URLQueryItem(name: "shopid", value: order.shop),
+                        URLQueryItem(name: "source", value: "m_inner_orderList.track_orderTrack")
+                    ]
                     url = components.url!.absoluteString
                 }
             } else {
@@ -1091,10 +1109,12 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         }
         private static let openJDOrders = #"""
         (function(){
-          var el = document.querySelector('.my_order_entrance.type_orders');
-          if (!el) el = [].slice.call(document.querySelectorAll('a,div,span')).find(function(x){
-            return /^(待收货|全部订单|进行中)$/.test((x.textContent||'').trim()) && x.children.length<3;
+          var nodes=Array.from(document.querySelectorAll('a,div,span'));
+          var el=nodes.find(function(x){
+            return /^(待收货|进行中)$/.test((x.textContent||'').trim()) && x.children.length<3 && x.getClientRects().length;
           });
+          if(!el)el=document.querySelector('.my_order_entrance.type_orders');
+          if(!el)el=nodes.find(function(x){return (x.textContent||'').trim()==='全部订单'&&x.children.length<3&&x.getClientRects().length});
           if(el) { el.click(); return true; } return false;
         })()
         """#
@@ -1121,17 +1141,12 @@ private struct NativeWebOrderReader: UIViewRepresentable {
           var page=/login|passport|plogin/.test(location.hostname+path)?'登录页':
             /orderlist|order\/list/.test(path)?'订单页':
             /myjd|index\.html|\/home/.test(path)?'个人首页':'其他页面';
-          try{
-            var hooked=window.ParcelHelperJD&&window.ParcelHelperJD.snapshot();
-            if(hooked&&hooked.received){
-              return JSON.stringify({
-                login:/请登录|登录后查看|账号登录/.test(body)&&!hooked.orders.length,
-                verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
-                source:'官方接口订单列表',structured:true,page:page,orders:hooked.orders
-              });
-            }
-          }catch(e){}
+          var hooked=null;
+          try{hooked=window.ParcelHelperJD&&window.ParcelHelperJD.snapshot()}catch(e){}
           var orders=[],seen={},stats={attrs:0,links:0,state:0};
+          if(hooked&&hooked.received){
+            (hooked.orders||[]).forEach(function(o){seen[o.id]=orders.length+1;orders.push(o)});
+          }
           function cardOf(el){
             if(!el||!el.closest) return document.body;
             return el.closest('[class*="order-card"],[class*="order_item"],[class*="orderItem"],[class*="order_list"],[data-orderid],[data-order-id]')||
@@ -1139,8 +1154,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
           }
           function add(id,el,raw,source){
             id=String(id||'').trim();
-            if(!/^\d{8,}$/.test(id)||seen[id])return;
-            seen[id]=1;
+            if(!/^\d{8,}$/.test(id))return;
+            var previous=seen[id]?orders[seen[id]-1]:null;
             var card=cardOf(el),extra=raw||{};
             var sku=(extra.orderSkus&&extra.orderSkus[0])||{};
             var titleNode=card&&card.querySelector&&card.querySelector(
@@ -1150,11 +1165,33 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             var title=titleNode?(titleNode.innerText||titleNode.textContent||'').trim().slice(0,120):'';
             var status=statusNode?(statusNode.innerText||statusNode.textContent||'').trim().slice(0,80):
                        String(extra.orderStatusName||extra.statusName||extra.orderStatus||'').slice(0,80);
-            orders.push({id:id,title:title,status:status,
+            var logisticsNode=el&&card&&card.querySelector&&card.querySelector('[class*="order_wuliubar"]');
+            var summary=logisticsNode?String(logisticsNode.innerText||logisticsNode.textContent||'').trim().slice(0,1200):'';
+            var verified=!!el&&/待收货|待取件|待自提|运输|派送|配送|已发货|已出库/.test(status+' '+summary)&&!/秒送|京东到家|即时配送/.test(status+' '+summary);
+            var row={id:id,title:title,status:status,
               sku:String(sku.skuid||sku.skuId||extra.skuid||extra.skuId||''),
-              shop:String(extra.shopId||extra.shopid||sku.shopid||'')});
+              shop:String(extra.shopId||extra.shopid||sku.shopid||''),
+              summary:summary||status,verified:verified};
+            if(previous){
+              ['title','status','sku','shop','summary'].forEach(function(k){if(!previous[k]&&row[k])previous[k]=row[k]});
+              if(summary&&!previous.verified){previous.summary=summary;previous.verified=verified}
+            }else{
+              seen[id]=orders.length+1;orders.push(row);
+            }
             stats[source]++;
           }
+          document.querySelectorAll('[class*="order_state"]').forEach(function(st){
+            var card=st;
+            while(card&&card.parentElement){
+              card=card.parentElement;
+              if(card.querySelector&&card.querySelector('[class*="order_item"]'))break;
+            }
+            var ep=card&&card.querySelector&&card.querySelector('[data-eparam]');
+            if(!ep)return;
+            var raw={};
+            try{raw=JSON.parse((ep.getAttribute('data-eparam')||'').replace(/&quot;/g,'"'))}catch(e){}
+            add(raw.orderid||raw.orderId||raw.dealId,ep,raw,'attrs');
+          });
           document.querySelectorAll('[data-eparam]').forEach(function(el){
             var raw={};try{raw=JSON.parse((el.getAttribute('data-eparam')||'').replace(/&quot;/g,'"'))}catch(e){}
             add(raw.orderid||raw.orderId||raw.dealId,el,raw,'attrs');
@@ -1191,8 +1228,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
           return JSON.stringify({
             login:/请登录|登录后查看|账号登录/.test(body)&&!orders.length,
             verify:/滑块验证|人机验证|安全验证|异常登录/.test(body),
-            source:'属性'+stats.attrs+' 链接'+stats.links+' 页面状态'+stats.state,
-            structured:false,page:page,orders:orders.slice(0,45)
+            source:(hooked&&hooked.received?'官方接口 + ':'')+'属性'+stats.attrs+' 链接'+stats.links+' 页面状态'+stats.state,
+            structured:!!(hooked&&hooked.received),page:page,orders:orders.slice(0,200)
           });
         })()
         """#
