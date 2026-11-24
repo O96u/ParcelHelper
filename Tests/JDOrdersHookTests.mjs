@@ -12,6 +12,12 @@ function script(name) {
 const hook = script("jdDocumentHook");
 const orders = script("jdOrdersJS");
 const tracking = script("jdTrackingJS");
+const pagination = script("jdLoadNextPage");
+assert.doesNotThrow(() => new vm.Script(pagination));
+let clicked = false;
+const more = {textContent:"加载更多", disabled:false, getAttribute:()=>null, getClientRects:()=>[1], click:()=>{clicked=true}};
+assert.equal(vm.runInNewContext(pagination,{document:{querySelectorAll:()=>[more]}}),true);
+assert.equal(clicked,true);
 for (const [name, text] of Object.entries({hook, orders, tracking})) {
   assert.doesNotThrow(() => new vm.Script(text), name + " parses");
 }

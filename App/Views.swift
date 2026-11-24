@@ -1167,8 +1167,23 @@ struct ParcelDetail: View {
 }
 struct StatsHome: View {
     @EnvironmentObject private var store: ParcelStore
-
-    private var parcels: [Parcel] { store.snapshot.parcels.filter { $0.type == "delivery" } }
+    @State private var statisticsRange = "all"
+    private var rangeStart: Date? {
+        let cal = Calendar.current
+        switch statisticsRange {
+        case "month": return cal.dateInterval(of: .month, for: Date())?.start
+        case "quarter": return cal.date(byAdding: .month, value: -3, to: Date())
+        case "year": return cal.dateInterval(of: .year, for: Date())?.start
+        default: return nil
+        }
+    }
+    private var parcels: [Parcel] {
+        store.snapshot.parcels.filter { parcel in
+            guard parcel.type == "delivery" else { return false }
+            guard let start = rangeStart else { return true }
+            return Date(timeIntervalSince1970: parcel.createdAt / 1000) >= start
+        }
+    }
     private var picked: [Parcel] { parcels.filter(\.isDone) }
     private var signed: [Parcel] { parcels.filter(\.isSigned) }
     private var pending: Int { parcels.filter(\.isPending).count }
@@ -1266,6 +1281,14 @@ struct StatsHome: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Picker("统计范围", selection: $statisticsRange) {
+                    Text("本月").tag("month")
+                    Text("近三个月").tag("quarter")
+                    Text("本年").tag("year")
+                    Text("全部").tag("all")
+                }.pickerStyle(.segmented)
+                Text("按包裹录入时间筛选，取件趋势按实际取件时间统计。")
+                    .font(.caption).foregroundStyle(.secondary)
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 9),
                     GridItem(.flexible(), spacing: 9)

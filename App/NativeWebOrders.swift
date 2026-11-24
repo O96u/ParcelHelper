@@ -525,7 +525,14 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         })});
         var normalized=Object.keys(rows).map(function(k){return rows[k]});
         // Do not let a later unrelated empty result erase a richer snapshot.
-        if(normalized.length>=stored.length||!stored.length){stored=normalized.slice(0,80);revision++}
+        var merged={};
+        stored.forEach(function(x){merged[x.id]=x});
+        normalized.forEach(function(x){
+          var old=merged[x.id];
+          merged[x.id]=old?Object.assign({},old,x,{link:x.link||old.link}):x;
+        });
+        var next=Object.keys(merged).map(function(k){return merged[k]});
+        if(JSON.stringify(next)!==JSON.stringify(stored)){stored=next.slice(0,200);revision++}
       }
       function consumeLogistics(root){
         var steps=0,found=null;
@@ -599,7 +606,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         return result;
       };
       window.ParcelHelperJD={
-        snapshot:function(){return {received:structured,orders:stored.slice(0,50),revision:revision}},
+        snapshot:function(){return {received:structured,orders:stored.slice(0,200),revision:revision}},
         logistics:function(){return logistics}
       };
     })()
@@ -683,6 +690,9 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         private var orderPageVersion = 0
         var emptyReadAttempts = 0
         var structuredReadWaits = 0
+        private var jdPageReads = 0
+        private var jdPreviousCount = 0
+        private var jdAccumulated: [String: WebOrder] = [:]
         var trackingReadAttempts = 0
         var missingTracking = 0
         private var trackingPageSerial = 0
@@ -806,7 +816,24 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     self.complete("未检测到有效账号登录，请先授权")
                     return
                 }
-                let eligible = result.orders.filter { order in
+                var available = result.orders
+                if self.platform == "jd" && result.structured == true {
+                    for order in result.orders { self.jdAccumulated[order.id] = order }
+                    available = self.jdAccumulated.values.sorted { $0.id > $1.id }
+                    let grew = available.count > self.jdPreviousCount
+                    self.jdPreviousCount = available.count
+                    if self.jdPageReads < 4 && (grew || self.jdPageReads == 0) && available.count < 200 {
+                        self.jdPageReads += 1
+                        webView.evaluateJavaScript(Self.jdLoadNextPage) { [weak self, weak webView] _, _ in
+                            guard let self, let webView, !self.finished,
+                                  self.stage == .orderList, self.orderPageVersion == version else { return }
+                            self.record("京东订单翻页检查：已累计 \(self.jdAccumulated.count) 笔")
+                            self.scheduleOrderRead(webView, after: 1.8)
+                        }
+                        return
+                    }
+                }
+                let eligible = available.filter { order in
                     guard order.id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil else { return false }
                     let account = self.accountID ?? ParcelAccounts.activeID(for: self.platform)
                     let prefix = account == ParcelAccounts.legacyID(self.platform) ? self.platform : self.platform + ":" + account
@@ -1067,6 +1094,19 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         // JD uses multiple H5 layouts: old data-eparam cards, newer anchor
         // links, and client-side initial state. Read only the current signed-in
         // official page; no private API calls or login/session bypass.
+        private static let jdLoadNextPage = #"""
+        (function(){
+          var candidates=Array.from(document.querySelectorAll('button,a,[role="button"]'));
+          var more=candidates.find(function(el){
+            return /^(加载更多|查看更多订单|下一页|更多订单)$/.test((el.textContent||'').trim())
+              && !el.disabled && el.getAttribute('aria-disabled')!=='true' && el.getClientRects().length;
+          });
+          if(more){more.click();return true}
+          var scroll=document.scrollingElement||document.documentElement;
+          if(scroll){scroll.scrollTop=scroll.scrollHeight;window.dispatchEvent(new Event('scroll'))}
+          return !!scroll;
+        })()
+        """#
         private static let jdOrdersJS = #"""
         (function(){
           var body=(document.body&&document.body.innerText||'').slice(0,4500);

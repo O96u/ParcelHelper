@@ -22,8 +22,21 @@ enum ParcelNotifications {
     /// can be discovered or notified until the next allowed refresh.
     @MainActor
     static func notifyUpdate(previous: Parcel?, current: Parcel) async {
+        await notifyBatch([(previous, current)])
+    }
+
+    private struct UpdateEvent {
+        let parcel: Parcel
+        let title: String
+        let category: String
+        let detail: String
+        var key: String { "native.reminder.lastEvent." + parcel.uuid }
+        var value: String { category + ":" + detail }
+    }
+
+    @MainActor private static func event(previous: Parcel?, current: Parcel) -> UpdateEvent? {
         guard ParcelStore.shared.snapshot.preferences.reminderEnabled,
-              !current.pickedByUser else { return }
+              !current.pickedByUser else { return nil }
 
         let wasSigned = previous?.isSigned ?? false
         let wasPending = previous?.isPending ?? false
@@ -47,60 +60,61 @@ enum ParcelNotifications {
         let title: String
         let category: String
         if current.hasDeliveryException && previous?.hasDeliveryException != true {
-            guard UserDefaults.standard.object(forKey: "native.reminder.exception") as? Bool ?? true else { return }
+            guard UserDefaults.standard.object(forKey: "native.reminder.exception") as? Bool ?? true else { return nil }
             category = "exception"
             title = "物流出现异常"
         } else if isNewCompletion {
-            guard UserDefaults.standard.object(forKey: "native.reminder.collected") as? Bool ?? true else { return }
+            guard UserDefaults.standard.object(forKey: "native.reminder.collected") as? Bool ?? true else { return nil }
             category = "collected"
             title = "包裹已取件"
         } else if isNewSignature {
-            guard UserDefaults.standard.object(forKey: "native.reminder.signed") as? Bool ?? true else { return }
+            guard UserDefaults.standard.object(forKey: "native.reminder.signed") as? Bool ?? true else { return nil }
             category = "signed"
             title = "包裹已签收"
         } else if isNewPickup || isNewArrival {
-            guard UserDefaults.standard.object(forKey: "native.reminder.arrival") as? Bool ?? true else { return }
+            guard UserDefaults.standard.object(forKey: "native.reminder.arrival") as? Bool ?? true else { return nil }
             category = "arrived"
             title = isNewArrival ? "新增待取包裹" : "快递已到站，等待取件"
         } else if changedText && isOutForDelivery && !current.isDone && !isSigned {
-            guard UserDefaults.standard.object(forKey: "native.reminder.dispatch") as? Bool ?? true else { return }
+            guard UserDefaults.standard.object(forKey: "native.reminder.dispatch") as? Bool ?? true else { return nil }
             category = "delivery"
             title = "快递正在派送"
         } else if changedText && isTransit && current.isTransit {
-            guard UserDefaults.standard.bool(forKey: "native.reminder.transit") else { return }
+            guard UserDefaults.standard.bool(forKey: "native.reminder.transit") else { return nil }
             category = "transit"
             title = "物流位置已更新"
         } else {
-            return
+            return nil
         }
 
+        return UpdateEvent(parcel: current, title: title, category: category, detail: latest.isEmpty ? current.stationText : latest)
+    }
+
+    @MainActor static func notifyBatch(_ changes: [(Parcel?, Parcel)]) async {
         let center = UNUserNotificationCenter.current()
         let authorization = (await center.notificationSettings()).authorizationStatus
-        guard authorization == .authorized || authorization == .provisional ||
-              authorization == .ephemeral else { return }
-
-        let detail = latest.isEmpty ? current.stationText : latest
-        let event = category + ":" + detail
-        let key = "native.reminder.lastEvent." + current.uuid
-        let inFlight = key + ":" + event
-        guard UserDefaults.standard.string(forKey: key) != event,
-              pendingEvents.insert(inFlight).inserted else { return }
-        defer { pendingEvents.remove(inFlight) }
-
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = String(detail.prefix(160))
-        content.sound = .default
-        content.threadIdentifier = "parcel-" + current.uuid
-        content.userInfo = ["parcelUUID": current.uuid]
-        let request = UNNotificationRequest(
-            identifier: "parcel-event-" + current.uuid + "-" + UUID().uuidString,
-            content: content, trigger: nil)
-        do {
-            try await center.add(request)
-            UserDefaults.standard.set(event, forKey: key)
-        } catch {
-            print("Parcel status notification failed: \(error)")
+        guard authorization == .authorized || authorization == .provisional || authorization == .ephemeral else { return }
+        var selected: [String: UpdateEvent] = [:]
+        for (previous, current) in changes {
+            guard let item = event(previous: previous, current: current),
+                  UserDefaults.standard.string(forKey: item.key) != item.value else { continue }
+            selected[current.uuid] = item
+        }
+        let events = selected.values.filter { pendingEvents.insert($0.key + ":" + $0.value).inserted }
+        defer { for item in events { pendingEvents.remove(item.key + ":" + item.value) } }
+        for (_, group) in Dictionary(grouping: events, by: \.category) {
+            guard let first = group.first else { continue }
+            let content = UNMutableNotificationContent()
+            content.title = group.count == 1 ? first.title : "\(group.count) 件包裹 · " + first.title
+            content.body = group.count == 1 ? String(first.detail.prefix(160)) : "打开包裹助手查看最新物流"
+            content.sound = .default
+            content.threadIdentifier = "parcel-" + first.category
+            if group.count == 1 { content.userInfo = ["parcelUUID": first.parcel.uuid] }
+            let request = UNNotificationRequest(identifier: "parcel-event-" + UUID().uuidString, content: content, trigger: nil)
+            do {
+                try await center.add(request)
+                for item in group { UserDefaults.standard.set(item.value, forKey: item.key) }
+            } catch { NSLog("ParcelHelper notification failed") }
         }
     }
 

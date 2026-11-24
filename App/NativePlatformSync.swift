@@ -44,7 +44,7 @@ struct NativeSyncResult {
         return "\(name)：发现 \(found) 件，新增或更新 \(imported) 件"
     }
 }
-private enum SyncJSON {
+enum SyncJSON {
     static func dict(_ v: Any?) -> [String: Any] { v as? [String: Any] ?? [:] }
     static func list(_ v: Any?) -> [[String: Any]] { v as? [[String: Any]] ?? [] }
     static func str(_ v: Any?) -> String {
@@ -72,7 +72,7 @@ private enum SyncJSON {
     }
 }
 
-@MainActor private enum WebCookieRequest {
+@MainActor enum WebCookieRequest {
     static let store = WKWebsiteDataStore.default().httpCookieStore
     static func cookieStore(accountID: String? = nil) -> WKHTTPCookieStore {
         ParcelAccounts.websiteDataStore(for: accountID ?? "legacy:taobao").httpCookieStore
@@ -206,7 +206,7 @@ private enum SyncJSON {
 /// Loading h5.m.taobao.com is insufficient when the API host uses a different
 /// scoped token cookie. This WebView never appears in the UI and does not
 /// inspect webpage contents, passwords, or identity codes.
-@MainActor private final class CainiaoMtopTokenRefresh: NSObject, WKNavigationDelegate {
+@MainActor final class CainiaoMtopTokenRefresh: NSObject, WKNavigationDelegate {
     private let webView: WKWebView
     private var continuation: CheckedContinuation<Void, Never>?
 
@@ -397,11 +397,11 @@ private enum SyncJSON {
     }
 
     // Scripting utils/platformSync.ts and utils/codes.ts compatibility.
-    private static func codeKey(_ raw: String) -> String {
+    static func codeKey(_ raw: String) -> String {
         let half = raw.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? raw
         return half.filter { !$0.isWhitespace && !"-－—_".contains($0) }.uppercased()
     }
-    private static func normalizedCode(_ raw: String) -> String {
+    static func normalizedCode(_ raw: String) -> String {
         let prefix = #"^(取件码|提货码|取货码|自提码|凭码)[:：\s]*"#
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: prefix, with: "", options: .regularExpression)
@@ -413,10 +413,10 @@ private enum SyncJSON {
         else { return "" }
         return trimmed
     }
-    private static func isAggregator(_ source: String?) -> Bool {
+    static func isAggregator(_ source: String?) -> Bool {
         ["cainiao", "fengchao", "mi"].contains(source ?? "")
     }
-    private static func arrivalKind(_ text: String) -> String {
+    static func arrivalKind(_ text: String) -> String {
         let noPickup = ["转运中心", "分拨中心", "集散中心", "运转中心", "揽收", "正在派送", "派件中"]
         // "已签收" can mean an express station signed on behalf of the user.
         // Only unequivocal pickup wording should mark an item as collected.
@@ -437,6 +437,7 @@ private enum SyncJSON {
         let store = ParcelStore.shared
         var changed = 0
         var newArrivalNotifications = 0
+        var notificationChanges: [(Parcel?, Parcel)] = []
         var inserted = 0
         var updated = 0
         var historicalSkipped = 0
@@ -569,430 +570,26 @@ private enum SyncJSON {
             if p.hasSyncedContentChange(comparedTo: previous) {
                 store.upsert(p, persistNow: false)
                 if previous != nil {
-                    Task { await ParcelNotifications.notifyUpdate(previous: previous, current: p) }
+                    notificationChanges.append((previous, p))
                 } else if notifyNewArrival && p.isPending && newArrivalNotifications < 3 {
                     // Do not flood the user with old deliveries on a first
                     // account import. Only alert after a successful baseline.
                     newArrivalNotifications += 1
-                    Task { await ParcelNotifications.notifyUpdate(previous: nil, current: p) }
+                    notificationChanges.append((nil, p))
                 }
                 changed += 1
                 if previous == nil { inserted += 1 } else { updated += 1 }
             }
         }
         if changed > 0 { store.persist() }
+        if !notificationChanges.isEmpty {
+            let changes = notificationChanges
+            Task { await ParcelNotifications.notifyBatch(changes) }
+        }
         if rows.contains(where: { $0.source == "jd" }) {
             ParcelRunLog.record("jd", "物流合并结果：新增 \(inserted) 件，更新 \(updated) 件，跳过已完成历史物流 \(historicalSkipped) 件")
         }
         return changed
-    }
-
-    struct PddMobile: Identifiable {
-        let id: String
-        let masked: String
-        let alias: String
-        let commonlyUsed: Bool
-    }
-    private static func maskedPddMobile(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let digits = trimmed.filter(\.isNumber)
-        if digits.count == 11, digits.hasPrefix("1") {
-            return String(digits.prefix(3)) + "****" + String(digits.suffix(4))
-        }
-        // The official API sometimes supplies an already-masked mobile.
-        if trimmed.contains("*") || trimmed.contains("＊") {
-            return String(trimmed.prefix(32))
-        }
-        return "已绑定手机号"
-    }
-
-    static func pddBoundMobiles(accountID: String? = nil) async throws -> [PddMobile] {
-        // Read-only account detail endpoint. Binding/unbinding and SMS
-        // verification take place exclusively in the official H5 screen.
-        let response = try await pddJSON(
-            "/api/apoc/express/detail", body: ["entry_source": 17],
-            accountID: accountID)
-        let result = SyncJSON.dict(response["result"])
-        let data = SyncJSON.dict(response["data"])
-        let layers = [response, result, data,
-                      SyncJSON.dict(result["data"]),
-                      SyncJSON.dict(data["data"])]
-        let keys = ["new_binding_list", "newBindingList", "binding_list",
-                    "bindingList", "mobile_list", "mobileList"]
-        var records: [[String: Any]]?
-        for layer in layers {
-            for key in keys {
-                if let list = layer[key] as? [[String: Any]] {
-                    records = list
-                    break
-                }
-            }
-            if records != nil { break }
-        }
-        guard let records else {
-            throw NativeSyncError.badResponse("拼多多未返回可识别的手机号列表")
-        }
-        return records.compactMap { record -> PddMobile? in
-            let id = SyncJSON.first(record, ["mobile_id", "mobileId", "id"])
-            let rawPhone = SyncJSON.first(record, ["mock_mobile", "mobile_des",
-                                                   "mobile_desc", "masked_mobile", "mobile"])
-            guard !id.isEmpty || !rawPhone.isEmpty else { return nil }
-            let status = SyncJSON.first(record, ["commonly_used", "commonlyUsed",
-                                                  "is_default", "isDefault"]).lowercased()
-            return PddMobile(id: id.isEmpty ? rawPhone : id,
-                             masked: maskedPddMobile(rawPhone),
-                             alias: SyncJSON.first(record, ["alias", "remark", "note"]),
-                             commonlyUsed: status == "true" || status == "1")
-        }
-    }
-
-    private static func pddJSON(_ path: String, body: [String: Any]? = nil, referer: String? = nil, accountID: String? = nil) async throws -> [String: Any] {
-        guard PddAccountProtection.webAccessAllowed else {
-            throw NativeSyncError.unavailable("已关闭拼多多网页访问，以免影响官方 App 登录。")
-        }
-        let selected = accountID ?? ParcelAccounts.activeID(for: "pdd")
-        // Pinduoduo serves its H5 on both yangkeduo.com and pinduoduo.net.
-        // A newly authorized small account may only have cookies from the
-        // latter. Keep cookies strictly within the selected WebKit profile.
-        let oldCookies = await WebCookieRequest.cookies(domain: "yangkeduo.com",
-                                                         accountID: selected)
-        let modernCookies = await WebCookieRequest.cookies(domain: "pinduoduo.net",
-                                                            accountID: selected)
-        var cookieNames = Set<String>()
-        let cookies = (modernCookies + oldCookies).filter {
-            cookieNames.insert($0.name).inserted
-        }
-        var headers: [String: String] = [
-            "Referer": referer ?? "https://m.pinduoduo.net/mdkd/package?pr_page_from=scheme",
-            "Content-Type": "application/json;charset=UTF-8",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1"
-        ]
-        if !cookies.isEmpty {
-            headers["Cookie"] = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-        }
-        let token = cookies.first(where: { $0.name == "PDDAccessToken" })?.value ??
-                    PddSessionVault.token(for: selected)
-        guard !token.isEmpty || !cookies.isEmpty else {
-            throw NativeSyncError.noLogin("未找到拼多多有效网页登录会话")
-        }
-        if !token.isEmpty { headers["AccessToken"] = token }
-        let requestBody = body.flatMap { try? JSONSerialization.data(withJSONObject: $0) }
-        let url = URL(string: "https://api.pinduoduo.com" + path)!
-        let (json, _) = try await WebCookieRequest.request(url, method: body == nil ? "GET" : "POST",
-                                                          headers: headers, body: requestBody)
-        let code = SyncJSON.str(json["error_code"])
-        if code == "40001" { throw NativeSyncError.noLogin("拼多多登录已失效，请重新授权") }
-        if code == "54001" { throw NativeSyncError.verify("拼多多要求安全验证，请在官方 App 中完成验证后重试") }
-        if !code.isEmpty && code != "0" && code != "1000000" {
-            throw NativeSyncError.unavailable(SyncJSON.str(json["error_msg"]).isEmpty ?
-                "拼多多接口错误 \(code)" : SyncJSON.str(json["error_msg"]))
-        }
-        return json
-    }
-
-    private static func pddPackages(accountID: String) async throws -> [NativeSyncParcel] {
-        let json = try await pddJSON("/api/express_trackbox/station/package",
-                                     body: ["entry_source": "9", "dynamic_qrcode": false,
-                                            "install_token": "", "dp_source": "", "redirect_app": false], accountID: accountID)
-        let root = SyncJSON.dict(json["result"])
-        let groups = SyncJSON.list(root["combine_list"])
-        var output: [NativeSyncParcel] = []
-        for group in groups {
-            let station = SyncJSON.first(group, ["company_name", "station_name"])
-            let list = SyncJSON.list(group["combine_track_list"]).isEmpty ?
-                       SyncJSON.list(group["list"]) : SyncJSON.list(group["combine_track_list"])
-            for item in list {
-                var p = NativeSyncParcel(source: "pdd")
-                p.accountID = accountID
-                p.mailNo = SyncJSON.first(item, ["tracking_number", "mail_no"])
-                p.company = SyncJSON.first(item, ["shipping_name", "shipping_company",
-                                                   "shipping_company_name", "express_company_name"])
-                if p.company.isEmpty {
-                    p.company = SyncJSON.first(SyncJSON.dict(item["shipping"]),
-                                                ["shipping_name", "shipping_company_name", "name"])
-                }
-                p.station = station
-                p.code = SyncJSON.pickup(SyncJSON.str(item["pick_code"]))
-                p.arrived = !p.code.isEmpty
-                if SyncJSON.isMail(p.mailNo) {
-                    // Detailed route is fetched only for a small, bounded batch.
-                    if output.count < 12 {
-                        do {
-                            let (name, tracks, eta) = try await pddTrack(p.mailNo, accountID: accountID)
-                            if !name.isEmpty { p.company = name }
-                            p.tracks = tracks
-                            p.latest = tracks.first?.text ?? ""
-                            p.eta = eta
-                        } catch {
-                            // An individual shipment must not abort other packages.
-                            p.latest = ""
-                        }
-                    }
-                }
-                output.append(p)
-            }
-        }
-        return output
-    }
-
-    private static func pddTrack(_ mail: String, accountID: String? = nil) async throws -> (String, [TrackNode], String) {
-        guard var parts = URLComponents(string: "https://api.pinduoduo.com/api/express/shipping/track") else {
-            throw NativeSyncError.badResponse("运单接口不可用")
-        }
-        parts.queryItems = [URLQueryItem(name: "tracking_number", value: mail),
-                            URLQueryItem(name: "entry_source", value: "9")]
-        // Same request error handling as station API, but query is GET.
-        let path = "/api/express/shipping/track?" + (parts.percentEncodedQuery ?? "")
-        let response = try await pddJSON(path, accountID: accountID)
-        let shipping = SyncJSON.dict(response["shipping"])
-        let nodes = SyncJSON.list(shipping["traces"]).compactMap { o -> TrackNode? in
-            let text = SyncJSON.first(o, ["info", "desc"])
-            guard !text.isEmpty else { return nil }
-            return TrackNode(time: SyncJSON.str(o["time"]), text: text)
-        }
-        let forecast = SyncJSON.dict(shipping["time_forecast"])
-        return (SyncJSON.str(shipping["shipping_name"]), nodes,
-                SyncJSON.str(forecast["time_forecast_desc"]))
-    }
-
-    private static func mtop(_ api: String, data: [String: Any], accountID: String? = nil) async throws -> [String: Any] {
-        let params = try JSONSerialization.data(withJSONObject: data, options: [.sortedKeys])
-        guard let json = String(data: params, encoding: .utf8) else {
-            throw NativeSyncError.badResponse("请求参数编码失败")
-        }
-        let selected = accountID ?? ParcelAccounts.activeID(for: "taobao")
-        let gateway = URL(string: "https://h5api.m.taobao.com/h5/\(api.lowercased())/1.0/")!
-        var cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
-        guard !cookies.isEmpty else {
-            throw NativeSyncError.noLogin("未检测到当前账号的淘宝网页会话")
-        }
-        var lastFailure = "接口请求失败"
-        // Session errors may mean a stale MTOP gateway token rather than a
-        // revoked account login. Rotate the gateway token before asking the
-        // user to visit account authorization. Bound total attempts to three.
-        for attempt in 0..<3 {
-            let token = cookies.first(where: { $0.name == "_m_h5_tk" })?.value
-                .components(separatedBy: "_").first ?? ""
-            let time = String(Int64(Date().timeIntervalSince1970 * 1000))
-            let signed = "\(token)&\(time)&12574478&\(json)"
-            let hash = Insecure.MD5.hash(data: Data(signed.utf8))
-                .map { String(format: "%02x", $0) }.joined()
-            var components = URLComponents(url: gateway, resolvingAgainstBaseURL: false)!
-            components.queryItems = [
-                .init(name: "jsv", value: "2.7.4"),
-                .init(name: "appKey", value: "12574478"),
-                .init(name: "t", value: time),
-                .init(name: "sign", value: hash),
-                .init(name: "api", value: api),
-                .init(name: "v", value: "1.0"),
-                .init(name: "type", value: "originaljson"),
-                .init(name: "dataType", value: "json"),
-                .init(name: "data", value: json)
-            ]
-            var headers = try WebCookieRequest.mtopHeaders(cookies: cookies)
-            headers["Referer"] = "https://h5.m.taobao.com/"
-            let (result, response) = try await WebCookieRequest.request(components.url!, headers: headers)
-            let returned = (result["ret"] as? [String])?.first ?? ""
-            if returned.hasPrefix("SUCCESS") { return result }
-            lastFailure = returned.isEmpty ? "MTOP 业务返回失败" : returned
-            let failure = returned.uppercased()
-            let recoverable = ["TOKEN_EMPTY", "TOKEN_EXPIRED", "TOKEN_EXOIRED",
-                               "ILLEGAL_ACCESS", "SESSION_EXPIRED"]
-                .contains(where: { failure.contains($0) })
-            guard attempt < 2 && recoverable else { break }
-
-            // Persist gateway-issued replacement cookies back into the
-            // SAME isolated WebKit store; URLSession has another cookie jar.
-            let headerFields = response.allHeaderFields.reduce(into: [String: String]()) { out, item in
-                out[String(describing: item.key)] = String(describing: item.value)
-            }
-            let rotated = HTTPCookie.cookies(withResponseHeaderFields: headerFields,
-                                              for: gateway)
-            for cookie in rotated {
-                let domain = cookie.domain.lowercased()
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "."))
-                guard domain == "taobao.com" || domain.hasSuffix(".taobao.com") else { continue }
-                await WebCookieRequest.cookieStore(accountID: selected).setCookie(cookie)
-            }
-            cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
-            let newer = cookies.first(where: { $0.name == "_m_h5_tk" })?
-                .value.components(separatedBy: "_").first ?? ""
-            if newer.isEmpty || newer == token {
-                // Bootstrap a fresh H5 token without ever displaying a login
-                // form. Never clear the user's persistent authorization data.
-                await CainiaoMtopTokenRefresh(accountID: selected)
-                    .run(gatewayURL: components.url!)
-                cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
-            }
-        }
-        if lastFailure.uppercased().contains("SESSION_EXPIRED") {
-            throw NativeSyncError.unavailable(
-                "菜鸟接口返回 SESSION_EXPIRED：网页 Cookie 仍在，但接口会话已过期且自动续期未成功。可在「账号授权 → 菜鸟」重新验证；原有包裹和 Cookie 已保留")
-        }
-        throw NativeSyncError.unavailable("菜鸟 MTOP 请求失败：\(lastFailure)")
-    }
-
-    private static func cainiaoPackages(accountID: String) async throws -> [NativeSyncParcel] {
-        var out: [NativeSyncParcel] = []
-        let api = "mtop.cainiao.lpc.packageservice.queryPdsPackageDataList"
-        for page in 1...2 {
-            let json = try await mtop(api, data: [
-                "pageSize": 50, "currentPage": page,
-                "needTemporality": false,
-                "needDynInfo": "{'needFindTemporality':true,'needAppointment':true}"
-            ], accountID: accountID)
-            let outer = SyncJSON.dict(json["data"])
-            let body = SyncJSON.dict(outer["data"]).isEmpty ? outer : SyncJSON.dict(outer["data"])
-            let entries = SyncJSON.list(body["packages"])
-            for pkg in entries {
-                let mail = SyncJSON.first(pkg, ["mailNo", "mail_no"])
-                guard SyncJSON.isMail(mail) else { continue }
-                let station = SyncJSON.dict(pkg["packageStation"])
-                let feature = SyncJSON.dict(pkg["feature"])
-                let items = SyncJSON.list(pkg["packageItem"])
-                let firstItem = items.first ?? [:]
-                var parcel = NativeSyncParcel(source: "cainiao")
-                parcel.accountID = accountID
-                parcel.mailNo = mail
-                let carrier = SyncJSON.dict(pkg["cpInfo"])
-                let logistics = SyncJSON.dict(pkg["logisticsCompany"])
-                parcel.company = SyncJSON.first(pkg, ["cpName", "cp_name", "companyName",
-                    "cpCode", "logisticsCompanyName", "expressCompanyName", "expressName"])
-                if parcel.company.isEmpty {
-                    parcel.company = SyncJSON.first(carrier, ["cpName", "companyName", "name", "cpCode"])
-                }
-                if parcel.company.isEmpty {
-                    parcel.company = SyncJSON.first(logistics, ["name", "companyName", "cpName"])
-                }
-                parcel.title = SyncJSON.first(feature, ["recommendPackageTitle", "recommend_package_title"])
-                if parcel.title.isEmpty { parcel.title = SyncJSON.first(firstItem, ["itemTitle", "item_title"]) }
-                parcel.station = SyncJSON.first(station, ["pointName", "point_name", "stationName", "name"])
-                parcel.code = SyncJSON.pickup(SyncJSON.first(station, ["authCode", "auth_code", "showPickupCode", "pickUpCode", "pickupCode"]))
-                if parcel.code.isEmpty {
-                    parcel.code = SyncJSON.pickup(SyncJSON.first(feature, ["stationOrderPickUpCode", "station_order_pick_up_code"]))
-                }
-                let status = SyncJSON.first(pkg, ["statusDesc", "status", "packageStatus"])
-                let upperStatus = status.uppercased()
-                if ["CANCEL", "REJECT", "RETURN", "LOST"].contains(upperStatus) &&
-                   parcel.code.isEmpty { continue }
-                // SIGN is delivered/picked, not an in-transit parcel. Propagate
-                // it to the merge layer so an existing parcel is marked picked,
-                // but do not insert historical signed parcels as new packages.
-                parcel.latest = upperStatus == "SIGN" ? "已签收" : status
-                parcel.arrived = !parcel.code.isEmpty
-                if out.count < 4 {
-                    if let detail = await cainiaoTrack(mail, accountID: accountID) {
-                        if !detail.company.isEmpty { parcel.company = detail.company }
-                        if !detail.nodes.isEmpty {
-                            parcel.tracks = detail.nodes
-                            // Avoid replacing final platform SIGN with older route text.
-                            if upperStatus != "SIGN" {
-                                parcel.latest = detail.status.isEmpty ?
-                                    (detail.nodes.first?.text ?? status) : detail.status
-                            }
-                        }
-                    }
-                }
-                out.append(parcel)
-            }
-            let total = Int(SyncJSON.str(body["totalPage"])) ?? 1
-            if page >= total || entries.isEmpty { break }
-        }
-        return out
-    }
-
-    // Original utils/cainiao.ts: trackMailNo() with a PID query first, falling
-    // back to carrier detection + queryalltrace. A failed trace lookup does not
-    // invalidate the rest of the order-list import.
-    private static func cainiaoTrack(
-        _ mail: String, accountID: String? = nil
-    ) async -> (company: String, nodes: [TrackNode], status: String)? {
-        func parse(_ result: [String: Any]) -> (company: String, nodes: [TrackNode], status: String) {
-            let data = SyncJSON.dict(result["data"])
-            let payload = SyncJSON.dict(data["data"]).isEmpty ? data : SyncJSON.dict(data["data"])
-            var containers: [[String: Any]] = []
-            if let first = SyncJSON.list(payload["result"]).first { containers.append(first) }
-            let resultObject = SyncJSON.dict(payload["result"])
-            if !resultObject.isEmpty { containers.append(resultObject) }
-            containers.append(payload)
-            containers.append(data)
-            let company = containers.lazy.map {
-                SyncJSON.first($0, ["cpName", "cp_name", "companyName",
-                                    "logisticsCompanyName", "cpCode"])
-            }.first(where: { !$0.isEmpty }) ?? ""
-            var nodes: [TrackNode] = []
-            for container in containers {
-                for key in ["detailList", "traceList", "transitList", "traces", "routeList"] {
-                    let list = SyncJSON.list(container[key])
-                    let found = list.compactMap { item -> TrackNode? in
-                        let text = SyncJSON.first(item, ["standerdDesc", "standardDesc",
-                            "statusDesc", "desc", "content", "description", "action", "status"])
-                        guard !text.isEmpty else { return nil }
-                        return TrackNode(time: SyncJSON.first(item,
-                            ["time", "ocurrTimeStr", "occurTimeStr", "gmtCreate", "statusTime"]),
-                            text: text)
-                    }
-                    if !found.isEmpty {
-                        nodes = Array(found.prefix(60))
-                        break
-                    }
-                }
-                if !nodes.isEmpty { break }
-            }
-            // SIGN from the official Cainiao package-detail response means
-            // signed/delivered, not necessarily collected by the recipient.
-            let raw = containers.lazy.map {
-                SyncJSON.first($0, ["statusDesc", "packageStatus", "status",
-                                    "latestStatus", "logisticsStatus"])
-            }.first(where: { !$0.isEmpty }) ?? ""
-            let normalized = raw.uppercased()
-            let status: String
-            if normalized == "SIGN" { status = "已签收" }
-            else if Parcel.confirmsRecipientPickup(raw) ||
-                    ["已签收", "签收成功", "待取件", "到站", "已妥投"]
-                        .contains(where: { raw.contains($0) }) {
-                status = raw
-            } else {
-                status = ""
-            }
-            return (company, nodes, status)
-        }
-
-        // An HTTP/MTOP SUCCESS with no trace nodes is still an empty result.
-        // Fall back to the receiver trace API in that case as well.
-        let primary = try? await mtop(
-            "mtop.cainiao.logisticsdetail.packages.pid.orderCode.mailNo.get",
-            data: ["mailNo": mail], accountID: accountID)
-        let first = primary.map(parse)
-        if let first, !first.nodes.isEmpty { return first }
-
-        var companyCode = ""
-        if let cp = try? await mtop("mtop.taobao.logisticsDetailTraceQueryService.queryCpByMailNo",
-                                      data: ["mailNo": mail], accountID: accountID) {
-            let data = SyncJSON.dict(cp["data"])
-            let list = SyncJSON.list(data["result"])
-            companyCode = SyncJSON.first(list.first ?? [:], ["tpCode", "cpCode"])
-        }
-        let alternate = try? await mtop(
-            "mtop.taobao.logisticstracedetailservice.queryalltrace",
-            data: [
-                "mailNo": mail, "cpCode": companyCode, "actor": "RECEIVER",
-                "isShowAllDetail": true, "isShowExceptionDetail": true,
-                "isShowExpressMan": true, "isShowConsignDetail": true,
-                "isShowDeliveryProgress": true, "isShowStationProxyOrder": true,
-                "isShowServiceProvider": true, "isStandard": true,
-                "isUnique": true, "ignoreInvalidNode": true
-            ], accountID: accountID)
-        if let alternate {
-            let second = parse(alternate)
-            if !second.nodes.isEmpty || !second.status.isEmpty {
-                return (second.company.isEmpty ? first?.company ?? "" : second.company,
-                        second.nodes, second.status.isEmpty ? first?.status ?? "" : second.status)
-            }
-        }
-        if let first, !first.status.isEmpty || !first.company.isEmpty { return first }
-        return nil
     }
 
     // Native port of the exact three identity-code endpoints in
