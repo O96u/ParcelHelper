@@ -602,7 +602,7 @@ struct AppearanceSettingsPage: View {
 struct LiveSettingsPage: View {
     @EnvironmentObject private var store: ParcelStore
     @AppStorage("native.live.style") private var liveStyle = "glass"
-    @AppStorage("native.live.expiry") private var expiry = "30分钟"
+    @AppStorage("native.live.expiry") private var expiry = "10分钟"
     @State private var previewMode = "expanded"
 
     private var previewPending: [Parcel] {
@@ -665,7 +665,7 @@ struct LiveSettingsPage: View {
         .navigationTitle("实时活动（灵动岛）")
         .onAppear {
             if !["5分钟", "10分钟", "30分钟", "2小时"].contains(expiry) {
-                expiry = "30分钟"
+                expiry = "10分钟"
                 LiveActivityCoordinator.resetSession()
             }
             if store.snapshot.preferences.liveActivityEnabled {

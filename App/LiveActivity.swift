@@ -28,12 +28,12 @@ struct PickupActivityAttributes: ActivityAttributes {
     }
 
     private static var duration: TimeInterval {
-        switch UserDefaults.standard.string(forKey: "native.live.expiry") ?? "30分钟" {
+        switch UserDefaults.standard.string(forKey: "native.live.expiry") ?? "10分钟" {
         case "5分钟": return 5 * 60
         case "10分钟": return 10 * 60
         case "30分钟": return 30 * 60
         case "2小时": return 2 * 3600
-        default: return 30 * 60
+        default: return 10 * 60
         }
     }
 

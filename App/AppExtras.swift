@@ -558,13 +558,22 @@ struct ParcelUpdatePage: View {
                     }
                     .disabled(records.isEmpty)
                     Spacer()
-                    Button { reload() } label: {
-                        Label("刷新", systemImage: "arrow.clockwise")
+                    HStack(spacing: 4) {
+                        Button { reload() } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .frame(width: 40, height: 40)
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("刷新日志")
+                        Button(role: .destructive) { confirmClear = true } label: {
+                            Image(systemName: "trash")
+                                .frame(width: 40, height: 40)
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("清空日志")
+                        .disabled(records.isEmpty)
                     }
-                    Button(role: .destructive) { confirmClear = true } label: {
-                        Label("清空", systemImage: "trash")
-                    }
-                    .disabled(records.isEmpty)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .buttonStyle(.borderless)
             } footer: {

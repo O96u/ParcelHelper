@@ -108,4 +108,18 @@ plainXHR.responseText = JSON.stringify({body: {orderList: [{
 plainXHR.send();
 assert.equal(win.ParcelHelperJD.snapshot().orders.length, 1, "last rich snapshot preserved");
 
-console.log("PASS: JD document-start hook, structured link, pickup code, logistics, origin guard and instant filter");
+const delivering = new FakeXHR();
+delivering.responseURL = "https://api.m.jd.com/client.action?functionId=order_list_m";
+delivering.responseText = JSON.stringify({body:{orderList:[{
+  dealId:"222233334444", orderStatusInfo:{orderStatusName:"配送中"},
+  progressInfo:{content:"配送员正在配送，请保持电话畅通"}
+},{
+  orderId:"555566667777", orderStatusInfo:{orderStatusName:"配送中"},
+  progressInfo:{content:"京东物流骑手正在配送",progressId:"logistics"}
+}]}});
+delivering.send();
+const active = win.ParcelHelperJD.snapshot().orders;
+assert.equal(active.find(x=>x.id==="222233334444")?.verified,true,"active delivery without waybill retained");
+assert.equal(active.find(x=>x.id==="555566667777")?.verified,true,"ordinary delivery not rejected by rider wording");
+assert.ok(active.some(x=>x.id===normal.orderId),"previous page retained");
+console.log("PASS: JD document-start hook, active delivery, structured link, pickup code, logistics, origin guard and instant filter");

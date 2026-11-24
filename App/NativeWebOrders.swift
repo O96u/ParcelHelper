@@ -466,7 +466,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var u=clean(progress.progressLink,500).toLowerCase();
         if(/store2home|daojia|instant/.test(u))return true;
         var msg=[o.message,o.messageTitle,progress.content,progress.tip].join(' ');
-        return /秒送|京东到家|即时配送|达达|骑手|分钟送达|分钟达/.test(msg);
+        return /秒送|京东到家|即时配送|分钟送达|分钟达/.test(msg);
       }
       function order(o){
         if(!o||typeof o!=='object')return null;
@@ -487,7 +487,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var desc=[msg,promptValue,clean(p.tip,200),status].join(' ');
         var code=pickup(desc);
         var link=jdURL(p.progressLink);
-        var verified=p.progressId==='logistics'||/deal_wuliu|logistics|ordertrack|expressdetail/i.test(link);
+        var courierProgress=/配送中|正在配送|配送途中|派送中|正在派送|运输中|已揽收|已发货|已出库|快递员|配送员|物流运输/.test(desc);
+        var verified=p.progressId==='logistics'||/deal_wuliu|logistics|ordertrack|expressdetail/i.test(link)||courierProgress;
         var active=/待发货|待收货|待出库|运输|配送|派送|待取|已出库|正在出库|waitreceive|shipping|delivering/i.test(status);
         // Ignore unrelated orders: a structured courier link/track or an
         // active shipping state/pickup code is required.
@@ -505,7 +506,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             for(var i=0;i<Math.min(node.length,50);i++)walk(node[i],depth+1);
             return;
           }
-          if(Array.isArray(node.orderList)&&node.orderList.some(function(x){return x&&x.orderId})){
+          if(Array.isArray(node.orderList)&&node.orderList.some(function(x){return x&&(x.orderId||x.orderid||x.dealId)})){
             lists.push(node.orderList.slice(0,100));
           }
           Object.keys(node).slice(0,60).forEach(function(key){
@@ -850,6 +851,12 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                 let cursorKey = "native.web.orderCursor." + self.platform + "." + (self.accountID ?? "default")
                 let cursor = eligible.isEmpty ? 0 : max(0, UserDefaults.standard.integer(forKey: cursorKey)) % eligible.count
                 let rotated = Array(eligible.dropFirst(cursor)) + Array(eligible.prefix(cursor))
+                if self.platform == "jd" {
+                    // Preserve all verified active summaries before applying the detail-query budget.
+                    for order in eligible where order.verified == true {
+                        self.preserveJDOrderSummary(order)
+                    }
+                }
                 self.orders = Array(rotated.prefix(limit))
                 UserDefaults.standard.set(eligible.isEmpty ? 0 : (cursor + self.orders.count) % eligible.count, forKey: cursorKey)
                 self.record("筛选后可查询 \(self.orders.count) 笔订单")

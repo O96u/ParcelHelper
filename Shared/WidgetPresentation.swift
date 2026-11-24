@@ -19,6 +19,28 @@ enum PickupPalette {
         }
     }
 
+    static func rowForeground(_ style: String) -> Color {
+        style == "white" ? Color(red: 0.08, green: 0.12, blue: 0.18) : .white
+    }
+
+    static func rowBackground(_ style: String) -> LinearGradient {
+        let colors: [Color]
+        switch style {
+        case "white": colors = [.white, Color(red: 0.89, green: 0.93, blue: 0.98)]
+        case "black": colors = [Color(white: 0.13), Color(white: 0.06)]
+        default: colors = [Color(red: 0.16, green: 0.30, blue: 0.44), Color(red: 0.08, green: 0.14, blue: 0.24)]
+        }
+        return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    static func rowBorder(_ style: String) -> Color {
+        switch style {
+        case "white": return Color.black.opacity(0.08)
+        case "black": return Color.white.opacity(0.18)
+        default: return accent(style).opacity(0.35)
+        }
+    }
+
     static func lockForeground(_ style: String) -> Color {
         style == "white" ? Color(red: 0.08, green: 0.12, blue: 0.18) : .white
     }
@@ -93,6 +115,7 @@ private struct PickupParcelRow: View {
     let item: PickupActivityItem
     let foreground: Color
     let accent: Color
+    let style: String
 
     private var station: String {
         let name = item.station.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -133,7 +156,8 @@ private struct PickupParcelRow: View {
         .foregroundStyle(foreground)
         .padding(.horizontal, 10)
         .frame(height: 44)
-        .background(foreground.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+        .background(PickupPalette.rowBackground(style), in: RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(PickupPalette.rowBorder(style), lineWidth: 1) }
     }
 }
 
@@ -143,8 +167,8 @@ struct PickupExpandedView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             ForEach(Array(state.items.prefix(2).enumerated()), id: \.offset) { _, item in
-                PickupParcelRow(item: item, foreground: .white,
-                                accent: PickupPalette.accent(state.style))
+                PickupParcelRow(item: item, foreground: PickupPalette.rowForeground(state.style),
+                                accent: PickupPalette.accent(state.style), style: state.style)
             }
             if state.items.isEmpty {
                 Text("暂无待取包裹")
@@ -200,7 +224,7 @@ struct PickupLockScreenView: View {
             }
             .frame(height: 34)
             ForEach(Array(state.items.prefix(2).enumerated()), id: \.offset) { _, item in
-                PickupParcelRow(item: item, foreground: foreground, accent: accent)
+                PickupParcelRow(item: item, foreground: foreground, accent: accent, style: state.style)
             }
             if state.pending > 2 {
                 Text("另有 \(state.pending - 2) 件待取")
