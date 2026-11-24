@@ -132,7 +132,8 @@ enum SyncJSON {
             "Accept": "application/json"
         ]
     }
-    static func request(_ url: URL, method: String = "GET", headers: [String: String], body: Data? = nil) async throws -> ([String: Any], HTTPURLResponse) {
+    static func request(_ url: URL, method: String = "GET", headers: [String: String], body: Data? = nil,
+                        identityDiagnostics: Bool = false) async throws -> ([String: Any], HTTPURLResponse) {
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 18)
         req.httpMethod = method
         req.httpBody = body
@@ -140,9 +141,32 @@ enum SyncJSON {
         // them with URLSession.shared's unrelated system cookie jar.
         req.httpShouldHandleCookies = false
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let started = Date()
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: req)
+        } catch {
+            if identityDiagnostics {
+                let description: String
+                if let error = error as? URLError {
+                    description = "网络错误编号 \(error.code.rawValue)"
+                } else if error is CancellationError {
+                    description = "请求已取消"
+                } else {
+                    description = "网络请求失败"
+                }
+                ParcelRunLog.record("菜鸟身份码", description, level: "警告", elapsed: Date().timeIntervalSince(started))
+            }
+            throw error
+        }
         guard let http = response as? HTTPURLResponse else {
+            if identityDiagnostics { ParcelRunLog.record("菜鸟身份码", "未返回 HTTP 响应", level: "警告") }
             throw NativeSyncError.badResponse("服务器未返回 HTTP 响应")
+        }
+        if identityDiagnostics {
+            ParcelRunLog.record("菜鸟身份码", "MTOP HTTP \(http.statusCode)，响应体 \(data.count) 字节",
+                                elapsed: Date().timeIntervalSince(started))
         }
         guard (200..<300).contains(http.statusCode) else {
             if http.statusCode == 401 || http.statusCode == 403 {
@@ -152,6 +176,9 @@ enum SyncJSON {
         }
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             return (json, http)
+        }
+        if identityDiagnostics {
+            ParcelRunLog.record("菜鸟身份码", "HTTP 响应不是 JSON 对象", level: "警告")
         }
         // The original Scripting/pddExpress.ts also accepts the H5Response
         // wrappers returned by some PDD mdkd endpoints.
@@ -805,6 +832,18 @@ enum SyncJSON {
                 accountID: ParcelAccounts.activeID(for: "taobao"))
             let outer = identityData(response["data"])
             let rawModel = outer["model"]
+            // Describe known fields and types only, never their contents.
+            func shape(_ value: Any?) -> String {
+                guard let value else { return "缺失" }
+                if value is NSNull { return "空值" }
+                if value is [String: Any] { return "对象" }
+                if value is [Any] { return "数组" }
+                if value is String { return "字符串" }
+                if value is NSNumber { return "数字或布尔值" }
+                return "其他类型"
+            }
+            let direct = SyncJSON.dict(response["data"])
+            ParcelRunLog.record("菜鸟身份码", "响应结构：data \(shape(response["data"]))，内层 data \(shape(direct["data"]))，model \(shape(rawModel))")
             let model: [String: Any]
             if let raw = rawModel as? String, let bytes = raw.data(using: .utf8),
                let decoded = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] {
@@ -813,6 +852,8 @@ enum SyncJSON {
                 model = SyncJSON.dict(rawModel)
             }
             let code = SyncJSON.str(model["identityCode"]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasOtherKnownField = cainiaoIdentityCode(outer) != nil
+            ParcelRunLog.record("菜鸟身份码", "解析检查：model 字段 \(model.count) 项，标准码字段\(shape(model["identityCode"]))，长度 \(code.count)，其他可识别码结构\(hasOtherKnownField ? "存在" : "未识别")，有效期字段\(shape(model["expireTime"]))")
             guard (4...1024).contains(code.count),
                   !code.hasPrefix("{"), !code.hasPrefix("["),
                   !["null", "undefined", "true", "false", "invalid"].contains(code.lowercased()) else {
@@ -822,8 +863,10 @@ enum SyncJSON {
             // The reference implementation treats expireTime as seconds.
             let ttl = Double(SyncJSON.str(model["expireTime"])) ?? 600
             guard ttl.isFinite, ttl > 0, ttl <= 86400 else {
+                ParcelRunLog.record("菜鸟身份码", "有效期校验未通过：\(!ttl.isFinite ? "非有限数值" : ttl <= 0 ? "非正数" : "超出允许范围")", level: "警告")
                 throw NativeSyncError.badResponse("菜鸟身份码有效期异常")
             }
+            ParcelRunLog.record("菜鸟身份码", "原生码值与有效期校验通过，有效期来源：\(Double(SyncJSON.str(model["expireTime"])) == nil ? "默认值" : "接口")")
             return IdentityResult(
                 code: code,
                 expiresAt: Date().addingTimeInterval(ttl),

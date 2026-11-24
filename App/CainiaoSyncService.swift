@@ -10,8 +10,18 @@ import CryptoKit
         }
         let selected = accountID ?? ParcelAccounts.activeID(for: "taobao")
         let gateway = URL(string: "https://h5api.m.taobao.com/h5/\(api.lowercased())/1.0/")!
+        let traceIdentity = api.lowercased() == "mtop.cainiao.nbpickup.identitycode.get"
+        func trace(_ event: String, level: String = "信息") {
+            if traceIdentity { ParcelRunLog.record("菜鸟身份码", event, level: level) }
+        }
         var cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
+        if traceIdentity {
+            let all = await WebCookieRequest.cookies(domain: "taobao.com", accountID: selected)
+            let hasLogin = all.contains { ["unb", "tracknick"].contains($0.name) && !$0.value.isEmpty }
+            trace("MTOP 会话：\(selected.hasPrefix("legacy:") ? "兼容账号" : "独立账号")，淘宝有效 Cookie \(all.count) 项，匹配网关 \(cookies.count) 项，登录标记\(hasLogin ? "存在" : "缺失")")
+        }
         guard !cookies.isEmpty else {
+            trace("网关无匹配 Cookie，未发起身份码请求", level: "警告")
             throw NativeSyncError.noLogin("未检测到当前账号的淘宝网页会话")
         }
         var lastFailure = "接口请求失败"
@@ -21,6 +31,11 @@ import CryptoKit
         for attempt in 0..<3 {
             let token = cookies.first(where: { $0.name == "_m_h5_tk" })?.value
                 .components(separatedBy: "_").first ?? ""
+            if traceIdentity {
+                let encryptedToken = cookies.contains { $0.name == "_m_h5_tk_enc" && !$0.value.isEmpty }
+                let loginMarker = cookies.contains { ["unb", "tracknick"].contains($0.name) && !$0.value.isEmpty }
+                trace("MTOP 第 \(attempt + 1)/3 次请求：签名令牌\(token.isEmpty ? "缺失" : "存在")，配套令牌\(encryptedToken ? "存在" : "缺失")，网关登录标记\(loginMarker ? "存在" : "缺失")")
+            }
             let time = String(Int64(Date().timeIntervalSince1970 * 1000))
             let signed = "\(token)&\(time)&12574478&\(json)"
             let hash = Insecure.MD5.hash(data: Data(signed.utf8))
@@ -39,15 +54,33 @@ import CryptoKit
             ]
             var headers = try WebCookieRequest.mtopHeaders(cookies: cookies)
             headers["Referer"] = "https://h5.m.taobao.com/"
-            let (result, response) = try await WebCookieRequest.request(components.url!, headers: headers)
+            let (result, response) = try await WebCookieRequest.request(components.url!, headers: headers, identityDiagnostics: traceIdentity)
             let returned = (result["ret"] as? [String])?.first ?? ""
+            if traceIdentity {
+                // Fixed labels only. Never write the server's original error
+                // message, response body, URL, signature or cookie values.
+                let status = returned.uppercased()
+                let known = ["TOKEN_EMPTY", "TOKEN_EXPIRED", "TOKEN_EXOIRED",
+                             "SESSION_EXPIRED", "ILLEGAL_ACCESS", "TRAFFIC_LIMIT",
+                             "USER_VALIDATE", "RGV587", "API_NOT_FOUND",
+                             "API_NOT_EXIST", "API_UNAUTHORIZED", "ILLEGAL_SIGN",
+                             "PARAM_ILLEGAL", "SYSTEM_ERROR", "SERVICE_UNAVAILABLE"]
+                let category = status.hasPrefix("SUCCESS") ? "SUCCESS" :
+                    (known.first { status.contains($0) } ?? (status.isEmpty ? "缺少返回状态" : "其他业务失败"))
+                trace("MTOP 业务状态：\(category)，状态条数 \((result["ret"] as? [String])?.count ?? 0)，数据字段\(result["data"] == nil ? "缺失" : "存在")",
+                      level: status.hasPrefix("SUCCESS") ? "信息" : "警告")
+            }
             if returned.hasPrefix("SUCCESS") { return result }
             lastFailure = returned.isEmpty ? "MTOP 业务返回失败" : returned
             let failure = returned.uppercased()
             let recoverable = ["TOKEN_EMPTY", "TOKEN_EXPIRED", "TOKEN_EXOIRED",
                                "ILLEGAL_ACCESS", "SESSION_EXPIRED"]
                 .contains(where: { failure.contains($0) })
-            guard attempt < 2 && recoverable else { break }
+            guard attempt < 2 && recoverable else {
+                trace("MTOP 请求结束：\(recoverable ? "续期次数已用完" : "返回状态不属于自动续期范围")", level: "警告")
+                break
+            }
+            trace("开始使用当前账号会话续期")
 
             // Persist gateway-issued replacement cookies back into the
             // SAME isolated WebKit store; URLSession has another cookie jar.
@@ -65,12 +98,17 @@ import CryptoKit
             cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
             let newer = cookies.first(where: { $0.name == "_m_h5_tk" })?
                 .value.components(separatedBy: "_").first ?? ""
+            trace("网关续期响应：下发 Cookie \(rotated.count) 项，签名令牌\(newer.isEmpty ? "缺失" : newer == token ? "未变化" : "已更新")")
             if newer.isEmpty || newer == token {
+                trace("尝试现有 WebKit 网关续期")
                 // Bootstrap a fresh H5 token without ever displaying a login
                 // form. Never clear the user's persistent authorization data.
                 await CainiaoMtopTokenRefresh(accountID: selected)
                     .run(gatewayURL: components.url!)
                 cookies = await WebCookieRequest.mtopCookies(for: gateway, accountID: selected)
+                let refreshed = cookies.first(where: { $0.name == "_m_h5_tk" })?
+                    .value.components(separatedBy: "_").first ?? ""
+                trace("WebKit 续期结束：匹配网关 \(cookies.count) 项，签名令牌\(refreshed.isEmpty ? "缺失" : refreshed == token ? "未变化" : "已更新")")
             }
         }
         if lastFailure.uppercased().contains("SESSION_EXPIRED") {

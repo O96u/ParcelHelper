@@ -500,8 +500,14 @@ struct IdentityDetailPage: View {
         if platform == "cainiao" {
             identityAccountID = requestedAccountID
             identity = nil
+            ParcelRunLog.record("菜鸟身份码", "开始获取默认账号身份码")
+            let session = await ParcelAccounts.hasSession("cainiao", accountID: requestedAccountID)
+            ParcelRunLog.record("菜鸟身份码", "包裹同步登录标记：\(session ? "有效" : "未识别")")
         }
         authorized = await NativeParcelSync.hasIdentitySession(platform)
+        if platform == "cainiao" {
+            ParcelRunLog.record("菜鸟身份码", "原生身份码会话预检查：\(authorized ? "通过" : "未通过")")
+        }
         guard requestedAccountID == ParcelAccounts.activeID(for: platform),
               generation == ParcelAccounts.syncGeneration(requestedAccountID),
               !Task.isCancelled else {
@@ -617,6 +623,7 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         web.allowsBackForwardNavigationGestures = authorizationMode
         let url = authorizationMode && startWithLogin ? Self.loginEntry : Self.entry
         web.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
+        ParcelRunLog.record("菜鸟身份码", authorizationMode ? "打开账号内官方授权页面" : "开始官方 H5 只读检查")
         context.coordinator.start(web)
         return web
     }
@@ -703,9 +710,9 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
                 ParcelRunLog.record("菜鸟身份码", "官方条形码已就绪")
             } else if next == .failed {
                 ParcelRunLog.record("菜鸟身份码", "官方页面未取得条形码")
-            } else if next == .authorizationRequired && !authorizationMode {
-                ParcelRunLog.record("菜鸟身份码", "官方页面要求授权，已停止只读展示")
-                stop()
+            } else if next == .authorizationRequired {
+                ParcelRunLog.record("菜鸟身份码", authorizationMode ? "官方授权页面存在登录或验证流程" : "官方页面要求授权，已停止只读展示")
+                if !authorizationMode { stop() }
             }
         }
         func start(_ web: WKWebView) {
@@ -791,6 +798,8 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
                      decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
             guard response.isForMainFrame else { decisionHandler(.allow); return }
             let allowed = authorizationMode ? allowsAuthorization(response.response.url) : officialEntry(response.response.url)
+            let status = (response.response as? HTTPURLResponse)?.statusCode
+            ParcelRunLog.record("菜鸟身份码", "H5 主页面：\(officialEntry(response.response.url) ? "官方身份码" : allowed ? "官方授权相关页面" : "非预期页面")，HTTP \(status.map { String($0) } ?? "未知")，\(allowed ? "允许" : "已拦截")")
             decisionHandler(allowed ? .allow : .cancel)
             if !allowed && !authorizationMode { report(.authorizationRequired) }
         }
@@ -806,9 +815,15 @@ struct CainiaoOfficialIdentityWebView: UIViewRepresentable {
         }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             guard (error as NSError).code != NSURLErrorCancelled else { return }
+            if let error = error as? URLError {
+                ParcelRunLog.record("菜鸟身份码", "H5 加载失败：网络错误编号 \(error.code.rawValue)", level: "警告")
+            } else {
+                ParcelRunLog.record("菜鸟身份码", "H5 导航失败", level: "警告")
+            }
             report(.failed)
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            ParcelRunLog.record("菜鸟身份码", "H5 网页进程已结束", level: "警告")
             report(.failed)
         }
     }
