@@ -133,7 +133,7 @@ jobs:
       - name: 解析 Widget App Group
         shell: bash
         env:
-          REPOSITORY_WIDGET_GROUP: ${{ vars.PH_WIDGET_GROUP }}
+          REPOSITORY_WIDGET_GROUP: ${{ vars.PH_WIDGET_GROUP || secrets.PH_WIDGET_GROUP }}
           MANUAL_WIDGET_GROUP: ${{ inputs.widget_group }}
           IS_PRERELEASE: ${{ env.IS_PRERELEASE }}
         run: |
@@ -143,9 +143,9 @@ jobs:
             echo '- **App Group 来源**: 本次手动覆盖' >> "$GITHUB_STEP_SUMMARY"
           elif [[ -n "${REPOSITORY_WIDGET_GROUP:-}" ]]; then
             group="$REPOSITORY_WIDGET_GROUP"
-            echo '- **App Group 来源**: 仓库变量 PH_WIDGET_GROUP' >> "$GITHUB_STEP_SUMMARY"
+            echo '- **App Group 来源**: 仓库变量或 Secret PH_WIDGET_GROUP' >> "$GITHUB_STEP_SUMMARY"
           elif [[ "$IS_PRERELEASE" == "true" ]]; then
-            echo "::error::请在仓库 Settings → Secrets and variables → Actions → Variables 配置 PH_WIDGET_GROUP，或填写本次 widget_group。"
+            echo "::error::请在仓库 Settings → Secrets and variables → Actions → Variables 配置 PH_WIDGET_GROUP（Variables 或 Secrets），或填写本次 widget_group。"
             exit 1
           else
             group="group.com.muxui.ParcelHelper"
