@@ -83,18 +83,27 @@ import CryptoKit
     static func cainiaoPackages(accountID: String) async throws -> [NativeSyncParcel] {
         var out: [NativeSyncParcel] = []
         let api = "mtop.cainiao.lpc.packageservice.queryPdsPackageDataList"
-        for page in 1...2 {
-            let json = try await mtop(api, data: [
+        var seen = Set<String>()
+        for page in 1...10 {
+            try Task.checkCancellation()
+            let json: [String: Any]
+            do {
+                json = try await mtop(api, data: [
                 "pageSize": 50, "currentPage": page,
                 "needTemporality": false,
                 "needDynInfo": "{'needFindTemporality':true,'needAppointment':true}"
-            ], accountID: accountID)
+                ], accountID: accountID)
+            } catch {
+                guard !out.isEmpty, !Task.isCancelled else { throw error }
+                ParcelRunLog.record("菜鸟", "后续分页未完成，保留已获取的包裹", level: "警告")
+                break
+            }
             let outer = SyncJSON.dict(json["data"])
             let body = SyncJSON.dict(outer["data"]).isEmpty ? outer : SyncJSON.dict(outer["data"])
             let entries = SyncJSON.list(body["packages"])
             for pkg in entries {
                 let mail = SyncJSON.first(pkg, ["mailNo", "mail_no"])
-                guard SyncJSON.isMail(mail) else { continue }
+                guard SyncJSON.isMail(mail), seen.insert(mail.uppercased()).inserted else { continue }
                 let station = SyncJSON.dict(pkg["packageStation"])
                 let feature = SyncJSON.dict(pkg["feature"])
                 let items = SyncJSON.list(pkg["packageItem"])
@@ -128,23 +137,35 @@ import CryptoKit
                 // but do not insert historical signed parcels as new packages.
                 parcel.latest = upperStatus == "SIGN" ? "已签收" : status
                 parcel.arrived = !parcel.code.isEmpty
-                if out.count < 4 {
-                    if let detail = await cainiaoTrack(mail, accountID: accountID) {
-                        if !detail.company.isEmpty { parcel.company = detail.company }
-                        if !detail.nodes.isEmpty {
-                            parcel.tracks = detail.nodes
-                            // Avoid replacing final platform SIGN with older route text.
-                            if upperStatus != "SIGN" {
-                                parcel.latest = detail.status.isEmpty ?
-                                    (detail.nodes.first?.text ?? status) : detail.status
-                            }
-                        }
-                    }
-                }
                 out.append(parcel)
             }
             let total = Int(SyncJSON.str(body["totalPage"])) ?? 1
             if page >= total || entries.isEmpty { break }
+        }
+        let candidates = out.indices.filter { index in
+            let status = out[index].latest.uppercased()
+            return !["SIGN", "已签收", "已取件"].contains(status) ||
+                ParcelStore.shared.snapshot.parcels.contains { $0.mailNo == out[index].mailNo && !$0.isDone && !$0.isSigned }
+        }
+        let key = "native.cainiao.trackCursor." + accountID
+        if !candidates.isEmpty {
+            let cursor = max(0, UserDefaults.standard.integer(forKey: key)) % candidates.count
+            let rotated = Array(candidates.dropFirst(cursor)) + Array(candidates.prefix(cursor))
+            var attempted = 0
+            for index in rotated.prefix(4) {
+                try Task.checkCancellation()
+                attempted += 1
+                if let detail = await cainiaoTrack(out[index].mailNo, accountID: accountID) {
+                    if !detail.company.isEmpty { out[index].company = detail.company }
+                    if !detail.nodes.isEmpty {
+                        out[index].tracks = detail.nodes
+                        if out[index].latest != "已签收" {
+                            out[index].latest = detail.status.isEmpty ? (detail.nodes.first?.text ?? out[index].latest) : detail.status
+                        }
+                    }
+                }
+            }
+            UserDefaults.standard.set((cursor + attempted) % candidates.count, forKey: key)
         }
         return out
     }

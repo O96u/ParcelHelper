@@ -692,6 +692,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         var usedJDFallback = false
         private var orderPageVersion = 0
         var emptyReadAttempts = 0
+        private var usedTaobaoPC = false
+        private var taobaoReadAttempts = 0
         var structuredReadWaits = 0
         private var jdPageReads = 0
         private var jdPreviousCount = 0
@@ -841,6 +843,24 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                             self.record("京东订单翻页检查：已累计 \(self.jdAccumulated.count) 笔")
                             self.scheduleOrderRead(webView, after: 1.8)
                         }
+                        return
+                    }
+                }
+                if self.platform == "taobao" && available.isEmpty && self.taobaoReadAttempts < 8 {
+                    self.taobaoReadAttempts += 1
+                    webView.evaluateJavaScript("window.scrollTo(0, document.body.scrollHeight)") { [weak self, weak webView] _, _ in
+                        guard let self, let webView, !self.finished,
+                              self.stage == .orderList, self.orderPageVersion == version else { return }
+                        self.scheduleOrderRead(webView, after: 1.0)
+                    }
+                    return
+                }
+                if self.platform == "taobao" && available.isEmpty && !self.usedTaobaoPC {
+                    self.usedTaobaoPC = true
+                    self.taobaoReadAttempts = 0
+                    self.record("淘宝移动订单页无结果，尝试官方电脑版订单页")
+                    if let url = URL(string: "https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm") {
+                        webView.load(URLRequest(url: url))
                         return
                     }
                 }
@@ -1250,13 +1270,23 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             Object.keys(v).slice(0,100).forEach(function(k){walk(v[k],d+1)});
           }
           try{walk(raw,0)}catch(e){}
+          try{
+            var blob=JSON.stringify(raw)||'';
+            var re=/(?:bizOrderId=|"orderId"\s*:\s*"?|"bizOrderId"\s*:\s*"?)(\d{10,})/g,m;
+            while((m=re.exec(blob))&&o.length<80)add(m[1],'','');
+          }catch(e){}
+          document.querySelectorAll('a[href]').forEach(function(el){
+            var href=el.getAttribute('href')||'';
+            var match=href.match(/(?:bizOrderId|orderId|biz_order_id)=(\d{10,})/i);
+            if(match)add(match[1],'','');
+          });
           var html=document.documentElement&&document.documentElement.outerHTML||'';
           (html.match(/bizOrderId[=%:"\\]+[0-9]{10,}/g)||[]).forEach(function(v){
             var m=v.match(/\d{10,}/);if(m)add(m[0],'','');
           });
           var s=(document.body&&document.body.innerText||'').slice(0,1200);
           return JSON.stringify({login:/请登录|登录后查看/.test(s)&&!o.length,
-            verify:/滑块验证|人机验证|安全验证/.test(s),orders:o.slice(0,30)});
+            verify:/滑块验证|人机验证|安全验证/.test(s),orders:o.slice(0,40)});
         })()
         """#
         private static let jdTrackingJS = #"""

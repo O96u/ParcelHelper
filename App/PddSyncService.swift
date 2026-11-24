@@ -134,14 +134,18 @@ import WebKit
                     // Detailed route is fetched only for a small, bounded batch.
                     if output.count < 12 {
                         do {
-                            let (name, tracks, eta) = try await pddTrack(p.mailNo, accountID: accountID)
+                            let jump = SyncJSON.str(item["jump_url"])
+                            let params = URLComponents(string: jump)?.queryItems ?? []
+                            let order = params.first(where: { $0.name == "order_sn" })?.value ?? ""
+                            let sourceType = params.first(where: { $0.name == "source_type" })?.value ?? SyncJSON.str(item["source_type"])
+                            let (name, tracks, eta) = try await pddTrack(p.mailNo, accountID: accountID, orderSN: order, sourceType: sourceType)
                             if !name.isEmpty { p.company = name }
                             p.tracks = tracks
                             p.latest = tracks.first?.text ?? ""
                             p.eta = eta
                         } catch {
                             // An individual shipment must not abort other packages.
-                            p.latest = ""
+                            ParcelRunLog.record("拼多多", "单件物流查询未完成，保留驿站包裹", level: "警告")
                         }
                     }
                 }
@@ -151,7 +155,7 @@ import WebKit
         return output
     }
 
-    static func pddTrack(_ mail: String, accountID: String? = nil) async throws -> (String, [TrackNode], String) {
+    static func pddTrack(_ mail: String, accountID: String? = nil, orderSN: String = "", sourceType: String = "") async throws -> (String, [TrackNode], String) {
         guard var parts = URLComponents(string: "https://api.pinduoduo.com/api/express/shipping/track") else {
             throw NativeSyncError.badResponse("运单接口不可用")
         }
@@ -159,7 +163,25 @@ import WebKit
                             URLQueryItem(name: "entry_source", value: "9")]
         // Same request error handling as station API, but query is GET.
         let path = "/api/express/shipping/track?" + (parts.percentEncodedQuery ?? "")
-        let response = try await pddJSON(path, accountID: accountID)
+        var response: [String: Any]
+        if !orderSN.isEmpty {
+            var body: [String: Any] = ["order_sn": orderSN, "entry_source": NSNull(), "query_type": 1]
+            if let type = Int(sourceType), type != 0 { body["source_type"] = type } else { body["source_type"] = NSNull() }
+            do {
+                response = try await pddJSON("/api/express/dsd/trackbox/shipping/track", body: body, accountID: accountID)
+            } catch let error as NativeSyncError {
+                switch error {
+                case .noLogin, .verify: throw error
+                default: response = [:]
+                }
+            }
+            if SyncJSON.list(SyncJSON.dict(response["shipping"])["traces"]).isEmpty {
+                try Task.checkCancellation()
+                response = try await pddJSON(path, accountID: accountID)
+            }
+        } else {
+            response = try await pddJSON(path, accountID: accountID)
+        }
         let shipping = SyncJSON.dict(response["shipping"])
         let nodes = SyncJSON.list(shipping["traces"]).compactMap { o -> TrackNode? in
             let text = SyncJSON.first(o, ["info", "desc"])
