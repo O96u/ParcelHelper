@@ -1,4 +1,5 @@
 import SwiftUI
+import WidgetKit
 import AppIntents
 import Combine
 import UIKit
@@ -671,7 +672,8 @@ struct LiveSettingsPage: View {
         }
     }
     private var livePreview: some View {
-        Group {
+        let state = LiveActivityCoordinator.presentationState(parcels: store.snapshot.parcels, stations: store.snapshot.stations, style: liveStyle)
+        return Group {
             if previewMode == "compact" {
                 HStack(spacing: 34) {
                     Image(systemName: "shippingbox.fill")
@@ -684,90 +686,23 @@ struct LiveSettingsPage: View {
                 .padding(.horizontal, 17)
                 .frame(height: 37)
                 .background(Color.black, in: Capsule())
+            } else if previewMode == "lock" {
+                PickupLockScreenView(state: state)
+                    .background(PickupPalette.lockBackground(liveStyle), in: RoundedRectangle(cornerRadius: 25))
             } else {
-                VStack(alignment: .leading, spacing: 9) {
-                    HStack(spacing: 9) {
-                        Image(systemName: "shippingbox.fill")
-                            .foregroundStyle(previewTint)
-                            .frame(width: 29, height: 29)
-                            .background(previewTint.opacity(0.13),
-                                        in: RoundedRectangle(cornerRadius: 9))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(previewMode == "lock" ? "包裹助手" : "待取包裹")
-                                .font(.system(size: 14, weight: .semibold))
-                            if previewMode == "lock" {
-                                Text("待领取的包裹")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+                VStack(spacing: 6) {
+                    HStack {
+                        Label("待取包裹", systemImage: "shippingbox.fill")
+                            .foregroundStyle(PickupPalette.accent(liveStyle))
                         Spacer()
-                        Text("\(previewPending.count) 件")
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                    }
-                    ForEach(Array(previewPending.prefix(2)), id: \.uuid) { parcel in
-                        HStack(spacing: 9) {
-                            Image(systemName: "shippingbox.fill")
-                                .font(.system(size: 13))
-                                .foregroundStyle(previewTint)
-                                .frame(width: 29, height: 29)
-                                .background(previewTint.opacity(0.13),
-                                            in: RoundedRectangle(cornerRadius: 9))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(parcel.stationText)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .lineLimit(1)
-                                Text(parcel.trackCompany ?? "待取包裹")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer(minLength: 3)
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text("取件码")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                                Text(parcel.displayCode.isEmpty ? "待出码" : parcel.displayCode)
-                                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                                    .monospacedDigit()
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.6)
-                            }
-                        }
-                        .padding(.horizontal, 10)
-                        .frame(height: 44)
-                        .background(previewMode == "lock" ?
-                                    Color.primary.opacity(0.05) : Color.white.opacity(0.09),
-                                    in: RoundedRectangle(cornerRadius: 12))
-                    }
-                    if previewPending.isEmpty {
-                        Text("暂无待取包裹")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                    } else if previewPending.count > 2 {
-                        Text("另有 \(previewPending.count - 2) 件待取")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
+                        Text("\(state.pending) 件").monospacedDigit()
+                    }.font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                    PickupExpandedView(state: state)
                 }
-                .foregroundStyle(previewMode == "lock" && liveStyle == "white" ?
-                                 Color.black : Color.white)
-                .padding(14)
-                .frame(maxWidth: 340)
-                .background(previewMode == "lock" && liveStyle == "white" ?
-                            Color.white : Color(red: 0.055, green: 0.105, blue: 0.17),
-                            in: RoundedRectangle(cornerRadius: 25))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 25)
-                        .strokeBorder(Color.primary.opacity(0.08))
-                }
+                .padding(12)
+                .background(Color.black, in: RoundedRectangle(cornerRadius: 25))
             }
         }
-        .accessibilityLabel("实时活动预览，\(previewPending.count) 件待取包裹")
     }
 }
 
@@ -902,142 +837,14 @@ struct HomeWidgetSettingsPage: View {
     }
 
     private var widgetPreview: some View {
-        Group {
-            if selectedSize == "medium" {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "shippingbox.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(width: 28, height: 28)
-                            .background(.white.opacity(0.17),
-                                        in: RoundedRectangle(cornerRadius: 9))
-                        Text("我的取件").font(.system(size: 12, weight: .semibold))
-                        Spacer(minLength: 2)
-                        Text("\(pending.count) 件待取")
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
-                        if showTransit.wrappedValue {
-                            Text("在途 \(transit.count)")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.white.opacity(0.86))
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .frame(height: visible.count >= 3 ? 43 : 49)
-                    .frame(maxWidth: .infinity)
-                    .background(blueGradient,
-                                in: RoundedRectangle(cornerRadius: 14))
-                    if visible.count == 1, let parcel = visible.first {
-                        HStack(spacing: 9) {
-                            Image(systemName: "shippingbox.fill")
-                                .font(.system(size: 17))
-                                .foregroundStyle(.blue)
-                                .frame(width: 35, height: 35)
-                                .background(Color.blue.opacity(0.12),
-                                            in: RoundedRectangle(cornerRadius: 10))
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(parcel.displayCode.isEmpty
-                                     ? parcel.displayStatus : parcel.displayCode)
-                                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                                    .lineLimit(1)
-                                Text(parcel.itemTitle ?? parcel.trackCompany ?? parcel.stationText)
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                if !parcel.stationText.isEmpty {
-                                    Text(parcel.stationText).font(.system(size: 9))
-                                        .foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                            Image(systemName: parcel.isPending ? "circle" : "truck.box.fill")
-                                .font(.system(size: 23))
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(minHeight: 54)
-                    } else {
-                        previewRows
-                    }
-                    Spacer(minLength: 0)
-                    syncFooter
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else {
-                VStack(alignment: .leading, spacing: selectedSize == "small" ? 5 : 8) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("我的取件清单").font(.system(size: 10))
-                            Text("\(pending.count) 件待领取")
-                                .font(.system(size: selectedSize == "small" ? 15 : 23,
-                                              weight: .bold))
-                        }
-                        Spacer()
-                        Image(systemName: "tray.and.arrow.down.fill")
-                            .font(.system(size: 18))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(blueGradient, in: RoundedRectangle(cornerRadius: 14))
-                    previewRows
-                    Spacer(minLength: 0)
-                    syncFooter
-                }
-            }
+        ParcelHomeContent(model: store.homeWidgetSnapshot(), sharedGroupReady: true, snapshotReady: true,
+                          family: selectedSize == "small" ? .systemSmall : selectedSize == "large" ? .systemLarge : .systemMedium) { _, compact in
+            Image(systemName: "circle")
+                .font(.system(size: compact ? 16 : 19))
+                .foregroundStyle(.secondary)
+                .frame(width: compact ? 21 : 29, height: 29)
         }
-        .padding(10)
-        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 19))
-    }
-
-    private var previewRows: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            if visible.isEmpty {
-                Label("暂时没有包裹", systemImage: "checkmark.seal.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ForEach(visible, id: \.uuid) { parcel in
-                    HStack(spacing: 5) {
-                        Image(systemName: "shippingbox.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.blue)
-                            .frame(width: 21, height: 21)
-                            .background(Color.blue.opacity(0.12),
-                                        in: RoundedRectangle(cornerRadius: 6))
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(parcel.displayCode.isEmpty
-                                 ? parcel.displayStatus : parcel.displayCode)
-                                .font(.system(size: 10, weight: .semibold)).lineLimit(1)
-                            Text(parcel.itemTitle ?? parcel.trackCompany ?? parcel.stationText)
-                                .font(.system(size: 8))
-                                .foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: parcel.isPending ? "circle" : "truck.box.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(height: selectedSize == "small" ? 31 :
-                                   (selectedSize == "medium" ? 25 : 35))
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    private var syncFooter: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "arrow.clockwise")
-            Text("打开 App 后更新")
-            Spacer(minLength: 0)
-            let remaining = pending.count + (showTransit.wrappedValue ? transit.count : 0)
-                - visible.count
-            if remaining > 0 { Text("+\(remaining) 件") }
-        }
-        .font(.system(size: 8))
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 19))
     }
 }
 

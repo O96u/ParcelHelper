@@ -131,6 +131,24 @@ struct PickupActivityAttributes: ActivityAttributes {
         return courierName(parcel)
     }
 
+    static func presentationState(parcels: [Parcel], stations: [Station], style: String) -> PickupActivityAttributes.ContentState {
+        let pending = parcels.filter { $0.type == "delivery" && $0.isPending }
+            .sorted { ($0.arrivedAt ?? $0.createdAt) > ($1.arrivedAt ?? $1.createdAt) }
+        let items = pending.prefix(8).map {
+            PickupActivityItem(code: pickupCode($0),
+                               station: stationName($0, stations: stations),
+                               company: courierName($0))
+        }
+        return PickupActivityAttributes.ContentState(
+            pending: pending.count,
+            code: pending.first.map(pickupCode) ?? "",
+            station: pending.first?.stationText ?? "",
+            style: style,
+            items: items
+        )
+
+    }
+
     static func update(with parcels: [Parcel]) async {
         guard ParcelStore.shared.snapshot.preferences.liveActivityEnabled,
               ActivityAuthorizationInfo().areActivitiesEnabled else {
@@ -154,18 +172,7 @@ struct PickupActivityAttributes: ActivityAttributes {
             return
         }
 
-        let items = pending.prefix(8).map {
-            PickupActivityItem(code: pickupCode($0),
-                               station: stationName($0, stations: stations),
-                               company: courierName($0))
-        }
-        let state = PickupActivityAttributes.ContentState(
-            pending: pending.count,
-            code: pending.first.map(pickupCode) ?? "",
-            station: pending.first?.stationText ?? "",
-            style: style,
-            items: items
-        )
+        let state = presentationState(parcels: pending, stations: stations, style: style)
 
         let existing = Activity<PickupActivityAttributes>.activities
         if let first = existing.first {

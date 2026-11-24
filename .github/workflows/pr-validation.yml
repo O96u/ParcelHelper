@@ -1,17 +1,6 @@
 name: PR Swift Build
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "App/**"
-      - "Shared/**"
-      - "Tests/**"
-      - "Widget/**"
-      - "Resources/**"
-      - "ParcelHelper.xcodeproj/**"
-      - "scripts/**"
-      - ".github/workflows/pr-validation.yml"
   pull_request:
     branches: [main]
     paths:

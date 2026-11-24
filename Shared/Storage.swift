@@ -142,7 +142,7 @@ import WidgetKit
         // Migrate station names already present in the existing parcel database.
         if discoverStations() { persist() }
     }
-    private func homeWidgetSnapshot() -> HomeWidgetSnapshot {
+    func homeWidgetSnapshot() -> HomeWidgetSnapshot {
         let pending = snapshot.parcels.filter { $0.type == "delivery" && $0.isPending }
             .sorted { ($0.trackUpdatedAt ?? $0.createdAt) > ($1.trackUpdatedAt ?? $1.createdAt) }
         let transit = snapshot.parcels.filter { $0.type == "delivery" && $0.isTransit }
