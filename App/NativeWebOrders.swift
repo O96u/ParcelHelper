@@ -806,16 +806,25 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                     self.complete("未检测到有效账号登录，请先授权")
                     return
                 }
-                self.orders = Array(result.orders.filter { order in
-                    !order.id.isEmpty &&
-                    order.id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil &&
-                    !["退款", "已关闭", "已完成", "交易成功",
-                      "已收货", "已取件", "确认收货"].contains {
+                let eligible = result.orders.filter { order in
+                    guard order.id.range(of: #"^\d{8,}$"#, options: .regularExpression) != nil else { return false }
+                    let account = self.accountID ?? ParcelAccounts.activeID(for: self.platform)
+                    let prefix = account == ParcelAccounts.legacyID(self.platform) ? self.platform : self.platform + ":" + account
+                    let known = ParcelStore.shared.snapshot.parcels.contains {
+                        $0.orderId == prefix + ":" + order.id && !$0.isDone && !$0.isSigned
+                    }
+                    if known { return true }
+                    return !["退款", "已关闭", "已完成", "交易成功", "已收货", "已取件", "确认收货"].contains {
                         order.status.contains($0)
-                    } &&
-                    (!order.status.contains("已签收") ||
-                     (self.platform == "jd" && !(order.code ?? "").isEmpty))
-                }.prefix(self.platform == "jd" ? 15 : 10))
+                    } && (!order.status.contains("已签收") ||
+                        (self.platform == "jd" && !(order.code ?? "").isEmpty))
+                }
+                let limit = self.platform == "jd" ? 15 : 10
+                let cursorKey = "native.web.orderCursor." + self.platform + "." + (self.accountID ?? "default")
+                let cursor = eligible.isEmpty ? 0 : max(0, UserDefaults.standard.integer(forKey: cursorKey)) % eligible.count
+                let rotated = Array(eligible.dropFirst(cursor)) + Array(eligible.prefix(cursor))
+                self.orders = Array(rotated.prefix(limit))
+                UserDefaults.standard.set(eligible.isEmpty ? 0 : (cursor + self.orders.count) % eligible.count, forKey: cursorKey)
                 self.record("筛选后可查询 \(self.orders.count) 笔订单")
                 if self.orders.isEmpty && result.structured == true {
                     self.record("官方结构化订单列表已返回，但没有传统快递或待取订单；不把秒送等 DOM 内容误当快递")

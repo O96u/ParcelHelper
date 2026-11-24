@@ -379,6 +379,26 @@ import WidgetKit
         return (try? FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate]) as? Date
     }
 
+    func exportBackup() throws -> Data {
+        var copy = snapshot
+        copy.preferences.kdBusinessID = ""
+        copy.preferences.kdAPIKey = ""
+        return try JSONEncoder().encode(copy)
+    }
+
+    func importBackup(_ data: Data) throws {
+        guard data.count <= 20 * 1024 * 1024 else {
+            throw CocoaError(.fileReadTooLarge)
+        }
+        var restored = try JSONDecoder().decode(Snapshot.self, from: data)
+        // Account credentials are not imported from a portable backup.
+        restored.preferences.kdBusinessID = snapshot.preferences.kdBusinessID
+        restored.preferences.kdAPIKey = snapshot.preferences.kdAPIKey
+        restored.parcels = Self.collapseExactDuplicates(restored.parcels)
+        snapshot = restored
+        persist()
+    }
+
     func restoreRecoveryBackup() throws {
         // Drain pending writes before reading the previous on-disk version.
         persistenceQueue.sync {}

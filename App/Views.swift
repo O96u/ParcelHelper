@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import MapKit
 import WebKit
+import UniformTypeIdentifiers
 
 // Colors and card spacing follow theme.ts in the original Scripting project.
 enum AppTheme {
@@ -26,6 +27,13 @@ private enum PH {
 }
 struct MainView: View {
     @AppStorage("native.appearance.color") private var themeColor = "blue"
+    @EnvironmentObject private var store: ParcelStore
+    @State private var notificationParcel: Parcel?
+    private func openNotificationParcel() {
+        guard let id = UserDefaults.standard.string(forKey: "native.notification.openParcel") else { return }
+        UserDefaults.standard.removeObject(forKey: "native.notification.openParcel")
+        notificationParcel = store.snapshot.parcels.first { $0.uuid == id }
+    }
     var body: some View {
         TabView {
             NavigationStack { PickupHome() }.tabItem { Label("取件", systemImage: "tray.and.arrow.down.fill") }
@@ -35,6 +43,20 @@ struct MainView: View {
         }
         .tint(AppTheme.color(themeColor))
         .id(themeColor)
+        .onAppear(perform: openNotificationParcel)
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ParcelNotificationOpen"))) { _ in
+            openNotificationParcel()
+        }
+        .sheet(item: $notificationParcel) { parcel in
+            NavigationStack {
+                ParcelDetail(parcelID: parcel.uuid)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("关闭") { notificationParcel = nil }
+                        }
+                    }
+            }
+        }
         .background(alignment: .topLeading) {
             NativeWebAutoSyncHost()
         }
@@ -2341,12 +2363,37 @@ private struct BatchWaybillPage: View {
     }
 }
 
+private struct ParcelBackupDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    var data: Data
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else { throw CocoaError(.fileReadCorruptFile) }
+        self.data = data
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}
+
 private struct LocalBackupPage: View {
     @EnvironmentObject private var store: ParcelStore
     @State private var confirm = false
     @State private var notice: String?
+    @State private var exporting = false
+    @State private var importing = false
+    @State private var document = ParcelBackupDocument(data: Data())
+    @State private var importedData: Data?
     var body: some View {
         Form {
+            Section("备份文件") {
+                Button("导出备份") {
+                    do { document = ParcelBackupDocument(data: try store.exportBackup()); exporting = true }
+                    catch { notice = "导出失败" }
+                }
+                Button("导入备份") { importing = true }
+                Text("备份含包裹、驿站及本地偏好，请妥善保管。").font(.footnote)
+            }
             Section("本地恢复") {
                 LabeledContent("最近有效备份", value: store.recoveryBackupDate?.formatted(date: .numeric, time: .shortened) ?? "暂无")
                 Button("恢复上一份备份", role: .destructive) { confirm = true }
@@ -2354,6 +2401,28 @@ private struct LocalBackupPage: View {
             } footer: { Text("恢复会替换当前包裹、驿站和本地偏好，不会恢复平台登录凭据。") }
         }
         .navigationTitle("数据备份")
+        .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "包裹助手备份") { result in
+            if case .failure = result { notice = "导出失败" }
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+            do {
+                let url = try result.get()
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                let data = try Data(contentsOf: url)
+                _ = try JSONDecoder().decode(Snapshot.self, from: data)
+                importedData = data
+            } catch { notice = "无法读取有效备份" }
+        }
+        .confirmationDialog("导入将替换当前本地数据，是否继续？", isPresented: Binding(get: { importedData != nil }, set: { if !$0 { importedData = nil } })) {
+            Button("确认导入", role: .destructive) {
+                guard let data = importedData else { return }
+                do { try store.importBackup(data); notice = "导入成功" }
+                catch { notice = "导入失败" }
+                importedData = nil
+            }
+            Button("取消", role: .cancel) { importedData = nil }
+        }
         .alert("确认恢复？", isPresented: $confirm) {
             Button("取消", role: .cancel) {}
             Button("恢复", role: .destructive) {

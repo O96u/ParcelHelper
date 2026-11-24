@@ -212,8 +212,7 @@ struct NativeTrackSearchPage: View {
         item.mailNo=r.mailNo
         if !r.company.isEmpty { item.trackCompany=r.company }
         if !r.shipperCode.isEmpty { item.shipperCode=r.shipperCode }
-        if !r.latest.isEmpty { item.trackLatest=r.latest }
-        if !r.nodes.isEmpty { item.trackNodes=r.nodes }
+        TrackMerge.apply(to: &item, nodes: r.nodes, summary: r.latest)
         if !r.receiverCity.isEmpty { item.receiverCity=r.receiverCity }
         if !r.receiverAddress.isEmpty { item.receiverAddress=r.receiverAddress }
         item.trackUpdatedAt=Date().timeIntervalSince1970*1000

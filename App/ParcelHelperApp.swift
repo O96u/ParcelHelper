@@ -105,6 +105,18 @@ final class ParcelNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
                                     @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .list, .sound])
     }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        if let id = response.notification.request.content.userInfo["parcelUUID"] as? String {
+            UserDefaults.standard.set(id, forKey: "native.notification.openParcel")
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Notification.Name("ParcelNotificationOpen"), object: nil)
+            }
+        }
+        completionHandler()
+    }
 }
 
 @main struct ParcelHelperApp: App {
@@ -247,19 +259,21 @@ private final class ParcelBGTaskCompletion {
         // The app may reopen repeatedly while a background request is queued.
         // Cancelling and rescheduling on every activation pushes its earliest
         // start farther into the future and can starve background refreshes.
-        let now = Date().timeIntervalSince1970
-        let next = UserDefaults.standard.double(forKey: nextScheduledKey)
-        if next > now { return }
-        let request = BGAppRefreshTaskRequest(identifier: identifier)
         let earliest = Date().addingTimeInterval(interval)
-        request.earliestBeginDate = earliest
-        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
-        do {
-            try BGTaskScheduler.shared.submit(request)
-            UserDefaults.standard.set(earliest.timeIntervalSince1970, forKey: nextScheduledKey)
-        } catch {
-            UserDefaults.standard.removeObject(forKey: nextScheduledKey)
-            NSLog("ParcelHelper BGAppRefresh schedule failed: %@", String(describing: error))
+        BGTaskScheduler.shared.getPendingTaskRequests { requests in
+            Task { @MainActor in
+                if let existing = requests.first(where: { $0.identifier == identifier }),
+                   (existing.earliestBeginDate ?? .distantPast) <= earliest { return }
+                let request = BGAppRefreshTaskRequest(identifier: identifier)
+                request.earliestBeginDate = earliest
+                do {
+                    BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+                    try BGTaskScheduler.shared.submit(request)
+                    ParcelRunLog.record("后台刷新", "已向系统申请后台刷新")
+                } catch {
+                    ParcelRunLog.record("后台刷新", "系统未接受后台刷新申请")
+                }
+            }
         }
     }
 
@@ -268,8 +282,10 @@ private final class ParcelBGTaskCompletion {
         UserDefaults.standard.removeObject(forKey: nextScheduledKey)
         scheduleNext()
         let completion = ParcelBGTaskCompletion()
+        ParcelRunLog.record("后台刷新", "系统已启动后台任务")
         let work = Task { @MainActor in
             let succeeded = await refreshEligibleAccounts()
+            ParcelRunLog.record("后台刷新", succeeded && !Task.isCancelled ? "后台任务结束" : "后台任务中断")
             completion.finish(task, success: succeeded && !Task.isCancelled)
         }
         // A soft execution budget independent of the system's hard expiry.
@@ -336,7 +352,10 @@ private final class ParcelBGTaskCompletion {
 
     private static func refreshEligibleAccounts() async -> Bool {
         // Preserve battery and avoid work when the user has no active parcels.
-        guard !ProcessInfo.processInfo.isLowPowerModeEnabled else { return true }
+        guard !ProcessInfo.processInfo.isLowPowerModeEnabled else {
+            ParcelRunLog.record("后台刷新", "低电量模式，跳过查询")
+            return true
+        }
         guard ParcelStore.shared.snapshot.parcels.contains(where: {
             $0.type == "delivery" && !$0.isDone && !$0.isSigned && $0.closed == nil
         }) else { return true }

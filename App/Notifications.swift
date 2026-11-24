@@ -9,6 +9,7 @@ enum ParcelNotifications {
     static func schedule(_ parcel: Parcel, afterHours: Int) async {
         guard parcel.isPending, afterHours > 0 else { return }
         let content = UNMutableNotificationContent()
+        content.userInfo = ["parcelUUID": parcel.uuid]
         content.title = "包裹待取提醒"
         content.body = "\(parcel.stationText)：\(parcel.displayCode.isEmpty ? parcel.title : parcel.displayCode)"
         content.sound = .default
@@ -46,9 +47,11 @@ enum ParcelNotifications {
         let title: String
         let category: String
         if isNewCompletion {
+            guard UserDefaults.standard.object(forKey: "native.reminder.collected") as? Bool ?? true else { return }
             category = "collected"
             title = "包裹已取件"
         } else if isNewSignature {
+            guard UserDefaults.standard.object(forKey: "native.reminder.signed") as? Bool ?? true else { return }
             category = "signed"
             title = "包裹已签收"
         } else if isNewPickup || isNewArrival {

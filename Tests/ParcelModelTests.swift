@@ -59,6 +59,10 @@ struct ParcelModelTests {
         let signed = TrackNode(time: "2026-11-23 09:00:00", text: "已签收")
         TrackMerge.apply(to: &incoming, nodes: [signed], summary: signed.text)
         precondition(!incoming.isSigned, "Historical signature must not override current transit")
-        print("PASS: parcel content, pickup classification and stale tracking merge")
+        incoming = initial
+        incoming.arrivedAt = 42
+        incoming.trackLatest = "派送异常，退回寄件人"
+        precondition(incoming.hasDeliveryException && !incoming.isPending && incoming.displayStatus == "物流异常")
+        print("PASS: parcel content, pickup classification, exceptions and stale tracking merge")
     }
 }

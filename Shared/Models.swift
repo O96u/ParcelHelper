@@ -166,8 +166,12 @@ struct Parcel: Codable, Identifiable, Hashable {
              signed.contains(where: text.contains) ||
              Self.confirmsFinalDelivery(text))
     }
+    var hasDeliveryException: Bool {
+        ["退回寄件人", "退回发件人", "退件中", "拒收", "配送异常", "派送异常", "物流异常"].contains(where: currentTrackingText.contains)
+    }
     var displayStatus: String {
         if isDone { return "已取件" }
+        if hasDeliveryException { return "物流异常" }
         if isSigned {
             return Self.confirmsFinalDelivery(currentTrackingText) ? "已送达" : "已签收"
         }
@@ -175,7 +179,7 @@ struct Parcel: Codable, Identifiable, Hashable {
         return "运输中"
     }
     var isPending: Bool {
-        guard !isDone, !isSigned, closed == nil else { return false }
+        guard !isDone, !isSigned, !hasDeliveryException, closed == nil else { return false }
         if arrivedAt != nil { return true }
         if !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && code != mailNo { return true }
         // The original model requires a real pickup code or arrival timestamp.

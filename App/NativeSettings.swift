@@ -524,6 +524,8 @@ struct ReminderSettingsPage: View {
     @AppStorage("native.reminder.dispatch") private var onDispatch = true
     @AppStorage("native.reminder.transit") private var onTransit = false
     @AppStorage("native.reminder.failure") private var onFailure = true
+    @AppStorage("native.reminder.signed") private var onSigned = true
+    @AppStorage("native.reminder.collected") private var onCollected = true
     @State private var permission = "未检查"
     var body: some View {
         Form {
@@ -542,6 +544,8 @@ struct ReminderSettingsPage: View {
                 Toggle("运输节点更新提醒", isOn: $onTransit)
                 Toggle("正在派送提醒", isOn: $onDispatch)
                 Toggle("包裹到站提醒", isOn: $onArrival)
+                Toggle("签收提醒", isOn: $onSigned)
+                Toggle("已取件提醒", isOn: $onCollected)
                 Toggle("同步失败提醒", isOn: $onFailure)
                 Stepper("超时提醒：\(store.snapshot.preferences.reminderAfterHours) 小时", value: Binding(
                     get: { store.snapshot.preferences.reminderAfterHours },
