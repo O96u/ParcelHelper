@@ -95,6 +95,14 @@ assert.equal(route.tracks[0].text, "包裹运输中");
 const parsedTracking = JSON.parse(vm.runInNewContext(tracking, context));
 assert.equal(parsedTracking.mail, "SF123456789012");
 assert.equal(parsedTracking.tracks.length, 1);
+assert.equal(parsedTracking.pickup, "", "missing data must stay missing");
+context.document.body.innerText = "运单号：SF123456789012\n取件码：8-1-12345\n驿站名称：测试驿站";
+const enriched = JSON.parse(vm.runInNewContext(tracking, context));
+assert.equal(enriched.pickup, "8-1-12345", "DOM supplements structured tracking");
+assert.equal(enriched.station, "测试驿站");
+context.document.body.innerText = "运单号：SF987654321012\n取件码：1-2-34567";
+assert.equal(JSON.parse(vm.runInNewContext(tracking, context)).pickup, "", "no cross-waybill code");
+context.document.body.innerText = "待收货";
 
 // Responses outside JD's HTTPS origins cannot be read as authorized data.
 const oldList = win.ParcelHelperJD.snapshot();

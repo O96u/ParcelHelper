@@ -603,7 +603,13 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             if(tracks.length){
               tracks.sort(function(a,b){return b.time.localeCompare(a.time)});
               found={mail:clean(node.carriageId||node.waybillCode||node.mailNo,40),
-                company:clean(node.carrier,50),latest:tracks[0].text,pickup:'',station:'',tracks:tracks};
+                company:clean(node.carrier,50),latest:tracks[0].text,
+                pickup:pickup(tracks[0].text),station:station(tracks[0].text),tracks:tracks};
+              // Accept explicitly named pickup fields only within this shipment.
+              var explicit=clean(node.pickupCode||node.takeCode||node.pickup_code||node.take_code,30);
+              if(/^[A-Za-z0-9][A-Za-z0-9-]{2,19}$/.test(explicit)&&!/^(none|null|undefined|needsms)$/i.test(explicit))found.pickup=explicit;
+              var locationName=clean(node.stationName||node.pickupStationName,80);
+              if(locationName)found.station=locationName;
               return;
             }
           }
@@ -1270,10 +1276,14 @@ private struct NativeWebOrderReader: UIViewRepresentable {
                         !Parcel.isReturn(item.latest) {
                         item.latest = order.summary ?? item.latest
                     }
-                    item.code = shipment.pickup
-                    item.station = shipment.station
+                    // Prefer detail data; a verified order summary may already
+                    // contain pickup metadata that is absent from the detail H5.
+                    item.code = shipment.pickup.isEmpty && self.platform == "jd" && order.verified == true
+                        ? (order.code ?? "") : shipment.pickup
+                    item.station = shipment.station.isEmpty && self.platform == "jd" && order.verified == true
+                        ? (order.station ?? "") : shipment.station
                     item.tracks = shipment.tracks
-                    item.arrived = !shipment.pickup.isEmpty || Parcel.isStationArrival(item.latest) || Parcel.isStationArrival(order.summary ?? "")
+                    item.arrived = !item.code.isEmpty || Parcel.isStationArrival(item.latest) || Parcel.isStationArrival(order.summary ?? "")
                     if let slot = self.loaded.firstIndex(where: {
                         $0.orderID == item.orderID && $0.mailNo.isEmpty
                     }) {
@@ -1516,13 +1526,8 @@ private struct NativeWebOrderReader: UIViewRepresentable {
         (function(){
           if(location.protocol!=='https:'||!/(^|\.)jd\.com$/i.test(location.hostname))
             return JSON.stringify({mail:'',company:'',latest:'',pickup:'',station:'',tracks:[]});
-          try{
-            var hooked=window.ParcelHelperJD&&window.ParcelHelperJD.logistics();
-            if(hooked&&hooked.tracks&&hooked.tracks.length){
-              hooked.login=false;hooked.verify=false;
-              return JSON.stringify(hooked);
-            }
-          }catch(e){}
+          var hooked=null;
+          try{hooked=window.ParcelHelperJD&&window.ParcelHelperJD.logistics()}catch(e){}
           var txt=(document.body&&document.body.innerText||'').split('可能您还想要')[0].slice(0,70000);
           var html=(document.documentElement&&document.documentElement.outerHTML||'').slice(0,450000);
           function get(text,regex){var m=text.match(regex);return m?m[1]:''}
@@ -1530,7 +1535,24 @@ private struct NativeWebOrderReader: UIViewRepresentable {
           var mail=get(txt,/(?:运单号|快递单号|物流单号|京东快递单号|运单编号|物流编号|快递编号)\s*[:：]?\s*([A-Za-z0-9-]{8,40})/i);
           if(!mail)mail=get(html,/(?:waybillCode|waybillNo|mailNo|expressNo|trackingNumber|logisticsNo|waybillNumber)["\\]?\s*[:=]\s*["\\]?([A-Za-z0-9-]{8,40})/i);
           var company=get(txt,/(?:国内承运人|承运人|配送方|快递公司|物流公司)\s*[:：]?\s*([^\s]{2,15})/);
-          var code=get(txt,/(?:取件码|提货码|取货码|自提码)\s*[:：]?\s*([A-Za-z0-9-]{3,12})/);
+          var code=get(txt,/(?:取件码|提货码|取货码|自提码|取件密码)\s*(?:为|是)?\s*[:：\s【\[（(]*([A-Za-z0-9][A-Za-z0-9-]{2,19})(?![A-Za-z0-9-])/);
+          if(/^(none|null|undefined|needsms)$/i.test(code))code='';
+          var station=get(txt,/(?:驿站名称|自提点名称|取件点名称)\s*[:：]\s*([^\r\n]{2,80})/);
+          if(!station&&code){
+            station=get(txt,/(?:取件码|提货码|取货码|自提码)\s*[:：]?\s*[A-Za-z0-9-]{3,20}[^\r\n]*[\r\n]+([^\r\n]{2,80}(?:驿站|代收点|自提点|快递柜|栋店|号店)[^\r\n]{0,15})/);
+          }
+          var login=/请登录|登录后查看/.test(txt)&&!mail&&!(hooked&&hooked.mail);
+          var verify=/滑块验证|安全验证|人机验证/.test(txt);
+          if(hooked&&hooked.tracks&&hooked.tracks.length){
+            // Do not borrow a code from another shipment on a multi-parcel page.
+            var sameMail=!!mail&&!!hooked.mail&&mail.toUpperCase()===hooked.mail.toUpperCase();
+            var result=Object.assign({},hooked,{login:login,verify:verify});
+            if(sameMail){
+              if(!result.pickup&&code)result.pickup=code;
+              if(!result.station&&station)result.station=station;
+            }
+            return JSON.stringify(result);
+          }
           var tracks=[];
           // Some tracking pages omit seconds in dates, and some use '/'.
           var re=/(\d{4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{2}:\d{2}(?::\d{2})?)\s*([\s\S]*?)(?=\d{4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{2}:\d{2}|$)/g,m;
@@ -1539,7 +1561,7 @@ private struct NativeWebOrderReader: UIViewRepresentable {
             if(note)tracks.push({time:m[1],text:note.slice(0,500)});
           }
           return JSON.stringify({mail:mail,company:company,
-            latest:tracks[0]?tracks[0].text:'',pickup:code,station:'',tracks:tracks,login:/请登录|登录后查看/.test(txt)&&!mail,verify:/滑块验证|安全验证|人机验证/.test(txt)});
+            latest:tracks[0]?tracks[0].text:'',pickup:code,station:station,tracks:tracks,login:login,verify:verify});
         })()
         """#
         private static let taobaoTrackingJS = #"""
