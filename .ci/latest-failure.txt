@@ -1,8 +1,7 @@
-Run: https://github.com/O96u/ParcelHelper/actions/runs/45354258855
-Commit: 5a29dc90df7fb0c7d8410a33db84a2d327c10433
+Run: https://github.com/O96u/ParcelHelper/actions/runs/45361129258
+Commit: 3fef9e56bca0ae84c7b72bda35b5d68c22703442
 Ref: refs/heads/main
-Date: 2026-11-24T08:17:54Z
+Date: 2026-11-24T09:00:52Z
 
 Error excerpts:
-743:/Users/runner/work/ParcelHelper/ParcelHelper/App/Views.swift:2431:17: error: the compiler is unable to type-check this expression in reasonable time; try breaking up the expression into distinct sub-expressions
-840:** BUILD FAILED **
+No xcodebuild.log: failure happened before/during another step.
